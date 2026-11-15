@@ -3,16 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' blob: data:; worker-src 'self' blob:">
 <title>BoardPainter</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&family=JetBrains+Mono:wght@500&display=swap">
 <style>
 /* Layout: 3-column workbench — brush rail / viewport / settings panel, header across the top */
 :root{
   --bg:#1b1c1f; --panel:#232428; --panel-2:#2c2d32; --line:#3a3b42;
   --fg:#ebe7e0; --muted:#9d998f; --accent:#d9a35b; --accent-ink:#1b1c1f; --mask:#7fa3d6;
-  --ui:'Noto Sans JP', system-ui, 'Segoe UI', sans-serif;
-  --mono:'JetBrains Mono', ui-monospace, Consolas, monospace;
+  --ui:'Yu Gothic UI','Meiryo UI','Hiragino Sans','Noto Sans CJK JP','Noto Sans JP',system-ui,'Segoe UI',sans-serif;
+  --mono:'Cascadia Mono',Consolas,'SF Mono',Menlo,'DejaVu Sans Mono',ui-monospace,monospace;
   color-scheme: dark;
 }
 *{box-sizing:border-box}
@@ -73,6 +72,7 @@ input[type=number]{width:76px}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:6px}
 .grid2 .btn{justify-content:center;padding:0 6px}
 .full{width:100%;justify-content:center}
+.grid2 .btn,.btn.full{height:auto;min-height:30px;padding-top:4px;padding-bottom:4px;text-align:center;line-height:1.3}
 .note{color:var(--muted);font-size:11.5px;margin:4px 0 0}
 #brushName{font-weight:700}
 #brushDesc{color:var(--muted);font-size:12px}
@@ -92,9 +92,9 @@ dl.keys dd{margin:0;color:var(--muted)}
 <script type="importmap">
 {
   "imports": {
-    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
-    "three-mesh-bvh": "https://cdn.jsdelivr.net/npm/three-mesh-bvh@0.7.3/build/index.module.js"
+    "three": "./vendor/three/build/three.module.js",
+    "three/addons/": "./vendor/three/examples/jsm/",
+    "three-mesh-bvh": "./vendor/three-mesh-bvh/build/index.module.js"
   }
 }
 </script>
@@ -103,7 +103,7 @@ dl.keys dd{margin:0;color:var(--muted)}
 <div class="app" id="app">
   <header>
     <div class="brand">Board<span>Painter</span></div>
-    <label class="btn" for="fileIn">読み込み <small>OBJ/STL</small></label>
+    <button class="btn" id="btnOpen" title="Ctrl+O">読み込み <small>Ctrl+O</small></button>
     <input id="fileIn" type="file" accept=".obj,.stl" hidden>
     <button class="btn" id="btnUndo" title="Ctrl+Z">元に戻す</button>
     <button class="btn" id="btnRedo" title="Ctrl+Y">やり直し</button>
@@ -175,7 +175,7 @@ dl.keys dd{margin:0;color:var(--muted)}
         <select id="newRes" aria-label="解像度"><option value="low">低（軽い）</option><option value="mid" selected>中</option><option value="high">高（細かい）</option></select>
       </div>
       <button class="btn full" id="btnNew" style="margin-top:6px">この形で新規作成</button>
-      <p class="note">作業は自動でブラウザに保存され、次に開いたときに復元されます。</p>
+      <p class="note">作業は自動で保存され、次に起動したときに復元されます。</p>
     </section>
 
     <section>
@@ -191,6 +191,8 @@ dl.keys dd{margin:0;color:var(--muted)}
         <dt>F</dt><dd>全体表示</dd>
         <dt>Ctrl+Z / Y</dt><dd>元に戻す / やり直し</dd>
         <dt>Ctrl+D</dt><dd>細分化（ポリゴン4倍）</dd>
+        <dt>Ctrl+O</dt><dd>モデルを読み込み</dd>
+        <dt>F11</dt><dd>全画面表示</dd>
       </dl>
     </section>
   </aside>
@@ -713,14 +715,16 @@ function subdivide() {
 }
 
 // ---------------- import ----------------
+// file: a File (drag & drop / <input>) or { name, data: ArrayBuffer } from the native dialog
 async function importFile(file) {
   const name = file.name.replace(/\.[^.]+$/, '');
   const ext = file.name.split('.').pop().toLowerCase();
+  const bytes = () => file.data ? Promise.resolve(file.data) : file.arrayBuffer();
   let geoms = [];
   if (ext === 'stl') {
-    geoms.push(new STLLoader().parse(await file.arrayBuffer()));
+    geoms.push(new STLLoader().parse(await bytes()));
   } else if (ext === 'obj') {
-    const group = new OBJLoader().parse(await file.text());
+    const group = new OBJLoader().parse(new TextDecoder().decode(await bytes()));
     group.updateMatrixWorld(true);
     group.traverse(o => { if (o.isMesh) { const g = o.geometry.clone(); g.applyMatrix4(o.matrixWorld); geoms.push(g); } });
   } else { toast('OBJ または STL を選んでください'); return; }
@@ -743,12 +747,32 @@ async function importFile(file) {
 
 // ---------------- export ----------------
 function fileBase() { return ($('fname').value.trim() || 'sculpt').replace(/[\\/:*?"<>|]/g, '_'); }
+const native = window.bp && window.bp.isDesktop ? window.bp : null;
 function download(blob, name) {
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name;
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 4000);
 }
-function exportOBJ() {
+async function saveOne(make) {
+  const f = await make(); if (!f) return;
+  if (!native) { download(f.blob, f.name); return; }
+  const p = await native.saveFile(f.name, await f.blob.arrayBuffer());
+  if (p) toast(`保存しました: ${p}`);
+}
+async function saveAll() {
+  const files = [];
+  for (const make of [makeOBJ, makeGLB, makeSTL]) { const f = await make(); if (f) files.push(f); }
+  if (!native) { files.forEach(f => download(f.blob, f.name)); toast(`${files.length}つのファイルを書き出しました`); return; }
+  const payload = await Promise.all(files.map(async f => ({ name: f.name, data: await f.blob.arrayBuffer() })));
+  const dir = await native.saveMany(payload);
+  if (dir) toast(`${files.length}つのファイルを保存しました: ${dir}`);
+}
+async function openModel() {
+  if (!native) { $('fileIn').click(); return; }
+  const m = await native.openModel();
+  if (m) importFile(m);
+}
+function makeOBJ() {
   flushNormals();
   const out = [`# BoardPainter\n# vertices ${nV} faces ${nF}\no ${fileBase()}\n`];
   let chunk = '';
@@ -756,9 +780,9 @@ function exportOBJ() {
   for (let i = 0; i < nV * 3; i += 3) { chunk += `vn ${nrm[i].toFixed(4)} ${nrm[i+1].toFixed(4)} ${nrm[i+2].toFixed(4)}\n`; if (chunk.length > 1e6) { out.push(chunk); chunk = ''; } }
   for (let f = 0; f < nF * 3; f += 3) { const a = idx[f]+1, b = idx[f+1]+1, c = idx[f+2]+1; chunk += `f ${a}//${a} ${b}//${b} ${c}//${c}\n`; if (chunk.length > 1e6) { out.push(chunk); chunk = ''; } }
   out.push(chunk);
-  download(new Blob(out, { type:'text/plain' }), fileBase() + '.obj');
+  return { blob: new Blob(out, { type:'text/plain' }), name: fileBase() + '.obj' };
 }
-function exportSTL() {
+function makeSTL() {
   const hmm = Math.max(1, +$('stlH').value || 80);
   geo.computeBoundingBox();
   const bb = geo.boundingBox, h = bb.max.y - bb.min.y || 1, sc = hmm / h;
@@ -779,9 +803,9 @@ function exportSTL() {
     for (const P of [A, B, C]) { dv.setFloat32(o, P[0], true); dv.setFloat32(o+4, P[1], true); dv.setFloat32(o+8, P[2], true); o += 12; }
     dv.setUint16(o, 0, true); o += 2;
   }
-  download(new Blob([buf], { type:'model/stl' }), `${fileBase()}_${hmm}mm.stl`);
+  return { blob: new Blob([buf], { type:'model/stl' }), name: `${fileBase()}_${hmm}mm.stl` };
 }
-function exportGLB() {
+function makeGLB() {
   flushNormals();
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(pos.slice(), 3));
@@ -789,7 +813,7 @@ function exportGLB() {
   g.setIndex(new THREE.BufferAttribute(idx.slice(), 1));
   const m = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color:0xd8c0a2, roughness:0.6 }));
   m.name = fileBase();
-  return new Promise(res => new GLTFExporter().parse(m, r => { download(new Blob([r], { type:'model/gltf-binary' }), fileBase() + '.glb'); res(); }, err => { toast('GLB書き出しに失敗しました'); console.error(err); res(); }, { binary:true }));
+  return new Promise(res => new GLTFExporter().parse(m, r => res({ blob: new Blob([r], { type:'model/gltf-binary' }), name: fileBase() + '.glb' }), err => { toast('GLB書き出しに失敗しました'); console.error(err); res(null); }, { binary:true }));
 }
 
 // ---------------- autosave (IndexedDB) ----------------
@@ -799,7 +823,11 @@ function idb() {
 let saveTimer = 0;
 function scheduleSave() { clearTimeout(saveTimer); saveTimer = setTimeout(saveNow, 1200); }
 async function saveNow() {
-  try { const db = await idb(); db.transaction('s', 'readwrite').objectStore('s').put({ pos, idx, mask, mirror, name: $('fname').value, t: Date.now() }, 'auto'); } catch (e) { /* storage unavailable */ }
+  clearTimeout(saveTimer);
+  try {
+    const db = await idb();
+    await new Promise(res => { const tx = db.transaction('s', 'readwrite'); tx.objectStore('s').put({ pos, idx, mask, mirror, name: $('fname').value, t: Date.now() }, 'auto'); tx.oncomplete = tx.onerror = tx.onabort = res; });
+  } catch (e) { /* storage unavailable */ }
 }
 async function loadAuto() {
   try {
@@ -863,10 +891,11 @@ $('opSmooth').onclick = () => busy(() => smoothAll(Math.min(50, Math.max(1, +$('
 $('opSymm').onclick = () => busy(symmetrize);
 $('opCenter').onclick = () => busy(centerMesh);
 $('opMaskInv').onclick = maskInvert; $('opMaskClear').onclick = maskClear;
-$('expOBJ').onclick = () => busy(exportOBJ);
-$('expSTL').onclick = () => busy(exportSTL);
-$('expGLB').onclick = () => exportGLB();
-$('expAll').onclick = async () => { await busy(exportOBJ); await exportGLB(); await busy(exportSTL); toast('3つのファイルを書き出しました'); };
+$('expOBJ').onclick = () => saveOne(() => busy(makeOBJ));
+$('expSTL').onclick = () => saveOne(() => busy(makeSTL));
+$('expGLB').onclick = () => saveOne(makeGLB);
+$('expAll').onclick = () => saveAll();
+$('btnOpen').onclick = () => openModel();
 $('fileIn').onchange = e => { const f = e.target.files[0]; if (f) importFile(f); e.target.value = ''; };
 $('btnNew').onclick = () => busy(() => { pushUndo(true); const b = makeBase($('newShape').value, $('newRes').value); setMesh(b.p, b.ix); frame(); scheduleSave(); toast('新規作成しました（元に戻すで前の形に戻せます）'); });
 $('btnPanel').onclick = () => $('app').classList.toggle('panel-open');
@@ -883,6 +912,7 @@ window.addEventListener('keydown', e => {
   if (ctrl && (e.key === 'z' || e.key === 'Z')) { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
   if (ctrl && (e.key === 'y' || e.key === 'Y')) { e.preventDefault(); redo(); return; }
   if (ctrl && (e.key === 'd' || e.key === 'D')) { e.preventDefault(); busy(subdivide); return; }
+  if (ctrl && (e.key === 'o' || e.key === 'O')) { e.preventDefault(); openModel(); return; }
   if (ctrl || e.altKey) { syncHeld(e); return; }
   if (e.key >= '1' && e.key <= '9') { const b = BRUSHES[+e.key - 1]; if (b) selectBrush(b.id); return; }
   if (e.key === '[') { S.size = Math.max(5, Math.round(S.size / 1.15)); syncSize(); return; }
@@ -928,6 +958,12 @@ renderer.setAnimationLoop(() => {
     setMesh(saved.pos, saved.idx, saved.mask, saved.mirror);
     if (saved.name) $('fname').value = saved.name;
     frame(); toast('前回の作業を復元しました');
+  }
+  if (native) {
+    native.onOpenModel(m => importFile(m));
+    native.onBeforeClose(() => saveNow());
+    const first = await native.takePendingOpen();
+    if (first) importFile(first);
   }
   window.__boardPainter = { get nV() { return nV; }, get nF() { return nF; } };
 }

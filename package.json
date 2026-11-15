@@ -1,0 +1,80 @@
+{
+  "name": "boardpainter",
+  "productName": "BoardPainter",
+  "version": "1.0.0",
+  "description": "無料のデジタルスカルプト（3D造形）デスクトップツール",
+  "main": "electron/main.js",
+  "author": "BoardPainter",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "postinstall": "node scripts/vendor.js",
+    "start": "node scripts/vendor.js && electron .",
+    "dist": "node scripts/vendor.js && electron-builder --publish never",
+    "dist:win": "node scripts/vendor.js && electron-builder --win --publish never",
+    "dist:mac": "node scripts/vendor.js && electron-builder --mac --publish never",
+    "dist:linux": "node scripts/vendor.js && electron-builder --linux --publish never"
+  },
+  "devDependencies": {
+    "electron": "38.8.6",
+    "electron-builder": "26.18.0",
+    "three": "0.160.0",
+    "three-mesh-bvh": "0.7.3"
+  },
+  "build": {
+    "appId": "app.boardpainter.desktop",
+    "productName": "BoardPainter",
+    "copyright": "BoardPainter",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "electron/**",
+      "src/**",
+      "package.json"
+    ],
+    "asar": true,
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "shortcutName": "BoardPainter",
+      "artifactName": "${productName}-Setup-${version}.exe"
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-portable.exe"
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.graphics-design"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Graphics",
+      "artifactName": "${productName}-${version}.${ext}"
+    },
+    "icon": "build/icon.png"
+  }
+}
