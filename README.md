@@ -1,4 +1,4 @@
-# BordPainter
+# BoardPainter
 
 ブラウザで動く、無料のデジタルスカルプト（3D造形）ツールです。`index.html` を Chrome / Edge で開くだけで使えます（インストール不要・3D表示ライブラリをCDNから読み込むためネット接続が必要）。
 

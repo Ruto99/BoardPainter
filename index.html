@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>BordPainter</title>
+<title>BoardPainter</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&family=JetBrains+Mono:wght@500&display=swap">
 <style>
@@ -102,7 +102,7 @@ dl.keys dd{margin:0;color:var(--muted)}
 <body>
 <div class="app" id="app">
   <header>
-    <div class="brand">Bord<span>Painter</span></div>
+    <div class="brand">Board<span>Painter</span></div>
     <label class="btn" for="fileIn">読み込み <small>OBJ/STL</small></label>
     <input id="fileIn" type="file" accept=".obj,.stl" hidden>
     <button class="btn" id="btnUndo" title="Ctrl+Z">元に戻す</button>
@@ -750,7 +750,7 @@ function download(blob, name) {
 }
 function exportOBJ() {
   flushNormals();
-  const out = [`# BordPainter\n# vertices ${nV} faces ${nF}\no ${fileBase()}\n`];
+  const out = [`# BoardPainter\n# vertices ${nV} faces ${nF}\no ${fileBase()}\n`];
   let chunk = '';
   for (let i = 0; i < nV * 3; i += 3) { chunk += `v ${pos[i].toFixed(6)} ${pos[i+1].toFixed(6)} ${pos[i+2].toFixed(6)}\n`; if (chunk.length > 1e6) { out.push(chunk); chunk = ''; } }
   for (let i = 0; i < nV * 3; i += 3) { chunk += `vn ${nrm[i].toFixed(4)} ${nrm[i+1].toFixed(4)} ${nrm[i+2].toFixed(4)}\n`; if (chunk.length > 1e6) { out.push(chunk); chunk = ''; } }
@@ -766,7 +766,7 @@ function exportSTL() {
   // Y-up -> Z-up for slicers: (x, y, z) -> (x, -z, y); centered on XY, resting on Z=0
   const T = (i, o) => { o[0] = (pos[i]-cx)*sc; o[1] = -(pos[i+2]-cz)*sc; o[2] = (pos[i+1]-my)*sc; };
   const buf = new ArrayBuffer(84 + nF * 50), dv = new DataView(buf);
-  const head = `BordPainter STL ${hmm}mm`;
+  const head = `BoardPainter STL ${hmm}mm`;
   for (let i = 0; i < head.length && i < 80; i++) dv.setUint8(i, head.charCodeAt(i) & 0x7f);
   dv.setUint32(80, nF, true);
   const A = [0,0,0], B = [0,0,0], C = [0,0,0];
@@ -794,7 +794,7 @@ function exportGLB() {
 
 // ---------------- autosave (IndexedDB) ----------------
 function idb() {
-  return new Promise((res, rej) => { const r = indexedDB.open('bord-painter', 1); r.onupgradeneeded = () => r.result.createObjectStore('s'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+  return new Promise((res, rej) => { const r = indexedDB.open('board-painter', 1); r.onupgradeneeded = () => r.result.createObjectStore('s'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
 }
 let saveTimer = 0;
 function scheduleSave() { clearTimeout(saveTimer); saveTimer = setTimeout(saveNow, 1200); }
@@ -929,7 +929,7 @@ renderer.setAnimationLoop(() => {
     if (saved.name) $('fname').value = saved.name;
     frame(); toast('前回の作業を復元しました');
   }
-  window.__bordPainter = { get nV() { return nV; }, get nF() { return nF; } };
+  window.__boardPainter = { get nV() { return nV; }, get nF() { return nF; } };
 }
 </script>
 </body>
