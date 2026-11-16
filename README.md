@@ -67,6 +67,9 @@ GitHub の **Actions → Build desktop app** の最新の実行結果から `Boa
 
 ## 開発・自分でビルドする
 
+**Windows で手軽に起動する**: リポジトリのフォルダにある `BoardPainter.bat` をダブルクリックすると、初回だけ必要なものを自動でインストールしてからアプリを起動します（Node.js 20 以上が必要。初回は数分かかります）。
+
+
 Node.js 20 以上が必要です。
 
 ```bash
