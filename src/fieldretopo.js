@@ -1,0 +1,620 @@
+// Field-aligned quad retopology, following Instant Field-Aligned Meshes
+// (Jakob, Tarini, Panozzo, Sorkine-Hornung, SIGGRAPH Asia 2015):
+//  1. uniform working mesh (voxel remesh) a few times denser than the target
+//  2. 4-RoSy orientation field and an aligned position (lattice) field, smoothed on a multigrid hierarchy
+//     - sharp edges / corners of the source constrain the fields (edge loops run along creases)
+//     - symmetry: the fields are solved on the x >= 0 half with a seam constraint, then mirrored
+//  3. extraction: vertices sharing a lattice point merge; lattice neighbours become edges (at most one per
+//     direction of the cross field); faces are traced around each vertex; n-gons are split into quads,
+//     triangle pairs merged into quads
+//  4. relaxation along polygon edges, snapping to the source surface / sharp edges / corners
+import * as THREE from 'three';
+import { MeshBVH } from 'three-mesh-bvh';
+import { remesh } from './remesh.js';
+
+const cross = (a, b) => [a[1]*b[2] - a[2]*b[1], a[2]*b[0] - a[0]*b[2], a[0]*b[1] - a[1]*b[0]];
+const get = (A, i) => [A[i*3], A[i*3+1], A[i*3+2]];
+const set3 = (A, i, v) => { A[i*3] = v[0]; A[i*3+1] = v[1]; A[i*3+2] = v[2]; };
+const norm = v => { const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0]/l, v[1]/l, v[2]/l]; };
+const tangentOf = (v, n) => { const d = v[0]*n[0] + v[1]*n[1] + v[2]*n[2]; return [v[0] - n[0]*d, v[1] - n[1]*d, v[2] - n[2]*d]; };
+
+function buildNeighbors(n, idx) {
+  const start = new Uint32Array(n + 1), seen = new Int32Array(n).fill(-1);
+  for (let i = 0; i < idx.length; i++) start[idx[i] + 1] += 2;
+  for (let v = 0; v < n; v++) start[v + 1] += start[v];
+  const raw = new Uint32Array(start[n]), fill = start.slice(0, n);
+  for (let f = 0; f < idx.length; f += 3) for (let k = 0; k < 3; k++) { const a = idx[f+k]; raw[fill[a]++] = idx[f+(k+1)%3]; raw[fill[a]++] = idx[f+(k+2)%3]; }
+  const os = new Uint32Array(n + 1), out = [];
+  for (let v = 0; v < n; v++) { os[v] = out.length; for (let j = start[v]; j < start[v + 1]; j++) { const u = raw[j]; if (seen[u] !== v) { seen[u] = v; out.push(u); } } }
+  os[n] = out.length;
+  return { start: os, list: Uint32Array.from(out) };
+}
+function vertexNormals(p, ix) {
+  const n = new Float32Array(p.length);
+  for (let f = 0; f < ix.length; f += 3) {
+    const a = ix[f]*3, b = ix[f+1]*3, c = ix[f+2]*3;
+    const ux = p[b]-p[a], uy = p[b+1]-p[a+1], uz = p[b+2]-p[a+2], wx = p[c]-p[a], wy = p[c+1]-p[a+1], wz = p[c+2]-p[a+2];
+    const x = uy*wz - uz*wy, y = uz*wx - ux*wz, z = ux*wy - uy*wx;
+    for (const t of [a, b, c]) { n[t] += x; n[t+1] += y; n[t+2] += z; }
+  }
+  for (let i = 0; i < n.length; i += 3) { const l = Math.hypot(n[i], n[i+1], n[i+2]) || 1; n[i] /= l; n[i+1] /= l; n[i+2] /= l; }
+  return n;
+}
+
+// ---------- sharp features of the source (creases between faces > angle, corners where >= 3 meet) ----------
+function sharpFeatures(pos, idx, angleDeg) {
+  const nF = idx.length / 3, nV = pos.length / 3, fn = new Float32Array(nF * 3);
+  for (let f = 0; f < nF; f++) {
+    const a = idx[f*3]*3, b = idx[f*3+1]*3, c = idx[f*3+2]*3;
+    set3(fn, f, norm(cross([pos[b]-pos[a], pos[b+1]-pos[a+1], pos[b+2]-pos[a+2]], [pos[c]-pos[a], pos[c+1]-pos[a+1], pos[c+2]-pos[a+2]])));
+  }
+  const cosA = Math.cos(angleDeg * Math.PI / 180), first = new Map(), segs = [], deg = new Map();
+  for (let f = 0; f < nF; f++) for (let k = 0; k < 3; k++) {
+    const a = idx[f*3+k], b = idx[f*3+(k+1)%3], key = a < b ? a * nV + b : b * nV + a, g = first.get(key);
+    if (g === undefined) { first.set(key, f); continue; }
+    if (fn[f*3]*fn[g*3] + fn[f*3+1]*fn[g*3+1] + fn[f*3+2]*fn[g*3+2] < cosA) {
+      segs.push(pos[a*3], pos[a*3+1], pos[a*3+2], pos[b*3], pos[b*3+1], pos[b*3+2]);
+      deg.set(a, (deg.get(a) || 0) + 1); deg.set(b, (deg.get(b) || 0) + 1);
+    }
+  }
+  const corners = [];
+  for (const [v, d] of deg) if (d >= 3) corners.push(pos[v*3], pos[v*3+1], pos[v*3+2]);
+  return { segs: new Float32Array(segs), corners: new Float32Array(corners) };
+}
+// spatial hash over segments / points for nearest queries
+class FeatureIndex {
+  constructor(F, cell) {
+    this.F = F; this.cell = cell; this.grid = new Map(); this.cgrid = new Map();
+    const S = F.segs, k = (x, y, z) => `${Math.floor(x / cell)},${Math.floor(y / cell)},${Math.floor(z / cell)}`;
+    for (let s = 0; s < S.length / 6; s++) {
+      const o = s * 6, steps = Math.max(1, Math.ceil(Math.hypot(S[o+3]-S[o], S[o+4]-S[o+1], S[o+5]-S[o+2]) / cell));
+      const keys = new Set();
+      for (let i = 0; i <= steps; i++) { const t = i / steps; keys.add(k(S[o] + (S[o+3]-S[o])*t, S[o+1] + (S[o+4]-S[o+1])*t, S[o+2] + (S[o+5]-S[o+2])*t)); }
+      for (const kk of keys) (this.grid.get(kk) || this.grid.set(kk, []).get(kk)).push(s);
+    }
+    const C = F.corners;
+    for (let c = 0; c < C.length / 3; c++) { const kk = k(C[c*3], C[c*3+1], C[c*3+2]); (this.cgrid.get(kk) || this.cgrid.set(kk, []).get(kk)).push(c); }
+  }
+  near(grid, p, fn) {
+    const c = this.cell, x = Math.floor(p[0] / c), y = Math.floor(p[1] / c), z = Math.floor(p[2] / c);
+    for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) for (let d = -1; d <= 1; d++) { const l = grid.get(`${x+a},${y+b},${z+d}`); if (l) for (const i of l) fn(i); }
+  }
+  closestSeg(p, maxD) {
+    const S = this.F.segs; let best = null, bd = maxD;
+    this.near(this.grid, p, s => {
+      const o = s * 6, d = [S[o+3]-S[o], S[o+4]-S[o+1], S[o+5]-S[o+2]], l2 = d[0]*d[0] + d[1]*d[1] + d[2]*d[2] || 1;
+      const t = Math.max(0, Math.min(1, ((p[0]-S[o])*d[0] + (p[1]-S[o+1])*d[1] + (p[2]-S[o+2])*d[2]) / l2));
+      const q = [S[o] + d[0]*t, S[o+1] + d[1]*t, S[o+2] + d[2]*t], dist = Math.hypot(p[0]-q[0], p[1]-q[1], p[2]-q[2]);
+      if (dist < bd) { bd = dist; best = { point: q, dir: norm(d), dist }; }
+    });
+    return best;
+  }
+  closestCorner(p, maxD) {
+    const C = this.F.corners; let best = null, bd = maxD;
+    this.near(this.cgrid, p, c => { const q = [C[c*3], C[c*3+1], C[c*3+2]], d = Math.hypot(p[0]-q[0], p[1]-q[1], p[2]-q[2]); if (d < bd) { bd = d; best = { point: q, dist: d }; } });
+    return best;
+  }
+}
+
+// ---------- multigrid hierarchy (greedy edge matching); constraints propagate to coarse levels ----------
+function buildHierarchy(V, N, adj, con) {
+  const levels = [{ V, N, adj, con, parent: null }];
+  for (let depth = 0; depth < 24; depth++) {
+    const L = levels[levels.length - 1], n = L.V.length / 3;
+    if (n < 80) break;
+    const parent = new Int32Array(n).fill(-1);
+    let m = 0;
+    for (let v = 0; v < n; v++) {
+      if (parent[v] >= 0) continue;
+      let best = -1, bs = -Infinity;
+      for (let j = L.adj.start[v]; j < L.adj.start[v + 1]; j++) {
+        const u = L.adj.list[j]; if (parent[u] >= 0) continue;
+        const s = L.N[v*3]*L.N[u*3] + L.N[v*3+1]*L.N[u*3+1] + L.N[v*3+2]*L.N[u*3+2]; if (s > bs) { bs = s; best = u; }
+      }
+      parent[v] = m; if (best >= 0) parent[best] = m; m++;
+    }
+    if (m > n * 0.85) break;
+    const cV = new Float32Array(m * 3), cN = new Float32Array(m * 3), cnt = new Float32Array(m);
+    const cc = { fq: new Uint8Array(m), fo: new Uint8Array(m), fx: new Uint8Array(m), q: new Float32Array(m * 3), o: new Float32Array(m * 3) };
+    for (let v = 0; v < n; v++) {
+      const p = parent[v]; cnt[p]++;
+      for (let k = 0; k < 3; k++) { cV[p*3+k] += L.V[v*3+k]; cN[p*3+k] += L.N[v*3+k]; }
+      if (L.con.fq[v] && !cc.fq[p]) { cc.fq[p] = 1; for (let k = 0; k < 3; k++) cc.q[p*3+k] = L.con.q[v*3+k]; }
+      if (L.con.fo[v] && !cc.fo[p]) { cc.fo[p] = 1; for (let k = 0; k < 3; k++) cc.o[p*3+k] = L.con.o[v*3+k]; }
+      if (L.con.fx[v]) cc.fx[p] = 1;
+    }
+    for (let p = 0; p < m; p++) { for (let k = 0; k < 3; k++) cV[p*3+k] /= cnt[p]; set3(cN, p, norm(get(cN, p))); }
+    // constrained orientations must lie in the coarse tangent plane
+    for (let p = 0; p < m; p++) if (cc.fq[p]) set3(cc.q, p, norm(tangentOf(get(cc.q, p), get(cN, p))));
+    const sets = Array.from({ length: m }, () => new Set());
+    for (let v = 0; v < n; v++) for (let j = L.adj.start[v]; j < L.adj.start[v + 1]; j++) { const a = parent[v], b = parent[L.adj.list[j]]; if (a !== b) sets[a].add(b); }
+    const st = new Uint32Array(m + 1), list = [];
+    for (let p = 0; p < m; p++) { st[p] = list.length; for (const b of sets[p]) list.push(b); }
+    st[m] = list.length;
+    L.parent = parent;
+    levels.push({ V: cV, N: cN, adj: { start: st, list: Uint32Array.from(list) }, con: cc, parent: null });
+  }
+  return levels;
+}
+
+// ---------- fields ----------
+function compatOrient(q0, n0, q1, n1) {
+  const A = [q0, cross(n0, q0)], B = [q1, cross(n1, q1)];
+  let best = -1, bi = 0, bj = 0, sgn = 1;
+  for (let i = 0; i < 2; i++) for (let j = 0; j < 2; j++) {
+    const d = A[i][0]*B[j][0] + A[i][1]*B[j][1] + A[i][2]*B[j][2];
+    if (Math.abs(d) > best) { best = Math.abs(d); bi = i; bj = j; sgn = d < 0 ? -1 : 1; }
+  }
+  return [A[bi], [B[bj][0]*sgn, B[bj][1]*sgn, B[bj][2]*sgn]];
+}
+// visiting order: a fixed random permutation (scan order biases the fields along the voxel grid)
+function order(n, seed) {
+  const o = new Uint32Array(n); for (let i = 0; i < n; i++) o[i] = i;
+  let r = seed >>> 0 || 1;
+  for (let i = n - 1; i > 0; i--) { r = (r * 1664525 + 1013904223) >>> 0; const j = r % (i + 1); const t = o[i]; o[i] = o[j]; o[j] = t; }
+  return o;
+}
+function smoothOrientations(L, Q, iters, shuffle) {
+  const n = L.V.length / 3, ord = shuffle ? order(n, 7) : null;
+  for (let it = 0; it < iters; it++) for (let ii = 0; ii < n; ii++) {
+    const i = ord ? ord[ii] : ii;
+    if (L.con.fq[i]) continue;
+    const ni = get(L.N, i); let q = get(Q, i), ws = 0;
+    for (let j = L.adj.start[i]; j < L.adj.start[i + 1]; j++) {
+      const u = L.adj.list[j], w = L.con.fq[u] ? 4 : 1;   // constraints pull harder
+      const [a, b] = compatOrient(q, ni, get(Q, u), get(L.N, u));
+      q = norm(tangentOf([a[0]*ws + b[0]*w, a[1]*ws + b[1]*w, a[2]*ws + b[2]*w], ni));
+      ws += w;
+    }
+    set3(Q, i, q);
+  }
+}
+function lattice(o, q, n, p, s, round) {
+  const t = cross(n, q), d = [p[0]-o[0], p[1]-o[1], p[2]-o[2]], f = round ? Math.round : Math.floor;
+  const a = f((d[0]*q[0] + d[1]*q[1] + d[2]*q[2]) / s), b = f((d[0]*t[0] + d[1]*t[1] + d[2]*t[2]) / s);
+  return [o[0] + (q[0]*a + t[0]*b)*s, o[1] + (q[1]*a + t[1]*b)*s, o[2] + (q[2]*a + t[2]*b)*s];
+}
+function middlePoint(p0, n0, p1, n1) {
+  const n0p0 = n0[0]*p0[0]+n0[1]*p0[1]+n0[2]*p0[2], n0p1 = n0[0]*p1[0]+n0[1]*p1[1]+n0[2]*p1[2];
+  const n1p0 = n1[0]*p0[0]+n1[1]*p0[1]+n1[2]*p0[2], n1p1 = n1[0]*p1[0]+n1[1]*p1[1]+n1[2]*p1[2];
+  const n0n1 = n0[0]*n1[0]+n0[1]*n1[1]+n0[2]*n1[2], den = 1 / (1 - n0n1*n0n1 + 1e-4);
+  const l0 = 2 * (n0p1 - n0p0 - n0n1 * (n1p0 - n1p1)) * den, l1 = 2 * (n1p0 - n1p1 - n0n1 * (n0p1 - n0p0)) * den;
+  return [0.5*(p0[0]+p1[0]) - 0.25*(n0[0]*l0 + n1[0]*l1), 0.5*(p0[1]+p1[1]) - 0.25*(n0[1]*l0 + n1[1]*l1), 0.5*(p0[2]+p1[2]) - 0.25*(n0[2]*l0 + n1[2]*l1)];
+}
+function compatPos(p0, n0, q0, o0, p1, n1, q1, o1, s) {
+  const t0 = cross(n0, q0), t1 = cross(n1, q1), m = middlePoint(p0, n0, p1, n1);
+  const a0 = lattice(o0, q0, n0, m, s, false), a1 = lattice(o1, q1, n1, m, s, false);
+  let best = Infinity, r0 = null, r1 = null;
+  for (let i = 0; i < 4; i++) {
+    const c0 = [a0[0] + ((i&1)*q0[0] + ((i>>1)&1)*t0[0])*s, a0[1] + ((i&1)*q0[1] + ((i>>1)&1)*t0[1])*s, a0[2] + ((i&1)*q0[2] + ((i>>1)&1)*t0[2])*s];
+    for (let j = 0; j < 4; j++) {
+      const c1 = [a1[0] + ((j&1)*q1[0] + ((j>>1)&1)*t1[0])*s, a1[1] + ((j&1)*q1[1] + ((j>>1)&1)*t1[1])*s, a1[2] + ((j&1)*q1[2] + ((j>>1)&1)*t1[2])*s];
+      const d = (c0[0]-c1[0])**2 + (c0[1]-c1[1])**2 + (c0[2]-c1[2])**2;
+      if (d < best) { best = d; r0 = c0; r1 = c1; }
+    }
+  }
+  return [r0, r1];
+}
+function smoothPositions(L, Q, O, s, iters, shuffle) {
+  const n = L.V.length / 3, ord = shuffle ? order(n, 13) : null;
+  for (let it = 0; it < iters; it++) for (let ii = 0; ii < n; ii++) {
+    const i = ord ? ord[ii] : ii;
+    if (L.con.fo[i]) continue;
+    const vi = get(L.V, i), ni = get(L.N, i), qi = get(Q, i);
+    let o = get(O, i), ws = 0;
+    for (let j = L.adj.start[i]; j < L.adj.start[i + 1]; j++) {
+      const u = L.adj.list[j], w = L.con.fo[u] ? 4 : 1;
+      const [a, b] = compatPos(vi, ni, qi, o, get(L.V, u), get(L.N, u), get(Q, u), get(O, u), s);
+      o = [(a[0]*ws + b[0]*w) / (ws + w), (a[1]*ws + b[1]*w) / (ws + w), (a[2]*ws + b[2]*w) / (ws + w)];
+      ws += w;
+      const d = (o[0]-vi[0])*ni[0] + (o[1]-vi[1])*ni[1] + (o[2]-vi[2])*ni[2];
+      o = [o[0] - ni[0]*d, o[1] - ni[1]*d, o[2] - ni[2]*d];
+    }
+    o = lattice(o, qi, ni, vi, s, true);
+    if (L.con.fx[i]) o = onPlane(o, qi, cross(ni, qi));
+    set3(O, i, o);
+  }
+}
+// move a lattice point along the lattice direction most aligned with x so that it lies on x = 0
+function onPlane(o, q, t) {
+  const d = Math.abs(q[0]) >= Math.abs(t[0]) ? q : t;
+  return Math.abs(d[0]) > 1e-3 ? [o[0] - d[0] * o[0] / d[0], o[1] - d[1] * o[0] / d[0], o[2] - d[2] * o[0] / d[0]] : o;
+}
+
+// ---------- polygon helpers ----------
+const dist2 = (P, a, b) => (P[a*3]-P[b*3])**2 + (P[a*3+1]-P[b*3+1])**2 + (P[a*3+2]-P[b*3+2])**2;
+function quadQuality(P, f) {   // worst corner angle deviation from 90 deg (radians)
+  let worst = 0;
+  for (let k = 0; k < 4; k++) {
+    const a = f[(k+3)%4], b = f[k], c = f[(k+1)%4];
+    const u = norm([P[a*3]-P[b*3], P[a*3+1]-P[b*3+1], P[a*3+2]-P[b*3+2]]), v = norm([P[c*3]-P[b*3], P[c*3+1]-P[b*3+1], P[c*3+2]-P[b*3+2]]);
+    worst = Math.max(worst, Math.abs(Math.acos(Math.max(-1, Math.min(1, u[0]*v[0] + u[1]*v[1] + u[2]*v[2]))) - Math.PI / 2));
+  }
+  return worst;
+}
+
+/**
+ * @param src { pos, idx }
+ * @param opt { target: quads, smooth: relax passes, sym: mirror about x = 0, sharpAngle: degrees (0 = off) }
+ * @returns { pos, idx (triangles), polys: { start, idx }, stats }
+ */
+export function fieldRetopo(src, opt) {
+  const sp = src.pos, si = src.idx;
+  let area = 0, mn = [Infinity, Infinity, Infinity], mx = [-Infinity, -Infinity, -Infinity];
+  for (let f = 0; f < si.length; f += 3) {
+    const a = si[f]*3, b = si[f+1]*3, c = si[f+2]*3;
+    const ux = sp[b]-sp[a], uy = sp[b+1]-sp[a+1], uz = sp[b+2]-sp[a+2], wx = sp[c]-sp[a], wy = sp[c+1]-sp[a+1], wz = sp[c+2]-sp[a+2];
+    area += Math.hypot(uy*wz - uz*wy, uz*wx - ux*wz, ux*wy - uy*wx) / 2;
+  }
+  for (let i = 0; i < sp.length; i += 3) for (let k = 0; k < 3; k++) { mn[k] = Math.min(mn[k], sp[i+k]); mx[k] = Math.max(mx[k], sp[i+k]); }
+  const pure = opt.pureQuad !== false;
+  const s = Math.sqrt(area / Math.max(50, opt.target / (pure ? 4 : 1)));
+  const ext = Math.max(mx[0]-mn[0], mx[1]-mn[1], mx[2]-mn[2]);
+  let sym = !!opt.sym && mn[0] < -s * 0.5 && mx[0] > s * 0.5;     // only when the shape straddles x = 0
+
+  // ---- working mesh
+  const res = Math.min(320, Math.max(24, Math.round(ext / (s / (opt.density ?? 2.5)))));
+  const W = remesh({ pos: sp, idx: si }, { res, project: true, smooth: 2, symX: sym });
+  if (!W) return null;
+  let V = W.pos, WI = W.idx;
+  // half for symmetric mode: vertices with x > 0; seam = those with a neighbour on the other side
+  let seam = null;
+  if (sym) {
+    const n0 = V.length / 3, keep = new Int32Array(n0).fill(-1); let k = 0;
+    for (let v = 0; v < n0; v++) if (V[v*3] > 0) keep[v] = k++;
+    const isSeam = new Uint8Array(k), I2 = [];
+    for (let f = 0; f < WI.length; f += 3) {
+      const a = WI[f], b = WI[f+1], c = WI[f+2], ka = keep[a], kb = keep[b], kc = keep[c];
+      if (ka >= 0 && kb >= 0 && kc >= 0) I2.push(ka, kb, kc);
+      else for (const t of [ka, kb, kc]) if (t >= 0) isSeam[t] = 1;
+    }
+    const V2 = new Float32Array(k * 3);
+    for (let v = 0; v < n0; v++) if (keep[v] >= 0) { V2[keep[v]*3] = V[v*3]; V2[keep[v]*3+1] = V[v*3+1]; V2[keep[v]*3+2] = V[v*3+2]; }
+    if (!isSeam.some(x => x)) sym = false; else { V = V2; WI = new Uint32Array(I2); seam = isSeam; }
+  }
+  const n = V.length / 3, N = vertexNormals(V, WI), adj = buildNeighbors(n, WI);
+
+  // ---- constraints: symmetry seam, sharp edges and corners
+  const con = { fq: new Uint8Array(n), fo: new Uint8Array(n), fx: new Uint8Array(n), q: new Float32Array(n * 3), o: new Float32Array(n * 3) };
+  const angle = opt.sharpAngle ?? 40;
+  const F = angle > 0 ? sharpFeatures(sp, si, angle) : { segs: new Float32Array(0), corners: new Float32Array(0) };
+  if (sym && F.segs.length) {   // where a crease crosses the mirror plane there must be a vertex: treat it as a corner
+    const S = F.segs, extra = [];
+    for (let o = 0; o < S.length; o += 6) {
+      const x0 = S[o], x1 = S[o+3];
+      if ((x0 < 0) !== (x1 < 0) && x0 !== x1) { const t = x0 / (x0 - x1); extra.push(0, S[o+1] + (S[o+4]-S[o+1]) * t, S[o+2] + (S[o+5]-S[o+2]) * t); }
+    }
+    const C = new Float32Array(F.corners.length + extra.length); C.set(F.corners); C.set(extra, F.corners.length); F.corners = C;
+  }
+  const FI = F.segs.length ? new FeatureIndex(F, s) : null;
+  const vertexKind = new Uint8Array(n);   // 2 sharp edge, 3 corner (seam is tracked separately)
+  for (let v = 0; v < n; v++) {
+    const p = get(V, v), nn = get(N, v);
+    if (seam && seam[v]) {
+      let q = tangentOf([1, 0, 0], nn), l = Math.hypot(q[0], q[1], q[2]);
+      if (l > 0.2) {
+        q = [q[0]/l, q[1]/l, q[2]/l];
+        con.fq[v] = 1; set3(con.q, v, q);
+        con.fx[v] = 1;
+        // a seam vertex can also sit on a crease crossing / corner: pin its lattice point there
+        const c = FI && FI.closestCorner(p, s * 0.6);
+        if (c) { con.fo[v] = 1; set3(con.o, v, c.point); }
+        continue;
+      }
+    }
+    if (!FI) continue;
+    const c = FI.closestCorner(p, s * 0.6);
+    if (c) { con.fo[v] = 1; set3(con.o, v, c.point); vertexKind[v] = 3; continue; }
+    const e = FI.closestSeg(p, s * 0.45);
+    if (e) {
+      const q = tangentOf(e.dir, nn), l = Math.hypot(q[0], q[1], q[2]);
+      if (l > 0.3) { con.fq[v] = 1; set3(con.q, v, [q[0]/l, q[1]/l, q[2]/l]); }
+      if (opt.pinEdges) { con.fo[v] = 1; set3(con.o, v, e.point); }
+      vertexKind[v] = 2;
+    }
+  }
+  const levels = buildHierarchy(V, N, adj, con);
+
+  // ---- orientation field (coarse to fine)
+  let rnd = 12345; const rand = () => ((rnd = (rnd * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff) - 0.5;
+  let Q = null;
+  const Qs = [];
+  for (let l = levels.length - 1; l >= 0; l--) {
+    const L = levels[l], m = L.V.length / 3, q = new Float32Array(m * 3);
+    for (let i = 0; i < m; i++) {
+      const ni = get(L.N, i);
+      let v = L.con.fq[i] ? get(L.con.q, i) : Q ? get(Q, L.parent[i]) : [rand(), rand(), rand()];
+      let w = tangentOf(v, ni);
+      if (Math.hypot(w[0], w[1], w[2]) < 1e-8) w = Math.abs(ni[0]) < 0.9 ? [0, -ni[2], ni[1]] : [ni[2], 0, -ni[0]];
+      set3(q, i, norm(w));
+    }
+    smoothOrientations(L, q, l === 0 ? (opt.itO ?? 30) : 15, opt.shuffle !== false);
+    Q = q; Qs[l] = q;
+  }
+  // ---- position field (coarse to fine)
+  let O = null;
+  for (let l = levels.length - 1; l >= 0; l--) {
+    const L = levels[l], m = L.V.length / 3, o = new Float32Array(m * 3);
+    for (let i = 0; i < m; i++) {
+      if (L.con.fo[i]) { set3(o, i, get(L.con.o, i)); continue; }
+      const vi = get(L.V, i), ni = get(L.N, i), qi = get(Qs[l], i);
+      let p0 = O ? get(O, L.parent[i]) : [vi[0] + rand() * s, vi[1] + rand() * s, vi[2] + rand() * s];
+      const d = (p0[0]-vi[0])*ni[0] + (p0[1]-vi[1])*ni[1] + (p0[2]-vi[2])*ni[2];
+      let li = lattice([p0[0] - ni[0]*d, p0[1] - ni[1]*d, p0[2] - ni[2]*d], qi, ni, vi, s, true);
+      if (L.con.fx[i]) li = onPlane(li, qi, cross(ni, qi));
+      set3(o, i, li);
+    }
+    smoothPositions(L, Qs[l], o, s, l === 0 ? (opt.itP ?? 30) : 15, opt.shuffle !== false);
+    O = o;
+  }
+
+  // ---- extraction: merge vertices on the same lattice point, collect lattice-neighbour edges
+  const uf = new Int32Array(n).map((_, i) => i);
+  const find = x => { while (uf[x] !== x) { uf[x] = uf[uf[x]]; x = uf[x]; } return x; };
+  const cand = [];
+  for (let i = 0; i < n; i++) for (let j = adj.start[i]; j < adj.start[i + 1]; j++) {
+    const u = adj.list[j]; if (u < i) continue;
+    const vi = get(V, i), ni = get(N, i), qi = get(Q, i), oi = get(O, i);
+    const [a, b] = compatPos(vi, ni, qi, oi, get(V, u), get(N, u), get(Q, u), get(O, u), s);
+    const D = [(a[0]-oi[0]) - (b[0]-O[u*3]), (a[1]-oi[1]) - (b[1]-O[u*3+1]), (a[2]-oi[2]) - (b[2]-O[u*3+2])];
+    const ti = cross(ni, qi);
+    const du = Math.round((D[0]*qi[0] + D[1]*qi[1] + D[2]*qi[2]) / s), dv = Math.round((D[0]*ti[0] + D[1]*ti[1] + D[2]*ti[2]) / s);
+    if (du === 0 && dv === 0) {
+      const gap = Math.hypot(O[i*3] - O[u*3], O[i*3+1] - O[u*3+1], O[i*3+2] - O[u*3+2]);
+      if (gap < s * (opt.mergeGap ?? 9)) { const x = find(i), y = find(u); if (x !== y) uf[x] = y; }
+    }
+    else if (Math.abs(du) + Math.abs(dv) === 1) cand.push(i, u);
+  }
+  const cid = new Int32Array(n).fill(-1); let m = 0;
+  for (let i = 0; i < n; i++) { const r = find(i); if (cid[r] < 0) cid[r] = m++; cid[i] = cid[r]; }
+  const P = new Float32Array(m * 3), PN = new Float32Array(m * 3), PQ = new Float32Array(m * 3), cnt = new Float32Array(m), kind = new Uint8Array(m), onSeam = new Uint8Array(m);
+  for (let i = 0; i < n; i++) {
+    const c = cid[i]; cnt[c]++;
+    for (let k = 0; k < 3; k++) { P[c*3+k] += O[i*3+k]; PN[c*3+k] += N[i*3+k]; }
+    if (cnt[c] === 1) set3(PQ, c, get(Q, i));
+    kind[c] = Math.max(kind[c], vertexKind[i]);
+    if (seam && seam[i]) onSeam[c] = 1;
+  }
+  for (let c = 0; c < m; c++) { for (let k = 0; k < 3; k++) P[c*3+k] /= cnt[c]; set3(PN, c, norm(get(PN, c))); set3(PQ, c, norm(tangentOf(get(PQ, c), get(PN, c)))); }
+  const support = new Map();
+  for (let e = 0; e < cand.length; e += 2) { const a = cid[cand[e]], b = cid[cand[e+1]]; if (a === b) continue; const k = a < b ? a * m + b : b * m + a; support.set(k, (support.get(k) || 0) + 1); }
+  // at most one edge per cross-field direction at each vertex (removes stray diagonals)
+  const pick = new Map();
+  const frameAngle = (c, u) => { const nn = get(PN, c), q = get(PQ, c), t = cross(nn, q), d = [P[u*3]-P[c*3], P[u*3+1]-P[c*3+1], P[u*3+2]-P[c*3+2]]; return Math.atan2(d[0]*t[0]+d[1]*t[1]+d[2]*t[2], d[0]*q[0]+d[1]*q[1]+d[2]*q[2]); };
+  for (const [k, sup] of support) {
+    const a = Math.floor(k / m), b = k % m;
+    for (const [c, u] of [[a, b], [b, a]]) {
+      const ang = frameAngle(c, u), quad = ((Math.round(ang / (Math.PI / 2)) % 4) + 4) % 4, dev = Math.abs(ang - Math.round(ang / (Math.PI / 2)) * Math.PI / 2);
+      const score = sup - dev, key = c * 4 + quad, cur = pick.get(key);
+      if (!cur || score > cur.score) pick.set(key, { u, score });
+    }
+  }
+  const kept = new Set();
+  for (const [key, { u }] of pick) kept.add(Math.floor(key / 4) * m + u);
+  const nbr = Array.from({ length: m }, () => []);
+  const ef = opt.edgeFilter ?? 'none';
+  for (const k of support.keys()) {
+    const a = Math.floor(k / m), b = k % m, ka = kept.has(a * m + b), kb = kept.has(b * m + a);
+    if (ef === 'none' || (ef === 'either' ? ka || kb : ka && kb)) { nbr[a].push(b); nbr[b].push(a); }
+  }
+  // angular order around each vertex
+  const ring = nbr.map((list, c) => {
+    const nn = get(PN, c), q = get(PQ, c), t = cross(nn, q);
+    return list.map(u => { const d = [P[u*3]-P[c*3], P[u*3+1]-P[c*3+1], P[u*3+2]-P[c*3+2]]; return [u, Math.atan2(d[0]*t[0]+d[1]*t[1]+d[2]*t[2], d[0]*q[0]+d[1]*q[1]+d[2]*q[2])]; })
+      .sort((x, y) => x[1] - y[1]).map(x => x[0]);
+  });
+  const rpos = ring.map(r => new Map(r.map((u, k) => [u, k])));
+  const used = new Set(), polys = [];
+  for (let u = 0; u < m; u++) for (const v of ring[u]) {
+    if (used.has(u * m + v)) continue;
+    const face = [u]; let a = u, b = v, closed = false;
+    for (let steps = 0; steps < 12; steps++) {
+      used.add(a * m + b); face.push(b);
+      const r = ring[b], i = rpos[b].get(a);
+      if (i === undefined || r.length < 2) break;
+      const c = r[(i - 1 + r.length) % r.length];
+      a = b; b = c;
+      if (b === u) { used.add(a * m + b); closed = true; break; }
+    }
+    if (!closed || face.length < 3) continue;
+    if (sym && face.every(x => onSeam[x])) continue;               // the open boundary along the seam
+    polys.push(face);
+  }
+  // split n-gons: 5 -> quad + tri, 6 -> two quads (shortest diagonal), larger -> fan around a centre point
+  const PP = Array.from(P), out = [];
+  for (const f of polys) {
+    const L = f.length;
+    if (L <= 4) { out.push(f); continue; }
+    if ((L === 5 || L === 6) && opt.splitNgons !== false) {
+      let bk = 0, bd = Infinity;
+      for (let k = 0; k < L; k++) { const d = dist2(P, f[k], f[(k + 3) % L]); if (d < bd) { bd = d; bk = k; } }
+      const r = Array.from({ length: L }, (_, i) => f[(bk + i) % L]);
+      out.push([r[0], r[1], r[2], r[3]]);
+      out.push(L === 5 ? [r[3], r[4], r[0]] : [r[3], r[4], r[5], r[0]]);
+      continue;
+    }
+    const c = PP.length / 3; let cx = 0, cy = 0, cz = 0;
+    for (const v of f) { cx += P[v*3]; cy += P[v*3+1]; cz += P[v*3+2]; }
+    PP.push(cx / L, cy / L, cz / L);
+    for (let k = 0; k < L; k++) out.push([f[k], f[(k + 1) % L], c]);
+  }
+  // merge neighbouring triangles into quads when the quad is reasonable
+  for (let i = out.length - 1; i >= 0; i--) if (new Set(out[i]).size !== out[i].length) out.splice(i, 1);   // degenerate faces
+  const Pm = new Float32Array(PP), triEdge = new Map(), dead = new Set();
+  out.forEach((f, i) => { if (f.length === 3) for (let k = 0; k < 3; k++) { const a = f[k], b = f[(k + 1) % 3], key = a < b ? a * 1e7 + b : b * 1e7 + a; (triEdge.get(key) || triEdge.set(key, []).get(key)).push(i); } });
+  const merged = [];
+  for (const [key, list] of opt.mergeTris === false ? [] : triEdge) {
+    if (list.length !== 2 || dead.has(list[0]) || dead.has(list[1])) continue;
+    const [i, j] = list, A = out[i], B = out[j];
+    const a = Math.floor(key / 1e7), b = key % 1e7;
+    const ka = A.indexOf(a), kb = A.indexOf(b), other = B.find(x => x !== a && x !== b);
+    if (other === undefined || A.includes(other)) continue;
+    // quad in A's winding: insert B's apex between the shared edge's endpoints
+    let quad;
+    if ((kb - ka + 3) % 3 === 1) quad = [A[ka], other, A[kb], A[(kb + 1) % 3]]; else quad = [A[kb], other, A[ka], A[(ka + 1) % 3]];
+    if (quadQuality(Pm, quad) > 0.75) continue;                     // > ~43 deg off a right angle
+    dead.add(i); dead.add(j); merged.push(quad);
+  }
+  let faces = out.filter((_, i) => !dead.has(i)).concat(merged);
+  // overlapping faces: drop duplicates, then keep at most two faces per edge (larger faces first)
+  {
+    const seenF = new Set();
+    faces = faces.filter(f => { const k = [...f].sort((x, y) => x - y).join(','); if (seenF.has(k)) return false; seenF.add(k); return true; });
+    faces.sort((x, y) => y.length - x.length);
+    const use = new Map(), keep = [];
+    for (const f of faces) {
+      const keys = f.map((v, k) => { const w = f[(k + 1) % f.length]; return v < w ? v * 1e7 + w : w * 1e7 + v; });
+      if (keys.some(k => (use.get(k) || 0) >= 2)) continue;
+      for (const k of keys) use.set(k, (use.get(k) || 0) + 1);
+      keep.push(f);
+    }
+    faces = keep;
+    // close small holes: each boundary loop becomes one polygon (later split into quads)
+    const half = new Map();   // directed edge a->b present
+    for (const f of faces) for (let k = 0; k < f.length; k++) half.set(f[k] * 1e7 + f[(k + 1) % f.length], 1);
+    const outB = new Map();   // boundary half-edges b->a (reverse of an unmatched a->b), possibly several per start
+    for (const key of half.keys()) {
+      const a = Math.floor(key / 1e7), b = key % 1e7;
+      if (!half.has(b * 1e7 + a)) (outB.get(b) || outB.set(b, []).get(b)).push(a);
+    }
+    const usedB = new Set();
+    for (const [st, list] of outB) for (const first of list) {
+      if (usedB.has(st * 1e7 + first)) continue;
+      const loop = [st]; let prev = st, v = first, ok = true;
+      const marks = [st * 1e7 + first];
+      usedB.add(st * 1e7 + first);
+      while (v !== st) {
+        if (loop.length > 16) { ok = false; break; }
+        loop.push(v);
+        const nx = (outB.get(v) || []).filter(w => !usedB.has(v * 1e7 + w));
+        if (!nx.length) { ok = false; break; }
+        // at a pinch vertex prefer closing the loop, else the first unused way out
+        const w = nx.includes(st) ? st : nx[0];
+        usedB.add(v * 1e7 + w); marks.push(v * 1e7 + w); prev = v; v = w;
+      }
+      // never fill the open seam of the symmetric half: it is closed by mirroring
+      if (ok && loop.length >= 3 && !(sym && loop.filter(x => onSeam[x]).length >= loop.length * 0.8)) faces.push(loop);
+      else for (const k of marks) usedB.delete(k);   // rejected: leave its edges for the seam pass below
+    }
+    // symmetric half: a hole touching the seam is a boundary path that leaves the seam and comes back;
+    // close it with one polygon (its closing edge lies on the mirror plane and is shared with the mirror copy)
+    if (sym) {
+      for (const [st, list] of outB) {
+        if (!onSeam[st]) continue;
+        for (const first of list) {
+          if (onSeam[first] || usedB.has(st * 1e7 + first)) continue;
+          const path = [st]; let v = first, ok = false;
+          const mark = [st * 1e7 + first];
+          while (path.length <= 16) {
+            path.push(v);
+            if (onSeam[v]) { ok = true; break; }
+            const nx = (outB.get(v) || []).filter(w => !usedB.has(v * 1e7 + w));
+            if (!nx.length) break;
+            mark.push(v * 1e7 + nx[0]); v = nx[0];
+          }
+          if (ok && path.length >= 3) { for (const k of mark) usedB.add(k); faces.push(path); }
+        }
+      }
+    }
+  }
+  // pure quads: every n-gon -> n quads (centre + edge midpoints); shared midpoints keep the mesh closed
+  let Pfinal = Pm, kindF = kind, seamF = onSeam;
+  if (pure) {
+    const mid = new Map(), PX = Array.from(Pm), KX = Array.from({ length: Pm.length / 3 }, (_, v) => v < m ? kind[v] : 0), SX = Array.from({ length: Pm.length / 3 }, (_, v) => v < m ? onSeam[v] : 0);
+    const add = (x, y, z, k, se) => { PX.push(x, y, z); KX.push(k); SX.push(se); return PX.length / 3 - 1; };
+    const midOf = (a, b) => {
+      const key = a < b ? a * 1e7 + b : b * 1e7 + a; let v = mid.get(key);
+      if (v === undefined) { v = add((PX[a*3] + PX[b*3]) / 2, (PX[a*3+1] + PX[b*3+1]) / 2, (PX[a*3+2] + PX[b*3+2]) / 2, 0, SX[a] && SX[b] ? 1 : 0); mid.set(key, v); }
+      return v;
+    };
+    const nf = [];
+    for (const f of faces) {
+      let cx = 0, cy = 0, cz = 0; for (const v of f) { cx += PX[v*3]; cy += PX[v*3+1]; cz += PX[v*3+2]; }
+      const c = add(cx / f.length, cy / f.length, cz / f.length, 0, 0), L = f.length;
+      for (let k = 0; k < L; k++) nf.push([f[k], midOf(f[k], f[(k + 1) % L]), c, midOf(f[(k - 1 + L) % L], f[k])]);
+    }
+    faces = nf; Pfinal = new Float32Array(PX); kindF = KX; seamF = SX;
+  }
+
+  // ---- compact, relax, snap
+  const usedV = new Int32Array(Pfinal.length / 3).fill(-1); let nv = 0;
+  for (const f of faces) for (const v of f) if (usedV[v] < 0) usedV[v] = nv++;
+  let X = new Float32Array(nv * 3); const K = new Uint8Array(nv), SE = new Uint8Array(nv);
+  for (let v = 0; v < usedV.length; v++) if (usedV[v] >= 0) { const t = usedV[v]; X[t*3] = Pfinal[v*3]; X[t*3+1] = Pfinal[v*3+1]; X[t*3+2] = Pfinal[v*3+2]; K[t] = kindF[v] || 0; SE[t] = seamF[v] || 0; }
+  const FF = faces.map(f => f.map(v => usedV[v]));
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(sp, 3)); g.setIndex(new THREE.BufferAttribute(si.slice(), 1));
+  const bvh = new MeshBVH(g), qv = new THREE.Vector3(), hit = { point: new THREE.Vector3(), distance: 0, faceIndex: 0 };
+  const cornerOf = new Map();
+  // classify by distance to features at the final spacing; each corner goes to exactly one vertex (its nearest)
+  const so = pure ? s / 2 : s;
+  if (FI) {
+    for (let v = 0; v < nv; v++) K[v] = FI.closestSeg(get(X, v), so * 0.35) ? 2 : 0;
+    const C = F.corners;
+    for (let c = 0; c < C.length / 3; c++) {
+      let best = -1, bd = so * 0.75;
+      for (let v = 0; v < nv; v++) { const d = Math.hypot(X[v*3] - C[c*3], X[v*3+1] - C[c*3+1], X[v*3+2] - C[c*3+2]); if (d < bd) { bd = d; best = v; } }
+      if (best >= 0) { K[best] = 3; cornerOf.set(best, c); }
+    }
+  } else K.fill(0);
+  const project1 = v => {
+    const p = get(X, v);
+    if (K[v] === 3) { const c = cornerOf.get(v); set3(X, v, [F.corners[c*3], F.corners[c*3+1], F.corners[c*3+2]]); return; }
+    if (K[v] === 2) { const e = FI.closestSeg(p, s); if (e) { set3(X, v, e.point); return; } }
+    qv.set(p[0], p[1], p[2]);
+    if (bvh.closestPointToPoint(qv, hit, 0, s * 2)) set3(X, v, [hit.point.x, hit.point.y, hit.point.z]);
+  };
+  // seam vertices: alternate surface snapping and the mirror plane -> they settle on the cross-section curve
+  const project = v => { if (!SE[v]) { project1(v); return; } for (let k = 0; k < 4; k++) { project1(v); X[v*3] = 0; } };
+  const edgeN = Array.from({ length: nv }, () => new Set());
+  for (const f of FF) for (let k = 0; k < f.length; k++) { const a = f[k], b = f[(k + 1) % f.length]; edgeN[a].add(b); edgeN[b].add(a); }
+  const triOf = FF => { const t = []; for (const f of FF) { if (f.length === 3) t.push(f[0], f[1], f[2]); else { const d02 = dist2(X, f[0], f[2]), d13 = dist2(X, f[1], f[3]); if (d02 <= d13) t.push(f[0], f[1], f[2], f[0], f[2], f[3]); else t.push(f[0], f[1], f[3], f[1], f[2], f[3]); } } return new Uint32Array(t); };
+  for (let v = 0; v < nv; v++) { if (SE[v]) X[v*3] = 0; project(v); }
+  for (let it = 0; it < (opt.smooth ?? 8); it++) {
+    const Nn = vertexNormals(X, triOf(FF)), np = X.slice();
+    for (let v = 0; v < nv; v++) {
+      if (K[v] === 3) continue;                                     // corners stay put
+      // seam / crease vertices only slide along their own line: average just their line neighbours
+      const nb = SE[v] ? [...edgeN[v]].filter(u => SE[u]) : [...edgeN[v]].filter(u => K[v] === 0 || K[u] === K[v] || K[u] === 3);
+      if (!nb.length) continue;
+      let ax = 0, ay = 0, az = 0; for (const u of nb) { ax += X[u*3]; ay += X[u*3+1]; az += X[u*3+2]; }
+      let d = [ax / nb.length - X[v*3], ay / nb.length - X[v*3+1], az / nb.length - X[v*3+2]];
+      if (K[v] === 0 && !SE[v]) d = tangentOf(d, get(Nn, v));
+      np[v*3] += d[0] * 0.5; np[v*3+1] += d[1] * 0.5; np[v*3+2] += d[2] * 0.5;
+    }
+    X.set(np);
+    for (let v = 0; v < nv; v++) project(v);
+  }
+  g.dispose();
+
+  // ---- safety: weld vertices that ended up on the same spot, drop faces that collapsed
+  {
+    const key = v => `${Math.round(X[v*3] * 1e5)},${Math.round(X[v*3+1] * 1e5)},${Math.round(X[v*3+2] * 1e5)}`, rep = new Map(), to = new Int32Array(nv);
+    for (let v = 0; v < nv; v++) { const k = key(v); if (rep.has(k)) to[v] = rep.get(k); else { rep.set(k, v); to[v] = v; } }
+    const kept = [];
+    for (const f of FF) {
+      const g2 = []; for (const v of f) { const t = to[v]; if (g2[g2.length - 1] !== t) g2.push(t); }
+      if (g2.length > 1 && g2[0] === g2[g2.length - 1]) g2.pop();
+      if (g2.length >= 3 && new Set(g2).size === g2.length) kept.push(g2);
+    }
+    FF.length = 0; FF.push(...kept);
+  }
+
+  // ---- mirror the half (symmetric mode)
+  let polysOut = FF, Xo = X;
+  if (sym) {
+    const mirrorOf = new Int32Array(nv), extra = [];
+    let next = nv;
+    for (let v = 0; v < nv; v++) {
+      if (SE[v] || X[v*3] <= 1e-7) { X[v*3] = 0; mirrorOf[v] = v; }
+      else { mirrorOf[v] = next++; extra.push(-X[v*3], X[v*3+1], X[v*3+2]); }
+    }
+    Xo = new Float32Array(next * 3); Xo.set(X); Xo.set(extra, nv * 3);
+    polysOut = FF.concat(FF.map(f => f.map(v => mirrorOf[v]).reverse()));
+  }
+  const tri = (() => { const save = X; X = Xo; const t = triOf(polysOut); X = save; return t; })();
+  const start = new Uint32Array(polysOut.length + 1), pidx = [];
+  polysOut.forEach((f, i) => { for (const v of f) pidx.push(v); start[i + 1] = pidx.length; });
+  let quads = 0, tris = 0, ngons = 0; for (const f of polysOut) { if (f.length === 4) quads++; else if (f.length === 3) tris++; else ngons++; }
+  return { pos: Xo, idx: tri, polys: { start, idx: Uint32Array.from(pidx) }, stats: { quads, tris, ngons, working: n, symmetric: sym, sharpSegments: F.segs.length / 6 } };
+}
