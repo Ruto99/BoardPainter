@@ -7,7 +7,7 @@
 export const EXT = 'bpp';
 const MAGIC = 'BPPROJ';
 const VERSION = 2;   // 2: arbitrary nested arrays (subdivision levels, quads); 1 is still readable
-const TYPES = { Float32Array, Uint32Array, Int32Array };
+const TYPES = { Float32Array, Uint32Array, Int32Array, Uint8Array };
 const ARRAYS = ['pos', 'idx', 'mask', 'mirror'];
 
 async function pipe(bytes, stream) {

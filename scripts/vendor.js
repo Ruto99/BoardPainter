@@ -19,6 +19,8 @@ const FILES = [
   'three/LICENSE',
   'three-mesh-bvh/build/index.module.js',
   'three-mesh-bvh/LICENSE',
+  'meshoptimizer/meshopt_simplifier.js',
+  'meshoptimizer/LICENSE.md',
 ];
 
 fs.rmSync(out, { recursive: true, force: true });

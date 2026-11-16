@@ -152,7 +152,46 @@ function neighbors(nV, idx) {
  */
 export function remesh(src, opt) {
   const G = remeshGrid(src.pos, opt.res);
-  const inside = voxelize(src.pos, src.idx, G);
+  return surfaceFromField(voxelize(src.pos, src.idx, G), G, src, opt, false);
+}
+
+/**
+ * Voxel boolean of two closed meshes: 'union' | 'subtract' (a minus b) | 'intersect'.
+ * Same pipeline as remesh; vertices snap only to source faces that lie on the result's boundary,
+ * which recovers the sharp edges where the two surfaces cross.
+ */
+export function booleanMesh(a, b, op, opt) {
+  const nA = a.pos.length / 3, nB = b.pos.length / 3;
+  const pos = new Float32Array((nA + nB) * 3); pos.set(a.pos); pos.set(b.pos, nA * 3);
+  const idx = new Uint32Array(a.idx.length + b.idx.length); idx.set(a.idx);
+  for (let i = 0; i < b.idx.length; i++) idx[a.idx.length + i] = b.idx[i] + nA;
+  const mask = new Float32Array(nA + nB); if (a.mask) mask.set(a.mask); if (b.mask) mask.set(b.mask, nA);
+  let paint = null;
+  if (a.paint || b.paint) {
+    const base = opt.base || [0.7, 0.55, 0.4], fill = n => { const t = new Float32Array(n * 3); for (let i = 0; i < t.length; i += 3) { t[i] = base[0]; t[i+1] = base[1]; t[i+2] = base[2]; } return t; };
+    paint = new Float32Array(pos.length); paint.set(a.paint || fill(nA)); paint.set(b.paint || fill(nB), nA * 3);
+  }
+  // voxel size from the selected part (a); grid only over the region the result can occupy
+  const bb = p => { const m = [Infinity, Infinity, Infinity], M = [-Infinity, -Infinity, -Infinity]; for (let i = 0; i < p.length; i += 3) for (let k = 0; k < 3; k++) { if (p[i+k] < m[k]) m[k] = p[i+k]; if (p[i+k] > M[k]) M[k] = p[i+k]; } return [m, M]; };
+  const [am, aM] = bb(a.pos), [bm, bM] = bb(b.pos);
+  const h = Math.max(aM[0] - am[0], aM[1] - am[1], aM[2] - am[2], 1e-6) / opt.res;
+  let lo = am, hi = aM;
+  if (op === 'union') { lo = am.map((v, k) => Math.min(v, bm[k])); hi = aM.map((v, k) => Math.max(v, bM[k])); }
+  if (op === 'intersect') { lo = am.map((v, k) => Math.max(v, bm[k])); hi = aM.map((v, k) => Math.min(v, bM[k])); if (lo.some((v, k) => v >= hi[k])) return null; }
+  const pad = 2, o = lo.map(v => v - pad * h), n = lo.map((v, k) => Math.ceil((hi[k] - v) / h) + 2 * pad + 1);
+  const G = { h, o, n, voxels: n[0] * n[1] * n[2] };
+  if (G.voxels > (opt.voxelLimit || 4e7)) return null;
+  const ia = voxelize(a.pos, a.idx, G), ib = voxelize(b.pos, b.idx, G), inside = new Uint8Array(G.voxels);
+  let any = 0;
+  for (let i = 0; i < inside.length; i++) any |= inside[i] = op === 'union' ? ia[i] | ib[i] : op === 'subtract' ? ia[i] & (1 - ib[i]) : ia[i] & ib[i];
+  if (!any) return null;
+  return surfaceFromField(inside, G, { pos, idx, mask, paint }, opt, true);
+}
+
+// Extract the surface of an inside/outside grid and fit it to the source mesh.
+// strict: source faces count as boundary only if exactly one side is inside (booleans);
+//         otherwise only faces buried on both sides are excluded (remesh / fuse keeps thin sheets).
+function surfaceFromField(inside, G, src, opt, strict) {
   const out = surfaceNets(inside, G);
   const nV = out.pos.length / 3;
   if (!nV || !out.idx.length) return null;
@@ -182,7 +221,8 @@ export function remesh(src, opt) {
     let nx = uy*wz - uz*wy, ny = uz*wx - ux*wz, nz = ux*wy - uy*wx; const l = Math.hypot(nx, ny, nz); if (!l) continue;
     nx /= l; ny /= l; nz /= l;
     const cx = (sp[a] + sp[b] + sp[c]) / 3, cy = (sp[a+1] + sp[b+1] + sp[c+1]) / 3, cz = (sp[a+2] + sp[b+2] + sp[c+2]) / 3, d = G.h * 1.5;
-    if (insideAt(cx + nx * d, cy + ny * d, cz + nz * d) && insideAt(cx - nx * d, cy - ny * d, cz - nz * d)) buried[f] = 1;
+    const o = insideAt(cx + nx * d, cy + ny * d, cz + nz * d), i = insideAt(cx - nx * d, cy - ny * d, cz - nz * d);
+    if ((o && i) || (strict && !o && !i)) buried[f] = 1;
   }
   const snap = () => {
     for (let v = 0; v < nV; v++) {
@@ -216,21 +256,24 @@ export function remesh(src, opt) {
   if (opt.project) snap();
   for (let it = 0; it < opt.smooth; it++) { relax(); if (opt.project) snap(); }
 
-  // mask: barycentric from the closest source triangle
-  let mask = new Float32Array(nV);
-  if (src.mask && src.mask.some(m => m > 0)) {
+  // mask / paint: barycentric from the closest non-buried source triangle
+  const mask = new Float32Array(nV), hasMask = src.mask && src.mask.some(m => m > 0), sp = src.paint || null;
+  const paint = sp ? new Float32Array(nV * 3) : null;
+  if (hasMask || sp) {
     const tri = new THREE.Triangle(), bc = new THREE.Vector3(), A = new THREE.Vector3(), B = new THREE.Vector3(), C = new THREE.Vector3();
     for (let v = 0; v < nV; v++) {
       q.set(P[v*3], P[v*3+1], P[v*3+2]);
       if (!bvh.closestPointToPoint(q, hit)) continue;
       const f = hit.faceIndex * 3, ia = sIdx[f], ib = sIdx[f+1], ic = sIdx[f+2];
+      if (!Number.isFinite(f)) continue;
       A.fromArray(src.pos, ia * 3); B.fromArray(src.pos, ib * 3); C.fromArray(src.pos, ic * 3);
       tri.set(A, B, C).getBarycoord(hit.point, bc);
-      mask[v] = Math.min(1, Math.max(0, src.mask[ia] * bc.x + src.mask[ib] * bc.y + src.mask[ic] * bc.z));
+      if (hasMask) mask[v] = Math.min(1, Math.max(0, src.mask[ia] * bc.x + src.mask[ib] * bc.y + src.mask[ic] * bc.z));
+      if (sp) for (let k = 0; k < 3; k++) paint[v*3+k] = sp[ia*3+k] * bc.x + sp[ib*3+k] * bc.y + sp[ic*3+k] * bc.z;
     }
   }
   g.dispose();
-  return { pos: P, idx: out.idx, mask, info: { h: G.h, grid: G.n } };
+  return { pos: P, idx: out.idx, mask, paint, info: { h: G.h, grid: G.n } };
 }
 
 // Quad retopology: about `target` quads, evenly sized, snapped to the source surface.

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' blob: data:; worker-src 'self' blob:">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' blob: data:; worker-src 'self' blob:">
 <title>BoardPainter</title>
 <style>
 /* Layout: 3-column workbench — brush rail / viewport / settings panel, header across the top */
@@ -39,8 +39,8 @@ header{grid-column:1/-1;display:flex;align-items:center;gap:8px;padding:0 12px;b
 .btn.primary small{color:#5a4120}
 #btnPanel{display:none}
 
-nav.tools{grid-row:2;display:flex;flex-direction:column;gap:4px;padding:8px 6px;background:var(--panel);border-right:1px solid var(--line);overflow-y:auto}
-.tool{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;height:46px;border:1px solid transparent;border-radius:8px;background:transparent;cursor:pointer;flex:none}
+nav.tools{grid-row:2;display:flex;flex-direction:column;gap:3px;padding:6px 6px;scrollbar-width:none;background:var(--panel);border-right:1px solid var(--line);overflow-y:auto}
+.tool{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;height:42px;border:1px solid transparent;border-radius:8px;background:transparent;cursor:pointer;flex:none}
 .tool b{font-family:var(--mono);font-size:15px;line-height:1}
 .tool span{font-size:9.5px;color:var(--muted);margin-top:4px;line-height:1}
 .tool i{position:absolute;top:3px;right:5px;font-style:normal;font-size:9px;color:var(--muted);font-family:var(--mono)}
@@ -77,6 +77,11 @@ select.wide{width:100%}
 .chip.gz{display:none}
 .app.gizmo-on .chip.gz{display:inline-block}
 #projInfo{word-break:break-all;margin:0 0 6px}
+.swatches{display:grid;grid-template-columns:repeat(10,1fr);gap:4px;margin:4px 0 8px}
+.swatch{aspect-ratio:1;border-radius:4px;border:1px solid var(--line);cursor:pointer;padding:0}
+.swatch:hover{border-color:#8a8b93}
+input[type=color]{width:64px;height:28px;padding:0 2px;border:1px solid var(--line);border-radius:5px;background:var(--bg);cursor:pointer}
+#uvCv{width:100%;aspect-ratio:1;display:block;border:1px solid var(--line);border-radius:6px;background:#18191c;margin-bottom:6px}
 #lazyLine{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible}
 
 #view{position:relative;overflow:hidden;background:radial-gradient(ellipse at 50% 42%,#3c3d44 0%,#25262b 58%,#1b1c1f 100%)}
@@ -127,7 +132,8 @@ dl.keys dd{margin:0;color:var(--muted)}
   "imports": {
     "three": "./vendor/three/build/three.module.js",
     "three/addons/": "./vendor/three/examples/jsm/",
-    "three-mesh-bvh": "./vendor/three-mesh-bvh/build/index.module.js"
+    "three-mesh-bvh": "./vendor/three-mesh-bvh/build/index.module.js",
+    "meshopt-simplifier": "./vendor/meshoptimizer/meshopt_simplifier.js"
   }
 }
 </script>
@@ -230,6 +236,17 @@ dl.keys dd{margin:0;color:var(--muted)}
       <p class="note">強さ・減衰カーブ・ストローク・アルファはブラシごとに記憶されます。ペンタブレットの筆圧で強さが変わります。</p>
     </section>
 
+    <section id="paintSec">
+      <h2>ポリペイント（色塗り）</h2>
+      <div class="row"><label for="paintColor">塗る色</label><input type="color" id="paintColor" value="#9c4a3c"></div>
+      <div class="swatches" id="swatches" aria-label="色見本"></div>
+      <div class="grid2">
+        <button class="btn" id="paintFill">全体をこの色で塗る</button>
+        <button class="btn" id="paintClear">色をすべて消す</button>
+      </div>
+      <p class="note">ツールバーの「ペイント」ブラシで塗ります（Alt で元の色に戻す）。マスクした所には塗られません。色は細分化レベル・リメッシュ・リトポにも引き継がれ、OBJ（頂点カラー）と GLB に書き出されます。</p>
+    </section>
+
     <section id="alphaSec">
       <h2>アルファ（ブラシの型）</h2>
       <div class="alphas" id="alphaGrid" role="listbox" aria-label="アルファ"></div>
@@ -271,12 +288,49 @@ dl.keys dd{margin:0;color:var(--muted)}
 
     <section>
       <h2>自動リトポ（四角ポリゴン）</h2>
+      <div class="row"><label for="rtMode">並び方</label><select id="rtMode"><option value="flow" selected>形に沿う</option><option value="grid">格子状</option></select></div>
       <div class="row"><label for="rtTarget">目標ポリゴン数</label><input type="number" id="rtTarget" min="100" max="200000" step="100" value="3000"></div>
       <div class="row"><label for="rtSmooth">ならし</label><output id="rtSmoothOut">10</output></div>
       <input type="range" id="rtSmooth" min="0" max="30" step="1" value="10">
-      <div class="row"><input type="checkbox" id="rtSym" checked><label for="rtSym">左右対称（X）</label></div>
+      <div class="row"><input type="checkbox" id="rtSym" checked><label for="rtSym">左右対称（X・格子状のみ）</label></div>
       <button class="btn primary full" id="rtGo">自動リトポ</button>
-      <p class="note">選択中のパーツを、指定した数前後の四角ポリゴンで作り直した新しいサブツールを作ります（元のパーツは非表示で残ります）。四角ポリゴンは OBJ 書き出しでも四角のまま出力されます。ポリゴンは格子状に並び、ZRemesher のような形に沿った流れにはなりません。</p>
+      <p class="note">選択中のパーツを、指定した数前後の四角ポリゴンで作り直した新しいサブツールを作ります（元のパーツは非表示で残ります）。四角ポリゴンは OBJ 書き出しでも四角のまま出力されます。「形に沿う」は面の向きに沿って四角を並べます（一部に三角形が混ざります）。「格子状」は左右対称にでき、確実ですが流れは格子に沿います。</p>
+    </section>
+
+    <section>
+      <h2>ポリゴン削減</h2>
+      <div class="row"><label for="decRatio">残す割合 (%)</label><output id="decRatioOut">25</output></div>
+      <input type="range" id="decRatio" min="2" max="90" step="1" value="25">
+      <p class="note" id="decEstimate"></p>
+      <div class="row"><input type="checkbox" id="decBorder" checked><label for="decBorder">穴のふちを動かさない</label></div>
+      <button class="btn full" id="decGo">ポリゴンを減らす</button>
+      <p class="note">形・色・マスクの境目をできるだけ保ったまま三角形を減らします（ゲームや Web 用の軽量化向け）。</p>
+    </section>
+
+    <section>
+      <h2>ブーリアン（パーツ同士の演算）</h2>
+      <div class="row"><label for="boolOther">相手のパーツ</label><select id="boolOther" style="width:150px"></select></div>
+      <div class="grid3">
+        <button class="btn" id="boolUnion">足す</button>
+        <button class="btn" id="boolSub">くり抜く</button>
+        <button class="btn" id="boolInt">重なりだけ</button>
+      </div>
+      <p class="note">選択中のパーツと相手のパーツを演算した結果で、選択中のパーツを置き換えます（相手は非表示にします）。精度はリメッシュの「細かさ」を使います。</p>
+    </section>
+
+    <section id="texSec">
+      <h2>UV とテクスチャ</h2>
+      <canvas id="uvCv" width="512" height="512" aria-label="UV 配置"></canvas>
+      <p class="note" id="uvInfo">UV はまだありません</p>
+      <div class="row"><label for="uvAngle">分け方（角度）</label><output id="uvAngleOut">45</output></div>
+      <input type="range" id="uvAngle" min="20" max="80" step="1" value="45">
+      <button class="btn full" id="uvGo">UV を自動展開</button>
+      <div class="row" style="margin-top:10px"><label for="bakeSrc">焼き付け元</label><select id="bakeSrc" style="width:150px"></select></div>
+      <div class="row"><label for="bakeSize">テクスチャの大きさ</label><select id="bakeSize"><option value="512">512</option><option value="1024" selected>1024</option><option value="2048">2048</option></select></div>
+      <button class="btn primary full" id="bakeGo">法線マップと色を焼き付け</button>
+      <div class="row"><input type="checkbox" id="texPreview"><label for="texPreview">焼き付けたテクスチャで表示</label></div>
+      <button class="btn full" id="texSave">テクスチャを PNG で保存</button>
+      <p class="note">リトポした軽いパーツで使います：UV を展開 → 「焼き付け元」に元の細かいパーツ（または同じパーツの一番上の細分化レベル）を選んで焼き付け。細部と色がテクスチャになり、GLB にはテクスチャ込み、OBJ には UV 付きで書き出されます。</p>
     </section>
 
     <section>
@@ -334,7 +388,11 @@ import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { mergeVertices, mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { computeBoundsTree, acceleratedRaycast, MeshBVH } from 'three-mesh-bvh';
 import { encodeProject, decodeProject } from './project.js';
-import { remesh, remeshGrid, quadRemesh } from './remesh.js';
+import { remesh, remeshGrid, quadRemesh, booleanMesh } from './remesh.js';
+import { unwrap, drawUV } from './uv.js';
+import { bakeMaps } from './bake.js';
+import { MeshoptSimplifier } from 'meshopt-simplifier';
+import { fieldRetopo } from './fieldretopo.js';
 import { BUILTIN, builtinAlpha, imageToAlpha, sampleAlpha, drawAlpha, alphaRGBA, RES as ALPHA_RES } from './alphas.js';
 
 THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree;
@@ -361,6 +419,7 @@ const BRUSHES = [
   { id:'move',      key:'8', short:'Mv', name:'ムーブ',       desc:'つかんで大きく動かす', alpha:false, sep:true },
   { id:'snake',     key:'0', short:'Sh', name:'引き伸ばし',   desc:'ドラッグした方向へ伸ばす（角・触手）', alpha:false, def:{ strength:0.8 } },
   { id:'mask',      key:'9', short:'Mk', name:'マスク',       desc:'塗った所を保護する', alpha:true, sep:true },
+  { id:'paint',     key:'',  short:'Pt', name:'ペイント',     desc:'色を塗る（Altで元の色に戻す）', alpha:true, def:{ strength:0.7 } },
 ];
 const BRUSH = Object.fromEntries(BRUSHES.map(b => [b.id, b]));
 const canDrag = id => BRUSH[id].alpha && id !== 'layer';
@@ -376,21 +435,23 @@ const FALLOFFS = [
 ];
 const FO = Object.fromEntries(FALLOFFS.map(x => [x.id, x.f]));
 
-const S = { brush:'standard', size:55, spacing:0.22, lazy:0, invert:false, backface:true, sym:true, wire:false, solo:false };
+const BASE_COL = new THREE.Color('#d8c0a2');   // clay color (linear) for unpainted vertices
+const S = { paintHex:'#9c4a3c', paintLin:new THREE.Color('#9c4a3c'), brush:'standard', size:55, spacing:0.22, lazy:0, invert:false, backface:true, sym:true, wire:false, solo:false };
 const BASE_CFG = { strength:0.45, falloff:'smooth', stroke:'dots', alpha:'none', alphaInv:false, follow:false };
 const BS = Object.fromEntries(BRUSHES.map(b => [b.id, { ...BASE_CFG, ...(b.def || {}) }]));
 try {
   const saved = JSON.parse(localStorage.getItem('bp-brushes') || 'null');
   if (saved) {
     for (const id in saved.bs || {}) if (BS[id]) Object.assign(BS[id], saved.bs[id]);
-    for (const k of ['size', 'spacing', 'lazy', 'brush']) if (saved[k] !== undefined) S[k] = saved[k];
+    for (const k of ['size', 'spacing', 'lazy', 'brush', 'paintHex']) if (saved[k] !== undefined) S[k] = saved[k];
+    if (/^#[0-9a-f]{6}$/i.test(S.paintHex)) S.paintLin.set(S.paintHex); else S.paintHex = '#9c4a3c';
   }
 } catch { /* ignore broken prefs */ }
 if (!BRUSH[S.brush]) S.brush = 'standard';
 let prefsT = 0;
 function saveBrushPrefs() {
   clearTimeout(prefsT);
-  prefsT = setTimeout(() => { try { localStorage.setItem('bp-brushes', JSON.stringify({ bs:BS, size:S.size, spacing:S.spacing, lazy:S.lazy, brush:S.brush })); } catch {} }, 300);
+  prefsT = setTimeout(() => { try { localStorage.setItem('bp-brushes', JSON.stringify({ bs:BS, size:S.size, spacing:S.spacing, lazy:S.lazy, brush:S.brush, paintHex:S.paintHex })); } catch {} }, 300);
 }
 
 // alphas: built-in ids, or 'c:<n>' for images the user added
@@ -416,7 +477,7 @@ scene.add(new THREE.HemisphereLight(0xfff3e4, 0x2b2c34, 0.85));
 const keyLight = new THREE.DirectionalLight(0xffffff, 1.9); keyLight.position.set(1.6, 2.2, 1.2); camera.add(keyLight);
 const fillLight = new THREE.DirectionalLight(0xc9d6ff, 0.45); fillLight.position.set(-2.5, -1, 0.5); camera.add(fillLight);
 
-const material = new THREE.MeshStandardMaterial({ color:0xd8c0a2, roughness:0.58, metalness:0.0, vertexColors:true });
+const material = new THREE.MeshStandardMaterial({ color:0xffffff, roughness:0.58, metalness:0.0, vertexColors:true });
 const quadWireMat = new THREE.LineBasicMaterial({ color:0x1b1c1f, transparent:true, opacity:0.55, depthWrite:false });
 const wireMat = new THREE.MeshBasicMaterial({ color:0x1b1c1f, wireframe:true, transparent:true, opacity:0.22, depthWrite:false });
 
@@ -460,9 +521,25 @@ function placeQuad(q, P, N, F, r) {
 // ---------------- mesh state ----------------
 let geo, mesh, wireMesh;
 let pos, nrm, col, idx, nV = 0, nF = 0;
-let vfStart, vfList, vvStart, vvList, faceN, mask, mirror;
+let vfStart, vfList, vvStart, vvList, faceN, mask, mirror, paint = null;
 let selIds, selW, touchMark, touchList, touchN = 0, vMark, faceMark;
 let gpuDirty = false, bvhDirty = false, colorDirty = false;
+
+// polygon faces of a level (quads from grid retopo, mixed polygons from flow retopo), if still valid for its triangles
+function levelPolys(L) {
+  if (!L) return null;
+  if (L.polys && L.polys.start && L.polys.idx) {
+    const { start, idx: pi } = L.polys; let t = 0;
+    for (let f = 0; f + 1 < start.length; f++) t += start[f + 1] - start[f] - 2;
+    if (t * 3 === L.idx.length) return L.polys;
+  }
+  if (L.quads && L.quads.length / 2 === L.idx.length / 3) {
+    const n = L.quads.length / 4, start = new Uint32Array(n + 1);
+    for (let f = 0; f <= n; f++) start[f] = f * 4;
+    return { start, idx: L.quads };
+  }
+  return null;
+}
 
 // ---------------- subtools ----------------
 // Each subtool owns its arrays. The active one is loaded into the sculpting globals above (setMesh);
@@ -470,6 +547,7 @@ let gpuDirty = false, bvhDirty = false, colorDirty = false;
 let subtools = [], active = null, subSeq = 0;
 const viewsAlive = new Set();
 const viewMat = new THREE.MeshStandardMaterial({ color:0xb7a790, roughness:0.62, metalness:0.0 });
+const viewMatPaint = new THREE.MeshStandardMaterial({ color:0xd6d6d6, roughness:0.62, metalness:0.0, vertexColors:true });
 
 function newRec(name, p, ix, m, mir) {
   const mirror = mir || computeMirror(p);
@@ -478,23 +556,36 @@ function newRec(name, p, ix, m, mir) {
 // plain data for saving (project file / autosave), including subdivision levels
 function recData(r) {
   return {
-    name: r.name, visible: r.visible, pos: r.pos, idx: r.idx, mask: r.mask, mirror: r.mirror, lv: r.lv,
+    name: r.name, visible: r.visible, pos: r.pos, idx: r.idx, mask: r.mask, mirror: r.mirror, paint: r.paint || null, lv: r.lv,
     levels: r.levels.map((L, k) => k === r.lv
-      ? { current: true, ev: L.ev || null, quads: L.quads || null, ref0: L.ref0 || null }
-      : { idx: L.idx, ev: L.ev || null, pos: k < r.lv ? L.pos : null, det: k > r.lv ? L.det : null, quads: L.quads || null, ref0: k < r.lv ? L.ref0 || null : null }),
+      ? { current: true, ev: L.ev || null, quads: L.quads || null, ref0: L.ref0 || null, ...texData(L), ...polyData(L) }
+      : { idx: L.idx, ev: L.ev || null, pos: k < r.lv ? L.pos : null, det: k > r.lv ? L.det : null, quads: L.quads || null, ref0: k < r.lv ? L.ref0 || null : null, ...texData(L), ...polyData(L) }),
   };
+}
+// uv + baked textures (PNG bytes) stored on a level
+const polyData = L => L.polys ? { polys: { start: L.polys.start, idx: L.polys.idx } } : {};
+const texData = L => L.uv ? { uvIdx: L.uvIdx, uv: L.uv, bake: L.bake ? { size: L.bake.size, normalPng: L.bake.normalPng, colorPng: L.bake.colorPng || null } : null } : {};
+function texFromData(L, d, ix) {
+  if (!(d.uv instanceof Float32Array) || !(d.uvIdx instanceof Uint32Array) || d.uvIdx.length !== ix.length || d.uv.length !== ix.length * 2) return;
+  L.uvIdx = d.uvIdx; L.uv = d.uv;
+  const b = d.bake;
+  if (b && b.normalPng instanceof Uint8Array) L.bake = { size: b.size | 0, normalPng: b.normalPng, colorPng: b.colorPng instanceof Uint8Array ? b.colorPng : null };
 }
 function recFromData(s) {
   const r = newRec(s.name, s.pos, s.idx, s.mask, s.mirror && s.mirror.length === s.pos.length / 3 ? s.mirror : null);
   r.visible = s.visible !== false;
+  r.paint = s.paint instanceof Float32Array && s.paint.length === s.pos.length ? s.paint : null;
   const Ls = Array.isArray(s.levels) ? s.levels : null, lv = s.lv | 0;
   const okQuads = (q, ix) => q && q.length / 2 === ix.length / 3 ? q : undefined;
   if (Ls && Ls.length > 1 && lv >= 0 && lv < Ls.length && Ls[lv] && Ls[lv].current) {
     let n = 0, ok = true;
     const levels = Ls.map((L, k) => {
       const ref0 = L.ref0 || undefined;
-      if (k === lv) return { idx: s.idx, pos: s.pos, mirror: r.mirror, ev: L.ev || undefined, quads: okQuads(L.quads, s.idx), ref0 };
-      return { idx: L.idx, ev: L.ev || undefined, pos: L.pos || null, det: L.det || null, quads: L.quads ? okQuads(L.quads, L.idx) : undefined, ref0 };
+      const o = k === lv ? { idx: s.idx, pos: s.pos, mirror: r.mirror, ev: L.ev || undefined, quads: okQuads(L.quads, s.idx), ref0 }
+                         : { idx: L.idx, ev: L.ev || undefined, pos: L.pos || null, det: L.det || null, quads: L.quads ? okQuads(L.quads, L.idx) : undefined, ref0 };
+      if (o.idx) texFromData(o, L, o.idx);
+      if (L.polys && L.polys.start instanceof Uint32Array && L.polys.idx instanceof Uint32Array) o.polys = L.polys;
+      return o;
     });
     // sanity: each level's vertex count = lower count + its edge count; positions/details where expected
     for (let k = 0; k < levels.length && ok; k++) {
@@ -506,7 +597,11 @@ function recFromData(s) {
       n = cnt;
     }
     if (ok) { r.levels = levels; r.lv = lv; }
-  } else if (Ls && Ls[0] && Ls[0].quads) r.levels[0].quads = okQuads(Ls[0].quads, s.idx);
+  } else if (Ls && Ls[0]) {
+    if (Ls[0].quads) r.levels[0].quads = okQuads(Ls[0].quads, s.idx);
+    if (Ls[0].polys && Ls[0].polys.start instanceof Uint32Array && Ls[0].polys.idx instanceof Uint32Array) r.levels[0].polys = Ls[0].polys;
+    texFromData(r.levels[0], Ls[0], s.idx);
+  }
   return r;
 }
 function computeNormals(p, ix) {
@@ -526,8 +621,10 @@ function ensureView(rec) {
   g.setAttribute('position', new THREE.BufferAttribute(rec.pos, 3));
   g.setAttribute('normal', new THREE.BufferAttribute(computeNormals(rec.pos, rec.idx), 3));
   g.setIndex(new THREE.BufferAttribute(rec.idx, 1));
+  const painted = rec.paint && rec.paint.length === rec.pos.length;
+  if (painted) g.setAttribute('color', new THREE.BufferAttribute(rec.paint, 3));
   g.computeBoundsTree(); g.computeBoundingSphere();
-  rec.view = new THREE.Mesh(g, viewMat);
+  rec.view = new THREE.Mesh(g, painted ? viewMatPaint : viewMat);
   rec.view.userData.rec = rec; rec.view.frustumCulled = false;
   viewsAlive.add(rec);
   return rec.view;
@@ -556,12 +653,12 @@ function activate(rec, force = false) {
   flushNormals();
   dropView(rec);
   active = rec;
-  setMesh(rec.pos, rec.idx, rec.mask, rec.mirror);
+  setMesh(rec.pos, rec.idx, rec.mask, rec.mirror, rec.paint);
   syncScene();
   if (gizmoOn) attachGizmo();
 }
 
-function setMesh(p, ix, m, mir) {
+function setMesh(p, ix, m, mir, pt) {
   if (mesh) { scene.remove(mesh); scene.remove(wireMesh); if (wireMesh.geometry !== geo) wireMesh.geometry.dispose(); geo.disposeBoundsTree?.(); geo.dispose(); }
   nV = p.length / 3; nF = ix.length / 3;
   geo = new THREE.BufferGeometry();
@@ -573,6 +670,7 @@ function setMesh(p, ix, m, mir) {
   geo.computeBoundsTree();              // may reorder the index; build adjacency afterwards
   pos = p; idx = geo.index.array;
   mask = m || new Float32Array(nV);
+  paint = pt && pt.length === p.length ? pt : null;
   mirror = mir || computeMirror(pos);
   selIds = new Uint32Array(nV); selW = new Float32Array(nV);
   touchMark = new Uint8Array(nV); touchList = new Uint32Array(nV); touchN = 0;
@@ -582,12 +680,12 @@ function setMesh(p, ix, m, mir) {
   for (let v = 0; v < nV; v++) setColor(v);
   geo.computeBoundingBox(); geo.computeBoundingSphere();
   mesh = new THREE.Mesh(geo, material); mesh.frustumCulled = false;
-  const quads = active && active.levels[active.lv].quads;
-  if (quads && quads.length / 2 === ix.length / 3) {
-    // show the real quad edges instead of the triangle diagonals
-    const seen = new Set(), e = [];
-    for (let q = 0; q < quads.length; q += 4) for (let k = 0; k < 4; k++) {
-      const a = quads[q+k], b = quads[q+(k+1)%4], key = a < b ? a * nV + b : b * nV + a;
+  const PL = active && levelPolys({ ...active.levels[active.lv], idx: ix });
+  if (PL) {
+    // show the real polygon edges instead of the triangle diagonals
+    const seen = new Set(), e = [], { start: ps, idx: pi } = PL;
+    for (let f = 0; f + 1 < ps.length; f++) for (let k = ps[f]; k < ps[f + 1]; k++) {
+      const a = pi[k], b = pi[k + 1 < ps[f + 1] ? k + 1 : ps[f]], key = a < b ? a * nV + b : b * nV + a;
       if (!seen.has(key)) { seen.add(key); e.push(a, b); }
     }
     const lg = new THREE.BufferGeometry(); lg.setAttribute('position', geo.attributes.position); lg.setIndex(e);
@@ -597,10 +695,11 @@ function setMesh(p, ix, m, mir) {
   mesh.matrixAutoUpdate = wireMesh.matrixAutoUpdate = false;
   scene.add(mesh, wireMesh);
   if (active) {
-    active.pos = pos; active.idx = idx; active.mask = mask; active.mirror = mirror;
+    active.pos = pos; active.idx = idx; active.mask = mask; active.mirror = mirror; active.paint = paint;
     const L = active.levels[active.lv]; L.pos = pos; L.idx = idx; L.mirror = mirror;
   }
-  updateStats(); updateRemeshEstimate();
+  updateStats(); updateRemeshEstimate(); updateDecEstimate();
+  if (previewMesh) { $('texPreview').checked = false; setTexPreview(false); }
 }
 
 function buildAdjacency() {
@@ -646,8 +745,11 @@ function computeAllNormals() {
 }
 function setColor(v) {
   const m = mask[v], i = v * 3;
-  col[i] = 1 - 0.72 * m; col[i+1] = 1 - 0.62 * m; col[i+2] = 1 - 0.42 * m;
+  const r = paint ? paint[i] : BASE_COL.r, g = paint ? paint[i+1] : BASE_COL.g, b = paint ? paint[i+2] : BASE_COL.b;
+  col[i] = r * (1 - 0.72 * m); col[i+1] = g * (1 - 0.62 * m); col[i+2] = b * (1 - 0.42 * m);
 }
+function basePaint(n) { const a = new Float32Array(n * 3); for (let i = 0; i < a.length; i += 3) { a[i] = BASE_COL.r; a[i+1] = BASE_COL.g; a[i+2] = BASE_COL.b; } return a; }
+function ensurePaint() { if (!paint) { paint = active.paint = basePaint(nV); } return paint; }
 function touch(v) { if (!touchMark[v]) { touchMark[v] = 1; touchList[touchN++] = v; } }
 
 const faceTmp = [], vertTmp = [];
@@ -738,15 +840,18 @@ function dropDegenerate(ix) {
 //          { kind:'struct', list, active } for adding/removing/reordering subtools,
 //          { kind:'all', items:[[rec, pos]] } for operations that move every subtool
 const undoStack = [], redoStack = [];
-function snapshot(full) { return { rec: active, lvl: active.lv, pos: pos.slice(), mask: mask.slice(), idx: full ? idx.slice() : null, mirror: full ? mirror.slice() : null }; }
+function snapshot(full) { return { rec: active, lvl: active.lv, pos: pos.slice(), mask: mask.slice(), paint: paint ? paint.slice() : null, idx: full ? idx.slice() : null, mirror: full ? mirror.slice() : null }; }
 const structSnap = () => ({ kind:'struct', list: subtools.slice(), active });
 const allSnap = () => ({ kind:'all', items: subtools.map(r => [r, r.pos.slice()]) });
 function pushEntry(e) { undoStack.push(e); if (undoStack.length > 40) undoStack.shift(); redoStack.length = 0; updateUndoButtons(); }
 function pushUndo(full = false) { pushEntry(snapshot(full)); }
 function pushStruct() { pushEntry(structSnap()); }
 function restore(e) {
-  if (e.idx) setMesh(e.pos, e.idx, e.mask, e.mirror);
-  else { pos.set(e.pos); mask.set(e.mask); for (let v = 0; v < nV; v++) setColor(v); colorDirty = true; computeAllNormals(); geo.computeBoundingSphere(); updateStats(); }
+  if (e.idx) setMesh(e.pos, e.idx, e.mask, e.mirror, e.paint);
+  else {
+    pos.set(e.pos); mask.set(e.mask);
+    paint = active.paint = e.paint ? (paint && paint.length === e.paint.length ? (paint.set(e.paint), paint) : e.paint.slice()) : null;
+    for (let v = 0; v < nV; v++) setColor(v); colorDirty = true; computeAllNormals(); geo.computeBoundingSphere(); updateStats(); }
 }
 function restoreStruct(e) { subtools = e.list.slice(); activate(e.active, true); }
 function restoreAll(e) {
@@ -816,6 +921,18 @@ function applyDab(P, N0, r, s, dir, brush, F) {
   if (nl < 1e-8) { nx = N0.x; ny = N0.y; nz = N0.z; } else { nx /= nl; ny /= nl; nz /= nl; }
   cx /= ws; cy /= ws; cz /= ws;
 
+  if (brush === 'paint') {
+    const pt = ensurePaint(), c = dir > 0 ? S.paintLin : BASE_COL;
+    for (let k = 0; k < n; k++) {
+      const v = selIds[k], w = Math.min(1, selW[k] * (1 - mask[v]) * Math.min(1, s * 1.3)), i = v * 3;
+      if (w <= 0) continue;
+      pt[i] += (c.r - pt[i]) * w; pt[i+1] += (c.g - pt[i+1]) * w; pt[i+2] += (c.b - pt[i+2]) * w;
+      setColor(v);
+      if (rec) rec.push(v);
+    }
+    colorDirty = gpuDirty = true;
+    return;
+  }
   if (brush === 'mask') {
     for (let k = 0; k < n; k++) {
       const v = selIds[k];
@@ -968,6 +1085,7 @@ function dabSym(P, N, r, ref, reps = 1) {
 
 function onDown(e) {
   if (e.button !== 0 || !mesh || gizmoOn) return;
+  if (previewMesh) { $('texPreview').checked = false; setTexPreview(false); }
   setNDC(e);
   const hit = pick();
   if (!hit) return;                       // background: let OrbitControls rotate
@@ -982,7 +1100,7 @@ function onDown(e) {
   const P = hit.point.clone(), N = hitNormal(hit), r = worldRadius(P);
   if (brush === 'move') startMove(P, N, r);
   else if (brush === 'snake') stroke.sn = { P, N };
-  else if (cfg.stroke === 'drag' && canDrag(brush)) stroke.drag = { P, N, x0:e.clientX, y0:e.clientY, start:top.pos, startMask:top.mask, rec:[] };
+  else if (cfg.stroke === 'drag' && canDrag(brush)) stroke.drag = { P, N, x0:e.clientX, y0:e.clientY, start:top.pos, startMask:top.mask, startPaint:top.paint, rec:[] };
   else {
     if (brush === 'layer') stroke.layer = { acc:new Float32Array(nV), start:top.pos, sn:nrm.slice(), h:r * 0.12 };
     stroke.last = P.clone(); dabSym(P, N, r); flushNormals();
@@ -1009,7 +1127,9 @@ function dragStamp(e) {
   const D = stroke.drag, dx = e.clientX - D.x0, dy = e.clientY - D.y0, px = Math.hypot(dx, dy);
   for (const v of D.rec) {
     const i = v * 3; pos[i] = D.start[i]; pos[i+1] = D.start[i+1]; pos[i+2] = D.start[i+2];
-    if (mask[v] !== D.startMask[v]) { mask[v] = D.startMask[v]; setColor(v); colorDirty = true; }
+    mask[v] = D.startMask[v];
+    if (paint) { const sp = D.startPaint; paint[i] = sp ? sp[i] : BASE_COL.r; paint[i+1] = sp ? sp[i+1] : BASE_COL.g; paint[i+2] = sp ? sp[i+2] : BASE_COL.b; }
+    setColor(v); colorDirty = true;
     touch(v);
   }
   D.rec.length = 0; gpuDirty = true;
@@ -1126,7 +1246,7 @@ function updateCursor(hit) {
   if (!hit) { ring.visible = ring2.visible = false; return; }
   const P = hit.point, N = hitNormal(hit), r = worldRadius(P);
   const b = stroke ? stroke.brush : (held.shift ? 'smooth' : held.ctrl ? 'mask' : S.brush);
-  ringMat.color.set(b === 'mask' ? 0x9fc0f0 : b === 'smooth' ? 0xe8e4dc : 0xffd49a);
+  ringMat.color.set(b === 'mask' ? 0x9fc0f0 : b === 'smooth' ? 0xe8e4dc : b === 'paint' ? S.paintHex : 0xffd49a);
   ring2.material.color.copy(ringMat.color);
   ring.position.copy(P).addScaledVector(N, r * 0.02); ring.quaternion.setFromUnitVectors(ZAX, N); ring.scale.setScalar(r); ring.visible = true;
   if (S.sym) {
@@ -1142,7 +1262,7 @@ function updateCursor(hit) {
     if (S.sym) placeQuad(quad2, new V3(-P.x, P.y, P.z), new V3(-N.x, N.y, N.z), mirrorFrame(F), r);
   }
 }
-function quadMat(b) { const c = b === 'mask' ? 0x9fc0f0 : 0xffd49a; quad.material.color.set(c); quad2.material.color.set(c); }
+function quadMat(b) { const c = b === 'mask' ? 0x9fc0f0 : b === 'paint' ? S.paintHex : 0xffd49a; quad.material.color.set(c); quad2.material.color.set(c); }
 
 // ---------------- one-click operations ----------------
 function busy(fn) {
@@ -1235,6 +1355,7 @@ function addShape() {
 function duplicateSub() {
   flushNormals(); pushStruct();
   const r = newRec(uniqueName(active.name + ' コピー'), pos.slice(), idx.slice(), mask.slice(), mirror.slice());
+  r.paint = paint ? paint.slice() : null;
   insertAfterActive(r); activate(r); scheduleSave(); toast(`「${r.name}」を作りました`);
 }
 function deleteSub() {
@@ -1260,6 +1381,7 @@ function mergeDown() {
     ix.set(idx); for (let k = 0; k < b.idx.length; k++) ix[idx.length + k] = b.idx[k] + nA;
     pushStruct();
     const r = newRec(active.name, p, ix, m);
+    if (paint || b.paint) { r.paint = new Float32Array(p.length); r.paint.set(paint || basePaint(nA)); r.paint.set(b.paint || basePaint(b.pos.length / 3), nA * 3); }
     subtools.splice(i, 2, r); activate(r); scheduleSave();
     toast(`「${b.name}」を結合しました`);
   });
@@ -1271,7 +1393,9 @@ function extractFaces(keep, want) {
   const p = new Float32Array(vn * 3), ix = new Uint32Array(fn * 3);
   for (let v = 0; v < nV; v++) { const t = map[v]; if (t >= 0) { p[t*3] = pos[v*3]; p[t*3+1] = pos[v*3+1]; p[t*3+2] = pos[v*3+2]; } }
   for (let f = 0, o = 0; f < nF; f++) if (keep[f] === want) for (let k = 0; k < 3; k++) ix[o++] = map[idx[f*3+k]];
-  return { p, ix };
+  let pt = null;
+  if (paint) { pt = new Float32Array(vn * 3); for (let v = 0; v < nV; v++) { const t = map[v]; if (t >= 0) { pt[t*3] = paint[v*3]; pt[t*3+1] = paint[v*3+1]; pt[t*3+2] = paint[v*3+2]; } } }
+  return { p, ix, pt };
 }
 function splitMasked() {
   const keep = new Uint8Array(nF); let n = 0;
@@ -1283,6 +1407,7 @@ function splitMasked() {
     const a = extractFaces(keep, 1), b = extractFaces(keep, 0);
     pushStruct();
     const rest = newRec(active.name, b.p, b.ix), part = newRec(uniqueName(active.name + ' 分離'), a.p, a.ix);
+    rest.paint = b.pt; part.paint = a.pt;
     subtools.splice(subtools.indexOf(active), 1, rest, part);
     activate(part); scheduleSave();
     toast(`マスク部分を「${part.name}」に分離しました`);
@@ -1365,10 +1490,11 @@ function remeshActive() {
   return busy(() => {
     flushNormals();
     const t0 = performance.now(), before = nF;
-    const r = runRemesh({ pos, idx, mask });
+    const r = runRemesh({ pos, idx, mask, paint });
     if (!r) return;
     pushStruct();
     const old = active, rec = newRec(old.name, r.pos, r.idx, r.mask);
+    rec.paint = r.paint;
     rec.visible = old.visible;
     subtools.splice(subtools.indexOf(old), 1, rec);
     activate(rec); scheduleSave();
@@ -1384,16 +1510,19 @@ function remeshFuse() {
     let nv = 0, nf = 0;
     for (const r of recs) { nv += r.pos.length / 3; nf += r.idx.length; }
     const p = new Float32Array(nv * 3), ix = new Uint32Array(nf), m = new Float32Array(nv);
+    const anyPaint = recs.some(r => r.paint), pt = anyPaint ? new Float32Array(nv * 3) : null;
     let ov = 0, of = 0;
     for (const r of recs) {
       p.set(r.pos, ov * 3); m.set(r.mask, ov);
+      if (pt) pt.set(r.paint || basePaint(r.pos.length / 3), ov * 3);
       for (let k = 0; k < r.idx.length; k++) ix[of + k] = r.idx[k] + ov;
       ov += r.pos.length / 3; of += r.idx.length;
     }
-    const t0 = performance.now(), res = runRemesh({ pos: p, idx: ix, mask: m });
+    const t0 = performance.now(), res = runRemesh({ pos: p, idx: ix, mask: m, paint: pt });
     if (!res) return;
     pushStruct();
     const rec = newRec(uniqueName(recs[0].name + ' 合体'), res.pos, res.idx, res.mask);
+    rec.paint = res.paint;
     const at = subtools.indexOf(recs[0]);
     subtools = subtools.filter(r => !recs.includes(r));
     subtools.splice(Math.min(at, subtools.length), 0, rec);
@@ -1496,12 +1625,15 @@ function decodeDetails(S, det, L) {
   }
   return P;
 }
-function upMask(m, hi) {
-  const n = m.length, ev = hi.ev, out = new Float32Array(n + ev.length / 4);
-  out.set(m);
-  for (let e = 0; e < ev.length / 4; e++) out[n + e] = (m[ev[e*4]] + m[ev[e*4+1]]) / 2;
+// per-vertex attribute (c components) onto the next level: edge vertices take the average of their edge
+function upAttr(a, hi, c) {
+  if (!a) return null;
+  const n = a.length / c, ev = hi.ev, nE = ev.length / 4, out = new Float32Array((n + nE) * c);
+  out.set(a);
+  for (let e = 0; e < nE; e++) { const x = ev[e*4] * c, y = ev[e*4+1] * c, o = (n + e) * c; for (let k = 0; k < c; k++) out[o + k] = (a[x + k] + a[y + k]) / 2; }
   return out;
 }
+const upMask = (m, hi) => upAttr(m, hi, 1);
 const levelInfo = (r = active) => ({ lv: r.lv, count: r.levels.length });
 
 // Move the active subtool to level `target` (lossless for the top level's shape)
@@ -1510,7 +1642,7 @@ function setLevel(target, quiet = false) {
   target = Math.max(0, Math.min(L.length - 1, target));
   if (target === rec.lv || stroke) return false;
   flushNormals();
-  let m = mask;
+  let m = mask, pt = paint;
   while (rec.lv > target) {
     const hi = L[rec.lv], lo = L[rec.lv - 1], nLo = lo.pos.length / 3;
     // carry the edits made at this level since it was entered (P - ref0) down to the matching lower
@@ -1518,18 +1650,18 @@ function setLevel(target, quiet = false) {
     const P = hi.pos, nl = lo.pos.slice(), R = hi.ref0 && hi.ref0.length === P.length ? hi.ref0 : subdivPositions(lo.pos, lo, hi);
     for (let i = 0; i < nLo * 3; i++) nl[i] += P[i] - R[i];
     hi.det = encodeDetails(P, subdivPositions(nl, lo, hi), hi); hi.pos = null; hi.ref0 = null;
-    lo.pos = nl; m = m.slice(0, nLo);
+    lo.pos = nl; m = m.slice(0, nLo); pt = pt ? pt.slice(0, nLo * 3) : null;
     rec.lv--;
   }
   while (rec.lv < target) {
     const lo = L[rec.lv], hi = L[rec.lv + 1];
     hi.pos = decodeDetails(subdivPositions(lo.pos, lo, hi), hi.det, hi); hi.det = null;
     hi.ref0 = hi.pos.slice();
-    m = upMask(m, hi);
+    m = upMask(m, hi); pt = upAttr(pt, hi, 3);
     rec.lv++;
   }
   const cur = L[rec.lv];
-  setMesh(cur.pos, cur.idx, m, cur.mirror && cur.mirror.length === cur.pos.length / 3 ? cur.mirror : null);
+  setMesh(cur.pos, cur.idx, m, cur.mirror && cur.mirror.length === cur.pos.length / 3 ? cur.mirror : null, pt);
   syncScene(); if (gizmoOn) attachGizmo();
   if (!quiet) toast(`レベル ${rec.lv + 1} / ${L.length}（${nF.toLocaleString()} ポリゴン）`);
   return true;
@@ -1546,7 +1678,7 @@ function restoreLv(e) {
   if (want !== cur) { // current arrays belong to an object that the snapshot doesn't have (delete-lower): adopt them
     want.pos = cur.pos; want.idx = cur.idx; want.mirror = cur.mirror; want.det = null; if (!want.ref0 && cur.ref0) want.ref0 = cur.ref0;
   }
-  setMesh(want.pos, want.idx, mask, want.mirror);
+  setMesh(want.pos, want.idx, mask, want.mirror, paint);
   syncScene(); if (gizmoOn) attachGizmo();
 }
 function addLevel() {
@@ -1558,9 +1690,9 @@ function addLevel() {
   const lo = active.levels[active.lv];
   const topo = loopTopology(idx, nV), hi = { idx: topo.idx, ev: topo.ev };
   hi.pos = subdivPositions(pos, lo, hi); hi.ref0 = hi.pos.slice();
-  const m = upMask(mask, hi);
+  const m = upMask(mask, hi), pt = upAttr(paint, hi, 3);
   active.levels.push(hi); active.lv++;
-  setMesh(hi.pos, hi.idx, m);
+  setMesh(hi.pos, hi.idx, m, undefined, pt);
   syncScene(); if (gizmoOn) attachGizmo(); scheduleSave();
   toast(`細分化しました（レベル ${active.lv + 1} / ${active.levels.length}・${nF.toLocaleString()} ポリゴン）`);
 }
@@ -1574,7 +1706,7 @@ function deleteLower() {
   if (active.lv === 0) { toast('下のレベルはありません'); return; }
   pushEntry(lvSnap());
   const cur = active.levels[active.lv];
-  active.levels = [{ idx: cur.idx, pos: cur.pos, mirror: cur.mirror, quads: cur.quads }, ...active.levels.slice(active.lv + 1)];
+  active.levels = [{ idx: cur.idx, pos: cur.pos, mirror: cur.mirror, quads: cur.quads, polys: cur.polys, uvIdx: cur.uvIdx, uv: cur.uv, bake: cur.bake }, ...active.levels.slice(active.lv + 1)];
   active.lv = 0;
   syncScene(); scheduleSave(); toast('下のレベルを削除しました（今のレベルが一番下になりました）');
 }
@@ -1607,27 +1739,219 @@ function projectFrom(src) {
       touch(v); moved++;
     }
     g.dispose();
-    flushNormals(); geo.computeBoundingSphere(); scheduleSave();
+    flushNormals(); geo.computeBoundingSphere();
+    if (src.paint) { paint = active.paint = transferPaint(src, pos); for (let v = 0; v < nV; v++) setColor(v); colorDirty = gpuDirty = true; }
+    scheduleSave();
     toast(`「${src.name}」から形を投影しました（${moved.toLocaleString()} 頂点）`);
   });
 }
 
+// color from the closest point of another subtool's surface (barycentric)
+function transferPaint(src, dstPos) {
+  if (!src.paint) return null;
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(src.pos, 3));
+  g.setIndex(new THREE.BufferAttribute(src.idx.slice(), 1));
+  const bvh = new MeshBVH(g), ix = g.index.array, sp = src.paint;
+  const out = new Float32Array(dstPos.length), q = new V3(), hit = { point: new V3(), distance: 0, faceIndex: 0 };
+  const tri = new THREE.Triangle(), bc = new V3(), A = new V3(), B = new V3(), C = new V3();
+  for (let v = 0; v < dstPos.length; v += 3) {
+    q.fromArray(dstPos, v);
+    if (!bvh.closestPointToPoint(q, hit)) { out[v] = BASE_COL.r; out[v+1] = BASE_COL.g; out[v+2] = BASE_COL.b; continue; }
+    const f = hit.faceIndex * 3, a = ix[f], b = ix[f+1], c = ix[f+2];
+    tri.set(A.fromArray(src.pos, a*3), B.fromArray(src.pos, b*3), C.fromArray(src.pos, c*3)).getBarycoord(hit.point, bc);
+    for (let k = 0; k < 3; k++) out[v+k] = sp[a*3+k] * bc.x + sp[b*3+k] * bc.y + sp[c*3+k] * bc.z;
+  }
+  g.dispose();
+  return out;
+}
+
+// ---------------- polygon reduction (meshoptimizer) ----------------
+function updateDecEstimate() {
+  const r = +$('decRatio').value / 100;
+  $('decRatioOut').textContent = $('decRatio').value;
+  if (nF) $('decEstimate').textContent = `約 ${Math.max(4, Math.round(nF * r)).toLocaleString()} ポリゴンにします（現在 ${nF.toLocaleString()}）`;
+}
+async function decimate() {
+  if (stroke || gizmo.dragging) return;
+  await MeshoptSimplifier.ready;
+  return busy(() => {
+    flushNormals();
+    const t0 = performance.now(), ratio = +$('decRatio').value / 100;
+    const target = Math.max(12, Math.floor(nF * ratio)) * 3;
+    // attributes the simplifier tries to preserve: color (rgb) and mask
+    const att = new Float32Array(nV * 4);
+    for (let v = 0; v < nV; v++) {
+      att[v*4] = paint ? paint[v*3] : BASE_COL.r; att[v*4+1] = paint ? paint[v*3+1] : BASE_COL.g; att[v*4+2] = paint ? paint[v*3+2] : BASE_COL.b; att[v*4+3] = mask[v];
+    }
+    const [ni] = MeshoptSimplifier.simplifyWithAttributes(idx.slice(), pos, 3, att, 4, [0.6, 0.6, 0.6, 1], null, target, 1, $('decBorder').checked ? ['LockBorder'] : []);
+    if (!ni.length) { toast('減らせませんでした'); return; }
+    const map = new Int32Array(nV).fill(-1); let vn = 0;
+    for (let i = 0; i < ni.length; i++) if (map[ni[i]] < 0) map[ni[i]] = vn++;
+    const p = new Float32Array(vn * 3), m = new Float32Array(vn), pt = paint ? new Float32Array(vn * 3) : null, ix = new Uint32Array(ni.length);
+    for (let v = 0; v < nV; v++) { const t = map[v]; if (t < 0) continue; p[t*3] = pos[v*3]; p[t*3+1] = pos[v*3+1]; p[t*3+2] = pos[v*3+2]; m[t] = mask[v]; if (pt) { pt[t*3] = paint[v*3]; pt[t*3+1] = paint[v*3+1]; pt[t*3+2] = paint[v*3+2]; } }
+    for (let i = 0; i < ni.length; i++) ix[i] = map[ni[i]];
+    const before = nF;
+    pushStruct();
+    const old = active, rec = newRec(old.name, p, ix, m);
+    rec.paint = pt; rec.visible = old.visible;
+    subtools.splice(subtools.indexOf(old), 1, rec);
+    activate(rec); scheduleSave();
+    toast(`ポリゴンを減らしました（${before.toLocaleString()} → ${nF.toLocaleString()}・${((performance.now() - t0) / 1000).toFixed(1)}秒）`);
+  });
+}
+
+// ---------------- booleans ----------------
+function runBoolean(op) {
+  if (stroke || gizmo.dragging) return;
+  const other = subtools.find(r => String(r.id) === $('boolOther').value);
+  if (!other || other === active) { toast('相手のパーツを選んでください'); return; }
+  return busy(() => {
+    flushNormals();
+    const t0 = performance.now();
+    const r = booleanMesh({ pos, idx, mask, paint }, { pos: other.pos, idx: other.idx, mask: other.mask, paint: other.paint },
+      op, { ...remeshOpts(), base: [BASE_COL.r, BASE_COL.g, BASE_COL.b], voxelLimit: VOXEL_LIMIT });
+    if (!r) { toast(op === 'intersect' ? '重なっている部分がありません' : '演算できませんでした（細かさを下げてください）'); return; }
+    pushStruct();
+    const old = active, rec = newRec(old.name, r.pos, r.idx, r.mask);
+    rec.paint = r.paint; rec.visible = old.visible;
+    subtools.splice(subtools.indexOf(old), 1, rec);
+    other.visible = false;
+    activate(rec, true); scheduleSave();
+    const label = { union: '足しました', subtract: 'くり抜きました', intersect: '重なりだけ残しました' }[op];
+    toast(`「${other.name}」を${label}（${nF.toLocaleString()} ポリゴン・${((performance.now() - t0) / 1000).toFixed(1)}秒）。「${other.name}」は非表示にしました`);
+  });
+}
+
+// ---------------- UV unwrap + texture baking ----------------
+const curLevel = () => active.levels[active.lv];
+const hasUV = L => L && L.uv && L.uvIdx && L.uvIdx.length === L.idx.length;
+function updateTexUI() {
+  const L = curLevel(), ok = hasUV(L), cv = $('uvCv');
+  if (ok) drawUV(cv, L.uvIdx, L.uv); else { const g = cv.getContext('2d'); g.fillStyle = '#18191c'; g.fillRect(0, 0, cv.width, cv.height); }
+  $('uvInfo').textContent = ok ? `UV あり（${L.uvCharts ? L.uvCharts + ' 個に分割・' : ''}${L.bake ? `テクスチャ ${L.bake.size}px 焼き付け済み` : 'テクスチャ未作成'}）` : nF > 300000 ? 'UV がありません（ポリゴンが多すぎます。リトポかポリゴン削減で軽くしてから展開してください）' : 'UV はまだありません';
+  $('bakeGo').disabled = !ok || !$('bakeSrc').options.length;
+  $('texPreview').disabled = $('texSave').disabled = !(ok && L.bake);
+  if (!(ok && L.bake) && $('texPreview').checked) { $('texPreview').checked = false; setTexPreview(false); }
+}
+function unwrapUV() {
+  if (nF > 300000) { toast('ポリゴンが多すぎます。リトポかポリゴン削減で軽くしてから展開してください'); return; }
+  return busy(() => {
+    const t0 = performance.now(), size = +$('bakeSize').value;
+    const r = unwrap(pos, idx, { angle: +$('uvAngle').value, size, padding: 4 });
+    pushEntry(lvSnap());   // level objects are shared with the snapshot, so record uv in a fresh object
+    const L = { ...curLevel(), uvIdx: r.uvIdx, uv: r.uv, uvCharts: r.charts, bake: null };
+    active.levels = active.levels.slice(); active.levels[active.lv] = L;
+    setTexPreview(false); $('texPreview').checked = false;
+    updateTexUI(); scheduleSave();
+    toast(`UV を展開しました（${r.charts} 個に分割・使用率 ${Math.round(r.coverage * 100)}%・${((performance.now() - t0) / 1000).toFixed(1)}秒）`);
+  });
+}
+// positions (+paint) of a higher level of the active subtool without switching to it
+function materializeLevel(k) {
+  let P = pos, pt = paint;
+  for (let j = active.lv + 1; j <= k; j++) {
+    const lo = active.levels[j - 1], hi = active.levels[j];
+    P = decodeDetails(subdivPositions(P, lo, hi), hi.det, hi);
+    pt = upAttr(pt, hi, 3);
+  }
+  return { pos: P, idx: active.levels[k].idx, paint: pt };
+}
+function pngFromRGBA(rgba, size) {
+  const c = document.createElement('canvas'); c.width = c.height = size;
+  c.getContext('2d').putImageData(new ImageData(rgba, size, size), 0, 0);
+  return new Promise(res => c.toBlob(b => b.arrayBuffer().then(a => res(new Uint8Array(a))), 'image/png'));
+}
+async function bakeTextures() {
+  const L = curLevel();
+  if (!hasUV(L)) { toast('先に UV を展開してください'); return; }
+  const v = $('bakeSrc').value, size = +$('bakeSize').value;
+  let high;
+  if (v === 'top') { if (active.lv >= active.levels.length - 1) { toast('一つ下のレベルに下げてから焼き付けてください'); return; } }
+  else { const r = subtools.find(x => String(x.id) === v); if (!r) { toast('焼き付け元を選んでください'); return; } high = { pos: r.pos, idx: r.idx, paint: r.paint }; }
+  let res;
+  await busy(() => {
+    flushNormals();
+    const t0 = performance.now();
+    if (!high) high = materializeLevel(active.levels.length - 1);
+    const box = sceneBounds([active]), maxDist = box.getSize(new V3()).length() * 0.03;
+    res = bakeMaps({ pos, uvIdx: L.uvIdx, uv: L.uv }, high, { size, maxDist });
+    res.t = performance.now() - t0;
+  });
+  if (!res) return;
+  const normalPng = await pngFromRGBA(res.normal, size), colorPng = res.color ? await pngFromRGBA(res.color, size) : null;
+  pushEntry(lvSnap());
+  const NL = { ...L, bake: { size, normalPng, colorPng } };
+  active.levels = active.levels.slice(); active.levels[active.lv] = NL;
+  texCache.delete(L); updateTexUI(); scheduleSave();
+  $('texPreview').checked = true; await setTexPreview(true);
+  toast(`焼き付けました（${size}px・${res.color ? '法線マップ＋色' : '法線マップ'}・${(res.t / 1000).toFixed(1)}秒${res.misses ? `・届かなかった点 ${res.misses.toLocaleString()}` : ''}）`);
+}
+// textures for preview / GLB export
+const texCache = new WeakMap();
+async function bakeTextures3(L) {
+  if (texCache.has(L)) return texCache.get(L);
+  const load = async (png, srgb) => {
+    if (!png) return null;
+    const bmp = await createImageBitmap(new Blob([png], { type: 'image/png' }));
+    const c = document.createElement('canvas'); c.width = bmp.width; c.height = bmp.height; c.getContext('2d').drawImage(bmp, 0, 0);
+    const t = new THREE.CanvasTexture(c); if (srgb) t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4; return t;
+  };
+  const t = { normal: await load(L.bake.normalPng, false), color: await load(L.bake.colorPng, true) };
+  texCache.set(L, t);
+  return t;
+}
+// non-indexed copy with per-corner uv (seams split) for textured display/export
+function uvGeometry(P, L, normals) {
+  const F = L.uvIdx, n = F.length, g = new THREE.BufferGeometry();
+  const p = new Float32Array(n * 3), nn = new Float32Array(n * 3), uvA = new Float32Array(n * 2);
+  for (let i = 0; i < n; i++) { const v = F[i] * 3; p[i*3] = P[v]; p[i*3+1] = P[v+1]; p[i*3+2] = P[v+2]; nn[i*3] = normals[v]; nn[i*3+1] = normals[v+1]; nn[i*3+2] = normals[v+2]; uvA[i*2] = L.uv[i*2]; uvA[i*2+1] = L.uv[i*2+1]; }
+  g.setAttribute('position', new THREE.BufferAttribute(p, 3)); g.setAttribute('normal', new THREE.BufferAttribute(nn, 3)); g.setAttribute('uv', new THREE.BufferAttribute(uvA, 2));
+  return g;
+}
+let previewMesh = null;
+async function setTexPreview(on) {
+  if (previewMesh) { scene.remove(previewMesh); previewMesh.geometry.dispose(); previewMesh.material.dispose(); previewMesh = null; }
+  if (mesh) mesh.visible = true;
+  const L = curLevel();
+  if (!on || !hasUV(L) || !L.bake) return;
+  flushNormals();
+  const t = await bakeTextures3(L);
+  const m = new THREE.MeshStandardMaterial({ color: t.color ? 0xffffff : 0xd8c0a2, map: t.color, normalMap: t.normal, roughness: 0.58 });
+  previewMesh = new THREE.Mesh(uvGeometry(pos, L, nrm), m); previewMesh.raycast = () => {}; previewMesh.frustumCulled = false;
+  scene.add(previewMesh); mesh.visible = false;
+}
+async function saveTextures() {
+  const L = curLevel(); if (!hasUV(L) || !L.bake) return;
+  const base = fileBase(), files = [{ name: `${base}_normal.png`, data: L.bake.normalPng.slice().buffer }];
+  if (L.bake.colorPng) files.push({ name: `${base}_color.png`, data: L.bake.colorPng.slice().buffer });
+  if (!native) { for (const f of files) download(new Blob([f.data], { type: 'image/png' }), f.name); return; }
+  const dir = await native.saveMany(files);
+  if (dir) toast(`テクスチャを保存しました: ${dir}`);
+}
+
 // ---------------- auto retopology ----------------
+let lastRetopoStats = null;
 function retopo() {
   if (stroke || gizmo.dragging) return;
   const target = Math.max(100, Math.min(200000, +$('rtTarget').value || 3000));
   return busy(() => {
     flushNormals();
-    const t0 = performance.now();
-    const r = quadRemesh({ pos, idx }, { target, smooth: +$('rtSmooth').value, sym: $('rtSym').checked, voxelLimit: VOXEL_LIMIT });
+    const t0 = performance.now(), flow = $('rtMode').value === 'flow';
+    const r = flow ? fieldRetopo({ pos, idx }, { target, smooth: Math.min(12, +$('rtSmooth').value) })
+                   : quadRemesh({ pos, idx }, { target, smooth: +$('rtSmooth').value, sym: $('rtSym').checked, voxelLimit: VOXEL_LIMIT });
     if (!r) { toast('リトポできませんでした。目標ポリゴン数を変えてみてください'); return; }
     pushStruct();
     const src = active;
     const rec = newRec(uniqueName(src.name + ' リトポ'), r.pos, r.idx);
-    rec.levels[0].quads = r.quads;
+    if (flow) rec.levels[0].polys = r.polys; else rec.levels[0].quads = r.quads;
+    lastRetopoStats = r.stats || null;
+    if (src.paint) rec.paint = transferPaint(src, r.pos);
     src.visible = false;
     insertAfterActive(rec); activate(rec); scheduleSave();
-    toast(`四角ポリゴン ${(r.quads.length / 4).toLocaleString()} 枚で作り直しました（${((performance.now() - t0) / 1000).toFixed(1)}秒）。元の「${src.name}」は非表示にしています`);
+    const sec = ((performance.now() - t0) / 1000).toFixed(1);
+    toast(flow ? `形に沿って作り直しました（四角 ${r.stats.quads.toLocaleString()} 枚・三角 ${(r.stats.tris + r.stats.ngons).toLocaleString()} 枚・${sec}秒）。元の「${src.name}」は非表示にしています`
+               : `四角ポリゴン ${(r.quads.length / 4).toLocaleString()} 枚で作り直しました（${sec}秒）。元の「${src.name}」は非表示にしています`);
   });
 }
 
@@ -1777,20 +2101,29 @@ async function openModel() {
   const m = await native.openModel();
   if (m) importFile(m);
 }
+const lin2srgb = x => x <= 0.0031308 ? 12.92 * x : 1.055 * Math.pow(x, 1 / 2.4) - 0.055;
 function makeOBJ() {
   flushNormals();
   const recs = shownRecs();
   const out = [`# BoardPainter\n# subtools ${recs.length}\n`];
-  let chunk = '', base = 0;
+  let chunk = '', base = 0, vtBase = 0;
   const flush = () => { if (chunk.length > 1e6) { out.push(chunk); chunk = ''; } };
   for (const r of recs) {
     const p = r.pos, ix = r.idx, n = r === active ? nrm : computeNormals(p, ix), vn = p.length / 3;
     chunk += `o ${r.name.replace(/\s+/g, '_')}\n`;
-    for (let i = 0; i < p.length; i += 3) { chunk += `v ${p[i].toFixed(6)} ${p[i+1].toFixed(6)} ${p[i+2].toFixed(6)}\n`; flush(); }
+    const pc = r.paint && r.paint.length === p.length ? r.paint : null;   // vertex colors as "v x y z r g b" (sRGB)
+    for (let i = 0; i < p.length; i += 3) { chunk += `v ${p[i].toFixed(6)} ${p[i+1].toFixed(6)} ${p[i+2].toFixed(6)}${pc ? ` ${lin2srgb(pc[i]).toFixed(4)} ${lin2srgb(pc[i+1]).toFixed(4)} ${lin2srgb(pc[i+2]).toFixed(4)}` : ''}\n`; flush(); }
     for (let i = 0; i < n.length; i += 3) { chunk += `vn ${n[i].toFixed(4)} ${n[i+1].toFixed(4)} ${n[i+2].toFixed(4)}\n`; flush(); }
-    const qd = r.levels[r.lv].quads;
-    if (qd && qd.length / 2 === ix.length / 3) {
-      for (let k = 0; k < qd.length; k += 4) { const a = qd[k]+1+base, b = qd[k+1]+1+base, c = qd[k+2]+1+base, d = qd[k+3]+1+base; chunk += `f ${a}//${a} ${b}//${b} ${c}//${c} ${d}//${d}\n`; flush(); }
+    const LL = r.levels[r.lv], PL = levelPolys(LL);
+    if (hasUV(LL)) {   // UV coordinates: one vt per face corner
+      for (let k = 0; k < LL.uv.length; k += 2) { chunk += `vt ${LL.uv[k].toFixed(6)} ${LL.uv[k+1].toFixed(6)}\n`; flush(); }
+      const F = LL.uvIdx;
+      for (let f = 0; f < F.length; f += 3) { const a = F[f]+1+base, b = F[f+1]+1+base, c = F[f+2]+1+base, t = vtBase + f + 1; chunk += `f ${a}/${t}/${a} ${b}/${t+1}/${b} ${c}/${t+2}/${c}\n`; flush(); }
+      vtBase += F.length;
+    } else
+    if (PL) {
+      const { start: ps, idx: pi } = PL;
+      for (let f = 0; f + 1 < ps.length; f++) { let line = 'f'; for (let k = ps[f]; k < ps[f + 1]; k++) { const a = pi[k] + 1 + base; line += ` ${a}//${a}`; } chunk += line + '\n'; flush(); }
     } else
     for (let f = 0; f < ix.length; f += 3) { const a = ix[f]+1+base, b = ix[f+1]+1+base, c = ix[f+2]+1+base; chunk += `f ${a}//${a} ${b}//${b} ${c}//${c}\n`; flush(); }
     base += vn;
@@ -1824,8 +2157,10 @@ function makeSTL() {
   }
   return { blob: new Blob([buf], { type:'model/stl' }), name: `${fileBase()}_${hmm}mm.stl` };
 }
-function makeGLB() {
+async function makeGLB() {
   flushNormals();
+  const tex = new Map();
+  for (const r of shownRecs()) { const L = r.levels[r.lv]; if (hasUV(L) && L.bake) tex.set(r, await bakeTextures3(L)); }
   const root = new THREE.Group(); root.name = fileBase();
   const mat = new THREE.MeshStandardMaterial({ color:0xd8c0a2, roughness:0.6 });
   for (const r of shownRecs()) {
@@ -1833,7 +2168,14 @@ function makeGLB() {
     g.setAttribute('position', new THREE.BufferAttribute(r.pos.slice(), 3));
     g.setAttribute('normal', new THREE.BufferAttribute(r === active ? nrm.slice() : computeNormals(r.pos, r.idx), 3));
     g.setIndex(new THREE.BufferAttribute(r.idx.slice(), 1));
-    const m = new THREE.Mesh(g, mat); m.name = r.name; root.add(m);
+    if (tex.has(r)) {   // textured: seams split, uv + baked normal/color maps
+      const t = tex.get(r), tg = uvGeometry(r.pos, r.levels[r.lv], r === active ? nrm : computeNormals(r.pos, r.idx));
+      const tm = new THREE.Mesh(tg, new THREE.MeshStandardMaterial({ color: t.color ? 0xffffff : 0xd8c0a2, map: t.color, normalMap: t.normal, roughness: 0.6 }));
+      tm.name = r.name; root.add(tm); continue;
+    }
+    let mm = mat;
+    if (r.paint && r.paint.length === r.pos.length) { g.setAttribute('color', new THREE.BufferAttribute(r.paint.slice(), 3)); mm = new THREE.MeshStandardMaterial({ color:0xffffff, roughness:0.6, vertexColors:true }); }
+    const m = new THREE.Mesh(g, mm); m.name = r.name; root.add(m);
   }
   return new Promise(res => new GLTFExporter().parse(root, r => res({ blob: new Blob([r], { type:'model/gltf-binary' }), name: fileBase() + '.glb' }), err => { toast('GLB書き出しに失敗しました'); console.error(err); res(null); }, { binary:true }));
 }
@@ -2025,6 +2367,36 @@ $('lvDelHigh').onclick = () => deleteHigher();
 $('lvDelLow').onclick = () => deleteLower();
 $('projGo').onclick = () => projectFrom(subtools.find(r => String(r.id) === $('projSrc').value));
 $('rtGo').onclick = () => retopo();
+$('decRatio').addEventListener('input', updateDecEstimate);
+$('decGo').onclick = () => decimate();
+$('boolUnion').onclick = () => runBoolean('union');
+$('boolSub').onclick = () => runBoolean('subtract');
+$('boolInt').onclick = () => runBoolean('intersect');
+$('uvAngle').addEventListener('input', () => { $('uvAngleOut').textContent = $('uvAngle').value; });
+$('uvGo').onclick = () => unwrapUV();
+$('bakeGo').onclick = () => bakeTextures();
+$('bakeSrc').addEventListener('change', updateTexUI);
+$('texPreview').onchange = e => setTexPreview(e.target.checked);
+$('texSave').onclick = () => saveTextures();
+const SWATCHES = ['#9c4a3c', '#c97c4a', '#d9b26a', '#7d8a4e', '#4f7a6a', '#4a6a8f', '#6a5a8f', '#2e2b2a', '#e8e1d6', '#d8c0a2'];
+for (const c of SWATCHES) {
+  const b = document.createElement('button'); b.className = 'swatch'; b.style.background = c; b.title = c; b.setAttribute('aria-label', `色 ${c}`);
+  b.onclick = () => { setPaintColor(c); selectBrush('paint'); };
+  $('swatches').appendChild(b);
+}
+function setPaintColor(hex) { S.paintHex = hex; S.paintLin.set(hex); $('paintColor').value = hex; saveBrushPrefs(); }
+$('paintColor').value = S.paintHex;
+$('paintColor').addEventListener('input', e => { setPaintColor(e.target.value); if (S.brush !== 'paint') selectBrush('paint'); });
+$('paintFill').onclick = () => {
+  pushUndo(); const pt = ensurePaint(), c = S.paintLin;
+  for (let v = 0; v < nV; v++) { const w = 1 - mask[v], i = v * 3; pt[i] += (c.r - pt[i]) * w; pt[i+1] += (c.g - pt[i+1]) * w; pt[i+2] += (c.b - pt[i+2]) * w; setColor(v); }
+  colorDirty = gpuDirty = true; scheduleSave(); toast('全体を塗りました（マスクした所を除く）');
+};
+$('paintClear').onclick = () => {
+  if (!paint) { toast('色は塗られていません'); return; }
+  pushUndo(); paint = active.paint = null;
+  for (let v = 0; v < nV; v++) setColor(v); colorDirty = gpuDirty = true; scheduleSave(); toast('色を消しました');
+};
 $('rtSmooth').addEventListener('input', () => { $('rtSmoothOut').textContent = $('rtSmooth').value; });
 $('opSmooth').onclick = () => busy(() => smoothAll(Math.min(50, Math.max(1, +$('smoothIter').value || 3))));
 $('opSymm').onclick = () => busy(symmetrize);
@@ -2088,8 +2460,19 @@ function renderSubtoolList() {
   if ([...ps.options].some(o => o.value === prev)) ps.value = prev;
   else { const hidden = subtools.find(r => r !== active && !r.visible); if (hidden) ps.value = hidden.id; }
   ps.disabled = $('projGo').disabled = !ps.options.length;
+  const others = subtools.filter(r => r !== active);
+  fillSelect($('boolOther'), others.map(r => [String(r.id), r.name + (r.visible ? '' : '（非表示）')]));
+  $('boolUnion').disabled = $('boolSub').disabled = $('boolInt').disabled = !others.length;
+  fillSelect($('bakeSrc'), [...(active.levels.length > 1 ? [['top', `このパーツのレベル ${active.levels.length}`]] : []), ...others.map(r => [String(r.id), r.name + (r.visible ? '' : '（非表示）')])],
+    () => { const h = subtools.find(r => r !== active && !r.visible); return active.levels.length > 1 ? 'top' : h ? String(h.id) : null; });
+  updateTexUI();
   $('subDel').disabled = subtools.length < 2; $('subMerge').disabled = i >= subtools.length - 1;
   $('subUp').disabled = i <= 0; $('subDown').disabled = i >= subtools.length - 1;
+}
+function fillSelect(sel, items, pickDefault) {
+  const prev = sel.value; sel.textContent = '';
+  for (const [v, t] of items) { const o = document.createElement('option'); o.value = v; o.textContent = t; sel.appendChild(o); }
+  if (items.some(([v]) => v === prev)) sel.value = prev; else if (pickDefault) { const d = pickDefault(); if (d) sel.value = d; }
 }
 function renameSub(r, nm) {
   const inp = document.createElement('input'); inp.type = 'text'; inp.value = r.name; inp.maxLength = 60;
@@ -2194,8 +2577,10 @@ renderer.setAnimationLoop(() => {
     get subtools() { return subtools.map(r => ({ name: r.name, visible: r.visible, nF: r.idx.length / 3, active: r === active })); },
     get project() { return { path: projectPath, name: projectName, dirty }; },
     screenRadius() { const bx = sceneBounds([active]), sp = { center: bx.getCenter(new V3()), radius: (bx.max.y - bx.min.y) / 2 }, c = sp.center.clone().project(camera), e = sp.center.clone().addScaledVector(camAxis(1), sp.radius).project(camera), b = canvas.getBoundingClientRect(); return Math.abs(e.y - c.y) / 2 * b.height; },
+    translateActive(dx, dy, dz) { pushUndo(true); for (let i = 0; i < nV * 3; i += 3) { pos[i] += dx; pos[i+1] += dy; pos[i+2] += dz; } mirror = active.mirror = active.levels[active.lv].mirror = computeMirror(pos); computeAllNormals(); geo.computeBoundingBox(); geo.computeBoundingSphere(); bvhDirty = gpuDirty = true; scheduleSave(); },
     bounds() { const b = sceneBounds([active]); return [b.min.toArray(), b.max.toArray()]; },
     centerOnScreen() { const v = sceneBounds([active]).getCenter(new V3()).project(camera), b = canvas.getBoundingClientRect(); return [b.left + (v.x + 1) / 2 * b.width, b.top + (1 - v.y) / 2 * b.height]; },
+    get retopoStats() { return lastRetopoStats; },
     get gizmoState() { return { axis: gizmo.axis, dragging: gizmo.dragging, enabled: gizmo.enabled, attached: !!gizmo.object, mode: gizmo.mode }; },
     meshCheck() {
       const em = new Map(); let vol = 0;
