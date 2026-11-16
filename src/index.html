@@ -20,6 +20,9 @@ nav.tools{grid-column:1}
 #view{grid-column:2;grid-row:2}
 aside{grid-column:3}
 html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font:13px/1.5 var(--ui);overflow:hidden}
+/* app UI: dragging across panels shouldn't select text (inputs stay selectable) */
+.app{-webkit-user-select:none;user-select:none}
+.app input,.app textarea{-webkit-user-select:text;user-select:text}
 button,select,input{font:inherit;color:inherit}
 .app{display:grid;grid-template-columns:64px minmax(0,1fr) 288px;grid-template-rows:48px minmax(0,1fr);height:100%}
 header{grid-column:1/-1;display:flex;align-items:center;gap:8px;padding:0 12px;background:var(--panel);border-bottom:1px solid var(--line);overflow-x:auto;white-space:nowrap}
@@ -1742,6 +1745,7 @@ function newProject() {
     const b = makeBase('sphere', 'mid');
     applyProject({ active: 0 }, [{ name: '球', pos: b.p, idx: b.ix, mask: new Float32Array(b.p.length / 3), mirror: computeMirror(b.p) }], { fresh: true });
     $('fname').value = 'sculpt';
+    camera.position.set(0, 0.4, 6.5); controls.target.set(0, 0, 0);   // new project: start from the front
     frame(); autosaveSoon();
     toast('新しいプロジェクトを作りました');
   });
@@ -2189,6 +2193,8 @@ renderer.setAnimationLoop(() => {
     get nV() { return nV; }, get nF() { return nF; },
     get subtools() { return subtools.map(r => ({ name: r.name, visible: r.visible, nF: r.idx.length / 3, active: r === active })); },
     get project() { return { path: projectPath, name: projectName, dirty }; },
+    screenRadius() { const bx = sceneBounds([active]), sp = { center: bx.getCenter(new V3()), radius: (bx.max.y - bx.min.y) / 2 }, c = sp.center.clone().project(camera), e = sp.center.clone().addScaledVector(camAxis(1), sp.radius).project(camera), b = canvas.getBoundingClientRect(); return Math.abs(e.y - c.y) / 2 * b.height; },
+    bounds() { const b = sceneBounds([active]); return [b.min.toArray(), b.max.toArray()]; },
     centerOnScreen() { const v = sceneBounds([active]).getCenter(new V3()).project(camera), b = canvas.getBoundingClientRect(); return [b.left + (v.x + 1) / 2 * b.width, b.top + (1 - v.y) / 2 * b.height]; },
     get gizmoState() { return { axis: gizmo.axis, dragging: gizmo.dragging, enabled: gizmo.enabled, attached: !!gizmo.object, mode: gizmo.mode }; },
     meshCheck() {
