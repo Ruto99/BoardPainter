@@ -292,9 +292,11 @@ dl.keys dd{margin:0;color:var(--muted)}
       <div class="row"><label for="rtTarget">目標ポリゴン数</label><input type="number" id="rtTarget" min="100" max="200000" step="100" value="3000"></div>
       <div class="row"><label for="rtSmooth">ならし</label><output id="rtSmoothOut">10</output></div>
       <input type="range" id="rtSmooth" min="0" max="30" step="1" value="10">
-      <div class="row"><input type="checkbox" id="rtSym" checked><label for="rtSym">左右対称（X・格子状のみ）</label></div>
+      <div class="row"><input type="checkbox" id="rtSym" checked><label for="rtSym">左右対称（X）</label></div>
+      <div class="row"><input type="checkbox" id="rtPure" checked><label for="rtPure">四角ポリゴンだけにする（形に沿う）</label></div>
+      <div class="row"><input type="checkbox" id="rtSharp" checked><label for="rtSharp">角やエッジを保つ（形に沿う）</label></div>
       <button class="btn primary full" id="rtGo">自動リトポ</button>
-      <p class="note">選択中のパーツを、指定した数前後の四角ポリゴンで作り直した新しいサブツールを作ります（元のパーツは非表示で残ります）。四角ポリゴンは OBJ 書き出しでも四角のまま出力されます。「形に沿う」は面の向きに沿って四角を並べます（一部に三角形が混ざります）。「格子状」は左右対称にでき、確実ですが流れは格子に沿います。</p>
+      <p class="note">選択中のパーツを、指定した数前後の四角ポリゴンで作り直した新しいサブツールを作ります（元のパーツは非表示で残ります）。四角ポリゴンは OBJ 書き出しでも四角のまま出力されます。「形に沿う」は面の向きに沿って四角を並べ、角やエッジに沿ってループを通します。左右対称にすると X=0 の面にループが乗り、左右がぴったり同じになります。「格子状」は流れが格子に沿う、より単純な方式です。</p>
     </section>
 
     <section>
@@ -477,7 +479,8 @@ scene.add(new THREE.HemisphereLight(0xfff3e4, 0x2b2c34, 0.85));
 const keyLight = new THREE.DirectionalLight(0xffffff, 1.9); keyLight.position.set(1.6, 2.2, 1.2); camera.add(keyLight);
 const fillLight = new THREE.DirectionalLight(0xc9d6ff, 0.45); fillLight.position.set(-2.5, -1, 0.5); camera.add(fillLight);
 
-const material = new THREE.MeshStandardMaterial({ color:0xffffff, roughness:0.58, metalness:0.0, vertexColors:true });
+const material = new THREE.MeshStandardMaterial({ color:0xffffff, roughness:0.58, metalness:0.0, vertexColors:true,
+  polygonOffset:true, polygonOffsetFactor:1, polygonOffsetUnits:1 });   // keeps wireframe lines on flat faces from z-fighting
 const quadWireMat = new THREE.LineBasicMaterial({ color:0x1b1c1f, transparent:true, opacity:0.55, depthWrite:false });
 const wireMat = new THREE.MeshBasicMaterial({ color:0x1b1c1f, wireframe:true, transparent:true, opacity:0.22, depthWrite:false });
 
@@ -1938,7 +1941,7 @@ function retopo() {
   return busy(() => {
     flushNormals();
     const t0 = performance.now(), flow = $('rtMode').value === 'flow';
-    const r = flow ? fieldRetopo({ pos, idx }, { target, smooth: Math.min(12, +$('rtSmooth').value) })
+    const r = flow ? fieldRetopo({ pos, idx }, { target, smooth: Math.min(12, +$('rtSmooth').value), sym: $('rtSym').checked, pureQuad: $('rtPure').checked, sharpAngle: $('rtSharp').checked ? 60 : 0 })
                    : quadRemesh({ pos, idx }, { target, smooth: +$('rtSmooth').value, sym: $('rtSym').checked, voxelLimit: VOXEL_LIMIT });
     if (!r) { toast('リトポできませんでした。目標ポリゴン数を変えてみてください'); return; }
     pushStruct();
@@ -1950,7 +1953,7 @@ function retopo() {
     src.visible = false;
     insertAfterActive(rec); activate(rec); scheduleSave();
     const sec = ((performance.now() - t0) / 1000).toFixed(1);
-    toast(flow ? `形に沿って作り直しました（四角 ${r.stats.quads.toLocaleString()} 枚・三角 ${(r.stats.tris + r.stats.ngons).toLocaleString()} 枚・${sec}秒）。元の「${src.name}」は非表示にしています`
+    toast(flow ? `形に沿って作り直しました（四角 ${r.stats.quads.toLocaleString()} 枚${r.stats.tris + r.stats.ngons ? `・三角 ${(r.stats.tris + r.stats.ngons).toLocaleString()} 枚` : ''}${r.stats.symmetric ? '・左右対称' : ''}・${sec}秒）。元の「${src.name}」は非表示にしています`
                : `四角ポリゴン ${(r.quads.length / 4).toLocaleString()} 枚で作り直しました（${sec}秒）。元の「${src.name}」は非表示にしています`);
   });
 }
@@ -2582,6 +2585,7 @@ renderer.setAnimationLoop(() => {
     centerOnScreen() { const v = sceneBounds([active]).getCenter(new V3()).project(camera), b = canvas.getBoundingClientRect(); return [b.left + (v.x + 1) / 2 * b.width, b.top + (1 - v.y) / 2 * b.height]; },
     get retopoStats() { return lastRetopoStats; },
     get gizmoState() { return { axis: gizmo.axis, dragging: gizmo.dragging, enabled: gizmo.enabled, attached: !!gizmo.object, mode: gizmo.mode }; },
+    openEdges() { const em = new Map(); for (let f = 0; f < nF; f++) { const a = idx[f*3], b = idx[f*3+1], c = idx[f*3+2]; for (const [x, y] of [[a, b], [b, c], [c, a]]) { const k = x < y ? x * nV + y : y * nV + x; em.set(k, (em.get(k) || 0) + 1); } } const out = []; for (const [k, c] of em) if (c === 1) { const a = Math.floor(k / nV), b = k % nV; out.push([[pos[a*3], pos[a*3+1], pos[a*3+2]].map(x => +x.toFixed(3)), [pos[b*3], pos[b*3+1], pos[b*3+2]].map(x => +x.toFixed(3))]); } return out; },
     meshCheck() {
       const em = new Map(); let vol = 0;
       for (let f = 0; f < nF; f++) {

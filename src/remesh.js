@@ -151,7 +151,7 @@ function neighbors(nV, idx) {
  * @returns { pos, idx, mask, info }
  */
 export function remesh(src, opt) {
-  const G = remeshGrid(src.pos, opt.res);
+  const G = remeshGrid(src.pos, opt.res, !!opt.symX);
   return surfaceFromField(voxelize(src.pos, src.idx, G), G, src, opt, false);
 }
 
