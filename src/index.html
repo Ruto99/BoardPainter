@@ -1085,10 +1085,10 @@ function dabSym(P, N, r, ref, reps = 1) {
 
 function onDown(e) {
   if (e.button !== 0 || !mesh || gizmoOn) return;
-  if (previewMesh) { $('texPreview').checked = false; setTexPreview(false); }
   setNDC(e);
   const hit = pick();
   if (!hit) return;                       // background: let OrbitControls rotate
+  if (previewMesh) { $('texPreview').checked = false; setTexPreview(false); }   // sculpting needs the real mesh
   controls.enabled = false;
   e.preventDefault();
   canvas.setPointerCapture(e.pointerId);
