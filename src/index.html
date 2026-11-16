@@ -238,6 +238,19 @@ dl.keys dd{margin:0;color:var(--muted)}
     </section>
 
     <section>
+      <h2>リメッシュ（作り直し）</h2>
+      <div class="row"><label for="rmRes">細かさ</label><output id="rmResOut"></output></div>
+      <input type="range" id="rmRes" min="32" max="320" step="8" value="128">
+      <div class="row"><label for="rmSmooth">ならし</label><output id="rmSmoothOut"></output></div>
+      <input type="range" id="rmSmooth" min="0" max="6" step="1" value="2">
+      <div class="row"><input type="checkbox" id="rmProject" checked><label for="rmProject">元の形に吸着（細部を残す）</label></div>
+      <p class="note" id="rmEstimate"></p>
+      <button class="btn primary full" id="rmGo">選択中のパーツをリメッシュ <small>Ctrl+R</small></button>
+      <button class="btn full" id="rmFuse" style="margin-top:6px">表示中のパーツを合体してリメッシュ</button>
+      <p class="note">ポリゴンを均一な細かさで作り直します。引き伸ばして荒くなった所が直り、重なったパーツは1つにつながります。「細かさ」より細い部分は消えることがあります。</p>
+    </section>
+
+    <section>
       <h2>書き出し</h2>
       <div class="row"><label for="fname">ファイル名</label><input type="text" id="fname" value="sculpt" style="width:130px"></div>
       <div class="row"><label for="stlH">STLの高さ (mm)</label><input type="number" id="stlH" min="1" max="2000" value="80"></div>
@@ -272,6 +285,7 @@ dl.keys dd{margin:0;color:var(--muted)}
         <dt>Ctrl+Shift+S</dt><dd>名前を付けて保存</dd>
         <dt>Ctrl+O</dt><dd>開く（.bpp）／OBJ・STLを追加</dd>
         <dt>Ctrl+N</dt><dd>新規プロジェクト</dd>
+        <dt>Ctrl+R</dt><dd>リメッシュ</dd>
         <dt>G</dt><dd>ギズモ（移動・回転・拡大）</dd>
         <dt>ダブルクリック</dt><dd>パーツを選択</dd>
         <dt>F11</dt><dd>全画面表示</dd>
@@ -290,6 +304,7 @@ import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { mergeVertices, mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { computeBoundsTree, acceleratedRaycast } from 'three-mesh-bvh';
 import { encodeProject, decodeProject } from './project.js';
+import { remesh, remeshGrid } from './remesh.js';
 import { BUILTIN, builtinAlpha, imageToAlpha, sampleAlpha, drawAlpha, alphaRGBA, RES as ALPHA_RES } from './alphas.js';
 
 THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree;
@@ -505,7 +520,7 @@ function setMesh(p, ix, m, mir) {
   mesh.matrixAutoUpdate = wireMesh.matrixAutoUpdate = false;
   scene.add(mesh, wireMesh);
   if (active) { active.pos = pos; active.idx = idx; active.mask = mask; active.mirror = mirror; }
-  updateStats();
+  updateStats(); updateRemeshEstimate();
 }
 
 function buildAdjacency() {
@@ -1235,6 +1250,73 @@ function bakeGizmo() {
   attachGizmo(); scheduleSave();
 }
 
+// ---------------- voxel remesh ----------------
+const VOXEL_LIMIT = 40_000_000;   // ~40M grid points: about 300 MB of working memory at peak
+const remeshOpts = () => ({ res: +$('rmRes').value, smooth: +$('rmSmooth').value, project: $('rmProject').checked });
+function meshArea(p, ix) {
+  let a = 0;
+  for (let f = 0; f < ix.length; f += 3) {
+    const A = ix[f]*3, B = ix[f+1]*3, C = ix[f+2]*3;
+    const ux = p[B]-p[A], uy = p[B+1]-p[A+1], uz = p[B+2]-p[A+2], wx = p[C]-p[A], wy = p[C+1]-p[A+1], wz = p[C+2]-p[A+2];
+    a += Math.hypot(uy*wz - uz*wy, uz*wx - ux*wz, ux*wy - uy*wx) / 2;
+  }
+  return a;
+}
+function updateRemeshEstimate() {
+  const el = $('rmEstimate'); if (!el || !pos) return;
+  $('rmResOut').textContent = $('rmRes').value; $('rmSmoothOut').textContent = $('rmSmooth').value;
+  const G = remeshGrid(pos, +$('rmRes').value);
+  // Surface Nets makes ~1 quad (2 triangles) per grid edge crossing; a surface crosses ~1.5 edges per h² of area on average
+  const est = Math.round(meshArea(pos, idx) / (G.h * G.h) * 3 / 1000) * 1000;
+  el.textContent = G.voxels > VOXEL_LIMIT ? '細かすぎます。「細かさ」を下げてください。' : `作り直し後: 約 ${est.toLocaleString()} ポリゴン（現在 ${nF.toLocaleString()}）`;
+}
+function runRemesh(src) {
+  const o = remeshOpts(), G = remeshGrid(src.pos, o.res);
+  if (G.voxels > VOXEL_LIMIT) { toast('細かすぎて処理できません。「細かさ」を下げてください'); return null; }
+  const r = remesh(src, o);
+  if (!r) toast('リメッシュできませんでした。形に対して「細かさ」が低すぎる可能性があります');
+  return r;
+}
+function remeshActive() {
+  if (stroke || gizmo.dragging) return;
+  return busy(() => {
+    flushNormals();
+    const t0 = performance.now(), before = nF;
+    const r = runRemesh({ pos, idx, mask });
+    if (!r) return;
+    pushUndo(true);
+    setMesh(r.pos, r.idx, r.mask);
+    syncScene(); if (gizmoOn) attachGizmo(); scheduleSave();
+    toast(`リメッシュしました（${before.toLocaleString()} → ${nF.toLocaleString()} ポリゴン・${((performance.now() - t0) / 1000).toFixed(1)}秒）`);
+  });
+}
+function remeshFuse() {
+  if (stroke || gizmo.dragging) return;
+  const recs = shownRecs();
+  if (recs.length < 2) { toast('表示中のパーツが1つだけです。合体したいパーツを表示してください'); return; }
+  return busy(() => {
+    flushNormals();
+    let nv = 0, nf = 0;
+    for (const r of recs) { nv += r.pos.length / 3; nf += r.idx.length; }
+    const p = new Float32Array(nv * 3), ix = new Uint32Array(nf), m = new Float32Array(nv);
+    let ov = 0, of = 0;
+    for (const r of recs) {
+      p.set(r.pos, ov * 3); m.set(r.mask, ov);
+      for (let k = 0; k < r.idx.length; k++) ix[of + k] = r.idx[k] + ov;
+      ov += r.pos.length / 3; of += r.idx.length;
+    }
+    const t0 = performance.now(), res = runRemesh({ pos: p, idx: ix, mask: m });
+    if (!res) return;
+    pushStruct();
+    const rec = newRec(uniqueName(recs[0].name + ' 合体'), res.pos, res.idx, res.mask);
+    const at = subtools.indexOf(recs[0]);
+    subtools = subtools.filter(r => !recs.includes(r));
+    subtools.splice(Math.min(at, subtools.length), 0, rec);
+    activate(rec, true); scheduleSave();
+    toast(`${recs.length} 個のパーツを合体しました（${nF.toLocaleString()} ポリゴン・${((performance.now() - t0) / 1000).toFixed(1)}秒）`);
+  });
+}
+
 // Loop subdivision: 1 triangle -> 4
 function subdivide() {
   if (nF * 4 > 2_400_000) { toast('これ以上細かくすると重くなりすぎるため中止しました'); return; }
@@ -1499,7 +1581,8 @@ function idb() {
 let saveTimer = 0;
 function autosaveSoon() { clearTimeout(saveTimer); saveTimer = setTimeout(saveNow, 1200); }
 // called after every change to the model
-function scheduleSave() { setDirty(true); autosaveSoon(); }
+let estT = 0;
+function scheduleSave() { setDirty(true); autosaveSoon(); clearTimeout(estT); estT = setTimeout(updateRemeshEstimate, 400); }
 async function saveNow() {
   clearTimeout(saveTimer);
   try {
@@ -1685,6 +1768,10 @@ $('btnNewProj').onclick = () => newProject();
 $('btnSave').onclick = $('projSave').onclick = () => saveProject(false);
 $('projSaveAs').onclick = () => saveProject(true);
 $('subAdd').onclick = () => addShape();
+$('rmGo').onclick = () => remeshActive();
+$('rmFuse').onclick = () => remeshFuse();
+$('rmRes').addEventListener('input', updateRemeshEstimate);
+$('rmSmooth').addEventListener('input', updateRemeshEstimate);
 $('subDup').onclick = () => duplicateSub();
 $('subDel').onclick = () => deleteSub();
 $('subMerge').onclick = () => mergeDown();
@@ -1752,6 +1839,7 @@ window.addEventListener('keydown', e => {
   if (ctrl && (e.key === 'o' || e.key === 'O')) { e.preventDefault(); openModel(); return; }
   if (ctrl && (e.key === 's' || e.key === 'S')) { e.preventDefault(); saveProject(e.shiftKey); return; }
   if (ctrl && (e.key === 'n' || e.key === 'N')) { e.preventDefault(); newProject(); return; }
+  if (ctrl && (e.key === 'r' || e.key === 'R')) { e.preventDefault(); remeshActive(); return; }
   if (ctrl || e.altKey) { syncHeld(e); return; }
   if (e.key >= '0' && e.key <= '9') { const b = BRUSHES.find(x => x.key === e.key); if (b) selectBrush(b.id); return; }
   if (e.key === '[') { S.size = Math.max(5, Math.round(S.size / 1.15)); syncSize(); saveBrushPrefs(); return; }
@@ -1823,6 +1911,16 @@ renderer.setAnimationLoop(() => {
     get project() { return { path: projectPath, name: projectName, dirty }; },
     centerOnScreen() { const v = sceneBounds([active]).getCenter(new V3()).project(camera), b = canvas.getBoundingClientRect(); return [b.left + (v.x + 1) / 2 * b.width, b.top + (1 - v.y) / 2 * b.height]; },
     get gizmoState() { return { axis: gizmo.axis, dragging: gizmo.dragging, enabled: gizmo.enabled, attached: !!gizmo.object, mode: gizmo.mode }; },
+    meshCheck() {
+      const em = new Map(); let vol = 0;
+      for (let f = 0; f < nF; f++) {
+        const a = idx[f*3], b = idx[f*3+1], c = idx[f*3+2];
+        for (const [x, y] of [[a, b], [b, c], [c, a]]) { const k = x < y ? x * nV + y : y * nV + x; em.set(k, (em.get(k) || 0) + 1); }
+        vol += (pos[a*3] * (pos[b*3+1] * pos[c*3+2] - pos[b*3+2] * pos[c*3+1]) - pos[a*3+1] * (pos[b*3] * pos[c*3+2] - pos[b*3+2] * pos[c*3]) + pos[a*3+2] * (pos[b*3] * pos[c*3+1] - pos[b*3+1] * pos[c*3])) / 6;
+      }
+      let open = 0, nonManifold = 0; for (const n of em.values()) { if (n === 1) open++; else if (n > 2) nonManifold++; }
+      return { nV, nF, open, nonManifold, volume: vol };
+    },
     get view() { const b = sceneBounds([active]); return { target: controls.target.toArray(), cam: camera.position.toArray(), activeCenter: b.getCenter(new V3()).toArray(), solo: S.solo }; },
     checksum() { let s = 0; for (let i = 0; i < nV * 3; i++) s += pos[i] * ((i % 7) + 1); for (let v = 0; v < nV; v++) s += mask[v]; return s; },
   };
