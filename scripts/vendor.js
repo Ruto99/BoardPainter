@@ -10,6 +10,7 @@ const out = path.join(root, 'src', 'vendor');
 const FILES = [
   'three/build/three.module.js',
   'three/examples/jsm/controls/OrbitControls.js',
+  'three/examples/jsm/controls/TransformControls.js',
   'three/examples/jsm/loaders/OBJLoader.js',
   'three/examples/jsm/loaders/STLLoader.js',
   'three/examples/jsm/exporters/GLTFExporter.js',

@@ -75,6 +75,14 @@
       "category": "Graphics",
       "artifactName": "${productName}-${version}.${ext}"
     },
-    "icon": "build/icon.png"
+    "icon": "build/icon.png",
+    "fileAssociations": [
+      {
+        "ext": "bpp",
+        "name": "BoardPainter Project",
+        "description": "BoardPainter プロジェクト",
+        "role": "Editor"
+      }
+    ]
   }
 }

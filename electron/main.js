@@ -21,10 +21,11 @@ function resolveAppPath(urlPath) {
   return path.join(SRC, ...(parts.length ? parts : ['index.html']));
 }
 
-const MODEL_EXT = new Set(['.obj', '.stl']);
+const MODEL_EXT = new Set(['.obj', '.stl', '.bpp']);
 let win = null;
 let pendingOpen = null; // file passed on the command line / via "open with"
 let allowClose = false;
+let closeTimer = null;
 
 function fileArg(argv) {
   return argv.slice(1).find(a => !a.startsWith('-') && MODEL_EXT.has(path.extname(a).toLowerCase())) || null;
@@ -32,7 +33,7 @@ function fileArg(argv) {
 
 async function readModel(p) {
   const data = await fs.readFile(p);
-  return { name: path.basename(p), data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) };
+  return { name: path.basename(p), path: p, data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) };
 }
 
 function createWindow() {
@@ -65,12 +66,14 @@ function createWindow() {
     else if (input.key === 'F12') { win.webContents.toggleDevTools(); e.preventDefault(); }
   });
 
-  // Give the renderer a chance to flush its autosave before the window closes.
+  // Let the renderer flush its autosave (and ask about unsaved changes) before the window closes.
+  // If the page doesn't acknowledge within 3 s (hung/crashed), close anyway.
   win.on('close', e => {
     if (allowClose) return;
     e.preventDefault();
+    if (closeTimer) return; // already asking
     win.webContents.send('bp:before-close');
-    setTimeout(() => { allowClose = true; win && win.close(); }, 3000); // safety net
+    closeTimer = setTimeout(() => { allowClose = true; win && win.close(); }, 3000);
   });
   win.on('closed', () => { win = null; });
 }
@@ -84,12 +87,50 @@ const FILTERS = {
 
 ipcMain.handle('bp:open-model', async () => {
   const r = await dialog.showOpenDialog(win, {
-    title: 'モデルを読み込み',
+    title: '開く',
+    defaultPath: lastDir(),
     properties: ['openFile'],
-    filters: [{ name: '3Dモデル (OBJ / STL)', extensions: ['obj', 'stl'] }, { name: 'すべてのファイル', extensions: ['*'] }],
+    filters: [
+      { name: 'BoardPainter プロジェクト / 3Dモデル', extensions: ['bpp', 'obj', 'stl'] },
+      { name: 'BoardPainter プロジェクト (.bpp)', extensions: ['bpp'] },
+      { name: '3Dモデル (OBJ / STL)', extensions: ['obj', 'stl'] },
+      { name: 'すべてのファイル', extensions: ['*'] },
+    ],
   });
   if (r.canceled || !r.filePaths[0]) return null;
+  rememberDir(path.dirname(r.filePaths[0]));
   return readModel(r.filePaths[0]);
+});
+
+// Save a project. Writes straight to `filePath` unless it's missing or saveAs is set.
+ipcMain.handle('bp:save-project', async (_e, { filePath, name, data, saveAs }) => {
+  let target = !saveAs && typeof filePath === 'string' && filePath ? filePath : null;
+  if (!target) {
+    const r = await dialog.showSaveDialog(win, {
+      title: saveAs ? '名前を付けて保存' : 'プロジェクトを保存',
+      defaultPath: filePath || path.join(lastDir(), `${name || 'sculpt'}.bpp`),
+      filters: [{ name: 'BoardPainter プロジェクト (.bpp)', extensions: ['bpp'] }],
+    });
+    if (r.canceled || !r.filePath) return null;
+    target = r.filePath;
+  }
+  const tmp = target + '.tmp';
+  await fs.writeFile(tmp, Buffer.from(data));   // write-then-rename so a crash never leaves a half-written project
+  await fs.rename(tmp, target);
+  rememberDir(path.dirname(target));
+  return target;
+});
+
+ipcMain.handle('bp:confirm-close', async (_e, name) => {
+  const r = await dialog.showMessageBox(win, {
+    type: 'question',
+    buttons: ['保存して閉じる', '保存せずに閉じる', 'キャンセル'],
+    defaultId: 0, cancelId: 2, noLink: true,
+    title: 'BoardPainter',
+    message: `「${name}」への変更を保存しますか？`,
+    detail: '保存しない場合も、作業内容は次回起動時に復元されます。',
+  });
+  return r.response; // 0 save, 1 discard, 2 cancel
 });
 
 ipcMain.handle('bp:take-pending-open', async () => {
@@ -124,7 +165,9 @@ ipcMain.handle('bp:save-many', async (_e, files) => {
 });
 
 ipcMain.handle('bp:reveal', (_e, p) => { if (typeof p === 'string') shell.showItemInFolder(p); });
-ipcMain.on('bp:close-ready', () => { allowClose = true; if (win) win.close(); });
+ipcMain.on('bp:close-ack', () => { clearTimeout(closeTimer); closeTimer = 'asking'; });
+ipcMain.on('bp:close-ready', () => { clearTimeout(closeTimer); allowClose = true; if (win) win.close(); });
+ipcMain.on('bp:close-cancel', () => { clearTimeout(closeTimer); closeTimer = null; });
 
 let exportDir = null;
 function lastDir() { return exportDir || app.getPath('documents'); }
