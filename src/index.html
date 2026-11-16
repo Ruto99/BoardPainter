@@ -141,7 +141,7 @@ dl.keys dd{margin:0;color:var(--muted)}
     <button class="btn" id="btnUndo" title="Ctrl+Z">元に戻す</button>
     <button class="btn" id="btnRedo" title="Ctrl+Y">やり直し</button>
     <div class="sep"></div>
-    <button class="btn" id="btnDivide" title="Ctrl+D">細分化 <small>Ctrl+D</small></button>
+    <button class="btn" id="btnDivide" title="Ctrl+D（細分化レベルを追加）">細分化 <small>Ctrl+D</small></button>
     <div class="spacer"></div>
     <button class="btn" id="expOBJ">OBJ</button>
     <button class="btn" id="expGLB">GLB <small>ゲーム</small></button>
@@ -190,6 +190,22 @@ dl.keys dd{margin:0;color:var(--muted)}
         <button class="btn" id="subDown">下へ</button>
       </div>
       <p class="note">クリックで選択、名前をダブルクリックで名前変更。ビュー上で別のパーツをダブルクリックしても切り替えられます。造形できるのは選択中のサブツールだけです。</p>
+    </section>
+
+    <section id="lvSec">
+      <h2>細分化レベル <span id="lvLabel"></span></h2>
+      <div class="grid2">
+        <button class="btn" id="lvDown" title="Shift+D">↓ 下げる <small>Shift+D</small></button>
+        <button class="btn" id="lvUp" title="D">↑ 上げる <small>D</small></button>
+      </div>
+      <button class="btn full" id="lvAdd" style="margin-top:6px">細分化してレベルを追加 <small>Ctrl+D</small></button>
+      <div class="grid2" style="margin-top:6px">
+        <button class="btn" id="lvDelLow">下のレベルを削除</button>
+        <button class="btn" id="lvDelHigh">上のレベルを削除</button>
+      </div>
+      <div class="row" style="margin-top:10px"><label for="projSrc">投影元</label><select id="projSrc" style="width:150px"></select></div>
+      <button class="btn full" id="projGo">投影元から形を写す</button>
+      <p class="note">低いレベルで大きな形を直すと、高いレベルの細部はそのまま付いてきます。高いレベルで彫った内容も低いレベルに反映されます。リトポしたパーツを細分化して「形を写す」と、元の細部を写し取れます。</p>
     </section>
 
     <section>
@@ -251,6 +267,16 @@ dl.keys dd{margin:0;color:var(--muted)}
     </section>
 
     <section>
+      <h2>自動リトポ（四角ポリゴン）</h2>
+      <div class="row"><label for="rtTarget">目標ポリゴン数</label><input type="number" id="rtTarget" min="100" max="200000" step="100" value="3000"></div>
+      <div class="row"><label for="rtSmooth">ならし</label><output id="rtSmoothOut">10</output></div>
+      <input type="range" id="rtSmooth" min="0" max="30" step="1" value="10">
+      <div class="row"><input type="checkbox" id="rtSym" checked><label for="rtSym">左右対称（X）</label></div>
+      <button class="btn primary full" id="rtGo">自動リトポ</button>
+      <p class="note">選択中のパーツを、指定した数前後の四角ポリゴンで作り直した新しいサブツールを作ります（元のパーツは非表示で残ります）。四角ポリゴンは OBJ 書き出しでも四角のまま出力されます。ポリゴンは格子状に並び、ZRemesher のような形に沿った流れにはなりません。</p>
+    </section>
+
+    <section>
       <h2>書き出し</h2>
       <div class="row"><label for="fname">ファイル名</label><input type="text" id="fname" value="sculpt" style="width:130px"></div>
       <div class="row"><label for="stlH">STLの高さ (mm)</label><input type="number" id="stlH" min="1" max="2000" value="80"></div>
@@ -280,7 +306,8 @@ dl.keys dd{margin:0;color:var(--muted)}
         <dt>W</dt><dd>ワイヤーフレーム</dd>
         <dt>F</dt><dd>全体表示</dd>
         <dt>Ctrl+Z / Y</dt><dd>元に戻す / やり直し</dd>
-        <dt>Ctrl+D</dt><dd>細分化（ポリゴン4倍）</dd>
+        <dt>Ctrl+D</dt><dd>細分化してレベルを追加</dd>
+        <dt>D / Shift+D</dt><dd>細分化レベルを上げる / 下げる</dd>
         <dt>Ctrl+S</dt><dd>プロジェクトを保存</dd>
         <dt>Ctrl+Shift+S</dt><dd>名前を付けて保存</dd>
         <dt>Ctrl+O</dt><dd>開く（.bpp）／OBJ・STLを追加</dd>
@@ -302,9 +329,9 @@ import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { STLLoader } from 'three/addons/loaders/STLLoader.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { mergeVertices, mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { computeBoundsTree, acceleratedRaycast } from 'three-mesh-bvh';
+import { computeBoundsTree, acceleratedRaycast, MeshBVH } from 'three-mesh-bvh';
 import { encodeProject, decodeProject } from './project.js';
-import { remesh, remeshGrid } from './remesh.js';
+import { remesh, remeshGrid, quadRemesh } from './remesh.js';
 import { BUILTIN, builtinAlpha, imageToAlpha, sampleAlpha, drawAlpha, alphaRGBA, RES as ALPHA_RES } from './alphas.js';
 
 THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree;
@@ -387,6 +414,7 @@ const keyLight = new THREE.DirectionalLight(0xffffff, 1.9); keyLight.position.se
 const fillLight = new THREE.DirectionalLight(0xc9d6ff, 0.45); fillLight.position.set(-2.5, -1, 0.5); camera.add(fillLight);
 
 const material = new THREE.MeshStandardMaterial({ color:0xd8c0a2, roughness:0.58, metalness:0.0, vertexColors:true });
+const quadWireMat = new THREE.LineBasicMaterial({ color:0x1b1c1f, transparent:true, opacity:0.55, depthWrite:false });
 const wireMat = new THREE.MeshBasicMaterial({ color:0x1b1c1f, wireframe:true, transparent:true, opacity:0.22, depthWrite:false });
 
 // pointerdown must be registered before OrbitControls so we can disable it when the click lands on the model
@@ -441,7 +469,42 @@ const viewsAlive = new Set();
 const viewMat = new THREE.MeshStandardMaterial({ color:0xb7a790, roughness:0.62, metalness:0.0 });
 
 function newRec(name, p, ix, m, mir) {
-  return { id: ++subSeq, name, visible: true, pos: p, idx: ix, mask: m || new Float32Array(p.length / 3), mirror: mir || computeMirror(p), view: null };
+  const mirror = mir || computeMirror(p);
+  return { id: ++subSeq, name, visible: true, pos: p, idx: ix, mask: m || new Float32Array(p.length / 3), mirror, view: null, levels: [{ idx: ix, pos: p, mirror }], lv: 0 };
+}
+// plain data for saving (project file / autosave), including subdivision levels
+function recData(r) {
+  return {
+    name: r.name, visible: r.visible, pos: r.pos, idx: r.idx, mask: r.mask, mirror: r.mirror, lv: r.lv,
+    levels: r.levels.map((L, k) => k === r.lv
+      ? { current: true, ev: L.ev || null, quads: L.quads || null, ref0: L.ref0 || null }
+      : { idx: L.idx, ev: L.ev || null, pos: k < r.lv ? L.pos : null, det: k > r.lv ? L.det : null, quads: L.quads || null, ref0: k < r.lv ? L.ref0 || null : null }),
+  };
+}
+function recFromData(s) {
+  const r = newRec(s.name, s.pos, s.idx, s.mask, s.mirror && s.mirror.length === s.pos.length / 3 ? s.mirror : null);
+  r.visible = s.visible !== false;
+  const Ls = Array.isArray(s.levels) ? s.levels : null, lv = s.lv | 0;
+  const okQuads = (q, ix) => q && q.length / 2 === ix.length / 3 ? q : undefined;
+  if (Ls && Ls.length > 1 && lv >= 0 && lv < Ls.length && Ls[lv] && Ls[lv].current) {
+    let n = 0, ok = true;
+    const levels = Ls.map((L, k) => {
+      const ref0 = L.ref0 || undefined;
+      if (k === lv) return { idx: s.idx, pos: s.pos, mirror: r.mirror, ev: L.ev || undefined, quads: okQuads(L.quads, s.idx), ref0 };
+      return { idx: L.idx, ev: L.ev || undefined, pos: L.pos || null, det: L.det || null, quads: L.quads ? okQuads(L.quads, L.idx) : undefined, ref0 };
+    });
+    // sanity: each level's vertex count = lower count + its edge count; positions/details where expected
+    for (let k = 0; k < levels.length && ok; k++) {
+      const L = levels[k], cnt = k === 0 ? (L.pos ? L.pos.length / 3 : -1) : n + (L.ev ? L.ev.length / 4 : -1);
+      if (k > 0 && (!L.ev || L.ev.length % 4)) ok = false;
+      if (k <= lv && (!L.pos || L.pos.length !== cnt * 3)) ok = false;
+      if (k > lv && (!L.det || L.det.length !== cnt * 3)) ok = false;
+      if (!L.idx) ok = false;
+      n = cnt;
+    }
+    if (ok) { r.levels = levels; r.lv = lv; }
+  } else if (Ls && Ls[0] && Ls[0].quads) r.levels[0].quads = okQuads(Ls[0].quads, s.idx);
+  return r;
 }
 function computeNormals(p, ix) {
   const n = new Float32Array(p.length);
@@ -496,7 +559,7 @@ function activate(rec, force = false) {
 }
 
 function setMesh(p, ix, m, mir) {
-  if (mesh) { scene.remove(mesh); scene.remove(wireMesh); geo.disposeBoundsTree?.(); geo.dispose(); }
+  if (mesh) { scene.remove(mesh); scene.remove(wireMesh); if (wireMesh.geometry !== geo) wireMesh.geometry.dispose(); geo.disposeBoundsTree?.(); geo.dispose(); }
   nV = p.length / 3; nF = ix.length / 3;
   geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(p, 3));
@@ -516,10 +579,24 @@ function setMesh(p, ix, m, mir) {
   for (let v = 0; v < nV; v++) setColor(v);
   geo.computeBoundingBox(); geo.computeBoundingSphere();
   mesh = new THREE.Mesh(geo, material); mesh.frustumCulled = false;
-  wireMesh = new THREE.Mesh(geo, wireMat); wireMesh.frustumCulled = false; wireMesh.visible = S.wire; wireMesh.raycast = () => {};
+  const quads = active && active.levels[active.lv].quads;
+  if (quads && quads.length / 2 === ix.length / 3) {
+    // show the real quad edges instead of the triangle diagonals
+    const seen = new Set(), e = [];
+    for (let q = 0; q < quads.length; q += 4) for (let k = 0; k < 4; k++) {
+      const a = quads[q+k], b = quads[q+(k+1)%4], key = a < b ? a * nV + b : b * nV + a;
+      if (!seen.has(key)) { seen.add(key); e.push(a, b); }
+    }
+    const lg = new THREE.BufferGeometry(); lg.setAttribute('position', geo.attributes.position); lg.setIndex(e);
+    wireMesh = new THREE.LineSegments(lg, quadWireMat);
+  } else wireMesh = new THREE.Mesh(geo, wireMat);
+  wireMesh.frustumCulled = false; wireMesh.visible = S.wire; wireMesh.raycast = () => {};
   mesh.matrixAutoUpdate = wireMesh.matrixAutoUpdate = false;
   scene.add(mesh, wireMesh);
-  if (active) { active.pos = pos; active.idx = idx; active.mask = mask; active.mirror = mirror; }
+  if (active) {
+    active.pos = pos; active.idx = idx; active.mask = mask; active.mirror = mirror;
+    const L = active.levels[active.lv]; L.pos = pos; L.idx = idx; L.mirror = mirror;
+  }
   updateStats(); updateRemeshEstimate();
 }
 
@@ -658,7 +735,7 @@ function dropDegenerate(ix) {
 //          { kind:'struct', list, active } for adding/removing/reordering subtools,
 //          { kind:'all', items:[[rec, pos]] } for operations that move every subtool
 const undoStack = [], redoStack = [];
-function snapshot(full) { return { rec: active, pos: pos.slice(), mask: mask.slice(), idx: full ? idx.slice() : null, mirror: full ? mirror.slice() : null }; }
+function snapshot(full) { return { rec: active, lvl: active.lv, pos: pos.slice(), mask: mask.slice(), idx: full ? idx.slice() : null, mirror: full ? mirror.slice() : null }; }
 const structSnap = () => ({ kind:'struct', list: subtools.slice(), active });
 const allSnap = () => ({ kind:'all', items: subtools.map(r => [r, r.pos.slice()]) });
 function pushEntry(e) { undoStack.push(e); if (undoStack.length > 40) undoStack.shift(); redoStack.length = 0; updateUndoButtons(); }
@@ -672,7 +749,7 @@ function restoreStruct(e) { subtools = e.list.slice(); activate(e.active, true);
 function restoreAll(e) {
   for (const [r, p] of e.items) {
     if (r.pos.length !== p.length) continue;
-    r.pos.set(p); r.mirror = computeMirror(r.pos);
+    r.pos.set(p); r.mirror = r.levels[r.lv].mirror = computeMirror(r.pos);
     if (r !== active) dropView(r);
   }
   mirror = active.mirror;
@@ -687,6 +764,9 @@ function stepHistory(from, to) {
     if (e.kind === 'all') { to.push(allSnap()); restoreAll(e); break; }
     if (!subtools.includes(e.rec)) continue;   // that subtool was deleted since; nothing to restore
     if (e.rec !== active) activate(e.rec);
+    if (e.kind === 'lv') { to.push(lvSnap()); restoreLv(e); break; }
+    if (e.lvl !== active.lv) { if (e.lvl >= active.levels.length) continue; setLevel(e.lvl, true); }
+    if (e.pos.length !== pos.length) continue;
     to.push(snapshot(!!e.idx)); restore(e); break;
   }
   if (gizmoOn) attachGizmo();
@@ -1105,7 +1185,7 @@ function centerAll() {
   const c = sceneBounds().getCenter(new V3());
   for (const r of subtools) {
     for (let i = 0; i < r.pos.length; i += 3) { r.pos[i] -= c.x; r.pos[i+1] -= c.y; r.pos[i+2] -= c.z; }
-    r.mirror = computeMirror(r.pos);
+    r.mirror = r.levels[r.lv].mirror = computeMirror(r.pos);
     if (r !== active) dropView(r);
   }
   mirror = active.mirror;
@@ -1245,7 +1325,7 @@ function bakeGizmo() {
   for (let i = 0; i < nV * 3; i += 3) { v.set(pos[i], pos[i+1], pos[i+2]).applyMatrix4(gzM); pos[i] = v.x; pos[i+1] = v.y; pos[i+2] = v.z; }
   mesh.matrix.identity(); wireMesh.matrix.identity(); mesh.matrixWorldNeedsUpdate = wireMesh.matrixWorldNeedsUpdate = true;
   gzM.identity();
-  mirror = active.mirror = computeMirror(pos);
+  mirror = active.mirror = active.levels[active.lv].mirror = computeMirror(pos);
   computeAllNormals(); geo.computeBoundingBox(); geo.computeBoundingSphere(); bvhDirty = gpuDirty = true;
   attachGizmo(); scheduleSave();
 }
@@ -1284,9 +1364,11 @@ function remeshActive() {
     const t0 = performance.now(), before = nF;
     const r = runRemesh({ pos, idx, mask });
     if (!r) return;
-    pushUndo(true);
-    setMesh(r.pos, r.idx, r.mask);
-    syncScene(); if (gizmoOn) attachGizmo(); scheduleSave();
+    pushStruct();
+    const old = active, rec = newRec(old.name, r.pos, r.idx, r.mask);
+    rec.visible = old.visible;
+    subtools.splice(subtools.indexOf(old), 1, rec);
+    activate(rec); scheduleSave();
     toast(`リメッシュしました（${before.toLocaleString()} → ${nF.toLocaleString()} ポリゴン・${((performance.now() - t0) / 1000).toFixed(1)}秒）`);
   });
 }
@@ -1317,59 +1399,233 @@ function remeshFuse() {
   });
 }
 
-// Loop subdivision: 1 triangle -> 4
-function subdivide() {
-  if (nF * 4 > 2_400_000) { toast('これ以上細かくすると重くなりすぎるため中止しました'); return; }
-  pushUndo(true);
-  const edgeMap = new Map(), maxE = nF * 3;
-  const eA = new Uint32Array(maxE), eB = new Uint32Array(maxE), o1 = new Int32Array(maxE), o2 = new Int32Array(maxE).fill(-1);
-  const faceE = new Uint32Array(nF * 3);
+// ---------------- subdivision levels (multires) ----------------
+// rec.levels[k] = { idx, ev?, pos?, det?, mirror?, quads? }   rec.lv = current level
+//  * levels <= lv keep positions (those below lv may be stale; they are refreshed when stepping down)
+//  * levels  > lv keep details: offsets from the subdivided lower level, in each vertex's local frame
+//    (tangent, bitangent, normal), so detail follows big shape changes made at lower levels
+//  * ev (levels >= 1): per new edge vertex [a, b, opposite1, opposite2 | -1] in the lower level's numbering
+function vvOf(ix, n) {
+  const start = new Uint32Array(n + 1), seen = new Int32Array(n).fill(-1);
+  for (let i = 0; i < ix.length; i++) start[ix[i] + 1] += 2;
+  for (let v = 0; v < n; v++) start[v + 1] += start[v];
+  const raw = new Uint32Array(start[n]), fill = start.slice(0, n);
+  for (let f = 0; f < ix.length; f += 3) for (let k = 0; k < 3; k++) { const a = ix[f+k]; raw[fill[a]++] = ix[f+(k+1)%3]; raw[fill[a]++] = ix[f+(k+2)%3]; }
+  const os = new Uint32Array(n + 1), out = new Uint32Array(raw.length); let w = 0;
+  for (let v = 0; v < n; v++) { os[v] = w; for (let j = start[v]; j < start[v + 1]; j++) { const u = raw[j]; if (seen[u] !== v) { seen[u] = v; out[w++] = u; } } }
+  os[n] = w;
+  return { start: os, list: out.subarray(0, w) };
+}
+// Loop subdivision topology: 1 triangle -> 4, plus the edge stencil
+function loopTopology(ix, n) {
+  const nF0 = ix.length / 3, edgeMap = new Map(), maxE = nF0 * 3;
+  const ev = new Int32Array(maxE * 4), faceE = new Uint32Array(nF0 * 3);
   let eN = 0;
-  for (let f = 0; f < nF; f++) for (let k = 0; k < 3; k++) {
-    const a = idx[f*3+k], b = idx[f*3+(k+1)%3], c = idx[f*3+(k+2)%3];
-    const key = a < b ? a * nV + b : b * nV + a;
+  for (let f = 0; f < nF0; f++) for (let k = 0; k < 3; k++) {
+    const a = ix[f*3+k], b = ix[f*3+(k+1)%3], c = ix[f*3+(k+2)%3];
+    const key = a < b ? a * n + b : b * n + a;
     let e = edgeMap.get(key);
-    if (e === undefined) { e = eN++; edgeMap.set(key, e); eA[e] = a; eB[e] = b; o1[e] = c; } else o2[e] = c;
+    if (e === undefined) { e = eN++; edgeMap.set(key, e); ev[e*4] = a; ev[e*4+1] = b; ev[e*4+2] = c; ev[e*4+3] = -1; }
+    else ev[e*4+3] = c;
     faceE[f*3+k] = e;
   }
-  const NN = nV + eN, np = new Float32Array(NN * 3), nm = new Float32Array(NN), nmir = new Int32Array(NN).fill(-1);
-  const boundary = new Uint8Array(nV);
-  for (let e = 0; e < eN; e++) if (o2[e] < 0) boundary[eA[e]] = boundary[eB[e]] = 1;
-  for (let v = 0; v < nV; v++) {
-    const i = v * 3, s0 = vvStart[v], s1 = vvStart[v + 1], n = s1 - s0;
-    nm[v] = mask[v]; nmir[v] = mirror[v];
-    if (boundary[v] || n < 3) { np[i] = pos[i]; np[i+1] = pos[i+1]; np[i+2] = pos[i+2]; continue; }
-    const beta = n === 3 ? 3 / 16 : 3 / (8 * n);
+  const ni = new Uint32Array(nF0 * 12);
+  for (let f = 0; f < nF0; f++) {
+    const a = ix[f*3], b = ix[f*3+1], c = ix[f*3+2];
+    const ab = n + faceE[f*3], bc = n + faceE[f*3+1], ca = n + faceE[f*3+2], o = f * 12;
+    ni[o]=a; ni[o+1]=ab; ni[o+2]=ca;  ni[o+3]=ab; ni[o+4]=b; ni[o+5]=bc;
+    ni[o+6]=ca; ni[o+7]=bc; ni[o+8]=c;  ni[o+9]=ab; ni[o+10]=bc; ni[o+11]=ca;
+  }
+  return { idx: ni, ev: ev.slice(0, eN * 4) };
+}
+// Loop-subdivided positions of the lower level P on the upper level's vertex numbering
+function subdivPositions(P, lo, hi) {
+  const n = P.length / 3, ev = hi.ev, nE = ev.length / 4, out = new Float32Array((n + nE) * 3);
+  if (!lo.vv) lo.vv = vvOf(lo.idx, n);
+  const { start, list } = lo.vv, bnd = new Uint8Array(n);
+  for (let e = 0; e < nE; e++) if (ev[e*4+3] < 0) bnd[ev[e*4]] = bnd[ev[e*4+1]] = 1;
+  for (let v = 0; v < n; v++) {
+    const i = v * 3, s0 = start[v], s1 = start[v + 1], c = s1 - s0;
+    if (bnd[v] || c < 3) { out[i] = P[i]; out[i+1] = P[i+1]; out[i+2] = P[i+2]; continue; }
+    const beta = c === 3 ? 3 / 16 : 3 / (8 * c), k = 1 - c * beta;
     let ax = 0, ay = 0, az = 0;
-    for (let j = s0; j < s1; j++) { const u = vvList[j] * 3; ax += pos[u]; ay += pos[u+1]; az += pos[u+2]; }
-    const k = 1 - n * beta;
-    np[i] = pos[i]*k + ax*beta; np[i+1] = pos[i+1]*k + ay*beta; np[i+2] = pos[i+2]*k + az*beta;
+    for (let j = s0; j < s1; j++) { const u = list[j] * 3; ax += P[u]; ay += P[u+1]; az += P[u+2]; }
+    out[i] = P[i]*k + ax*beta; out[i+1] = P[i+1]*k + ay*beta; out[i+2] = P[i+2]*k + az*beta;
   }
-  for (let e = 0; e < eN; e++) {
-    const a = eA[e]*3, b = eB[e]*3, i = (nV + e) * 3;
-    if (o2[e] < 0) { np[i] = (pos[a]+pos[b])/2; np[i+1] = (pos[a+1]+pos[b+1])/2; np[i+2] = (pos[a+2]+pos[b+2])/2; }
+  for (let e = 0; e < nE; e++) {
+    const a = ev[e*4]*3, b = ev[e*4+1]*3, o = (n + e) * 3;
+    if (ev[e*4+3] < 0) { out[o] = (P[a]+P[b])/2; out[o+1] = (P[a+1]+P[b+1])/2; out[o+2] = (P[a+2]+P[b+2])/2; }
     else {
-      const c = o1[e]*3, d = o2[e]*3;
-      np[i]   = 0.375*(pos[a]+pos[b])     + 0.125*(pos[c]+pos[d]);
-      np[i+1] = 0.375*(pos[a+1]+pos[b+1]) + 0.125*(pos[c+1]+pos[d+1]);
-      np[i+2] = 0.375*(pos[a+2]+pos[b+2]) + 0.125*(pos[c+2]+pos[d+2]);
+      const c = ev[e*4+2]*3, d = ev[e*4+3]*3;
+      out[o]   = 0.375*(P[a]+P[b])     + 0.125*(P[c]+P[d]);
+      out[o+1] = 0.375*(P[a+1]+P[b+1]) + 0.125*(P[c+1]+P[d+1]);
+      out[o+2] = 0.375*(P[a+2]+P[b+2]) + 0.125*(P[c+2]+P[d+2]);
     }
-    nm[nV + e] = (mask[eA[e]] + mask[eB[e]]) / 2;
-    const ma = mirror[eA[e]], mb = mirror[eB[e]];
-    if (ma >= 0 && mb >= 0) { const me = edgeMap.get(ma < mb ? ma * nV + mb : mb * nV + ma); if (me !== undefined) nmir[nV + e] = nV + me; }
   }
-  const ni = new Uint32Array(nF * 12);
-  for (let f = 0; f < nF; f++) {
-    const a = idx[f*3], b = idx[f*3+1], c = idx[f*3+2];
-    const ab = nV + faceE[f*3], bc = nV + faceE[f*3+1], ca = nV + faceE[f*3+2], o = f * 12;
-    ni[o]=a;  ni[o+1]=ab; ni[o+2]=ca;
-    ni[o+3]=ab; ni[o+4]=b; ni[o+5]=bc;
-    ni[o+6]=ca; ni[o+7]=bc; ni[o+8]=c;
-    ni[o+9]=ab; ni[o+10]=bc; ni[o+11]=ca;
+  return out;
+}
+// local frame per vertex of the smooth surface S: normal + tangent toward a fixed neighbor
+function frameAt(S, L, v, F, N) {
+  if (!L.ref) { const g = vvOf(L.idx, S.length / 3); L.ref = new Int32Array(S.length / 3); for (let u = 0; u < L.ref.length; u++) L.ref[u] = g.start[u + 1] > g.start[u] ? g.list[g.start[u]] : u; }
+  const i = v * 3, r = L.ref[v] * 3, nx = N[i], ny = N[i+1], nz = N[i+2];
+  let tx = S[r] - S[i], ty = S[r+1] - S[i+1], tz = S[r+2] - S[i+2];
+  const d = tx*nx + ty*ny + tz*nz; tx -= nx*d; ty -= ny*d; tz -= nz*d;
+  let l = Math.hypot(tx, ty, tz);
+  if (l < 1e-12) { if (Math.abs(nx) < 0.9) { tx = 0; ty = -nz; tz = ny; } else { tx = nz; ty = 0; tz = -nx; } l = Math.hypot(tx, ty, tz) || 1; }
+  tx /= l; ty /= l; tz /= l;
+  F[0] = tx; F[1] = ty; F[2] = tz; F[3] = ny*tz - nz*ty; F[4] = nz*tx - nx*tz; F[5] = nx*ty - ny*tx; F[6] = nx; F[7] = ny; F[8] = nz;
+}
+function encodeDetails(P, S, L) {
+  const N = computeNormals(S, L.idx), det = new Float32Array(P.length), F = new Float32Array(9);
+  for (let v = 0, i = 0; i < P.length; v++, i += 3) {
+    frameAt(S, L, v, F, N);
+    const dx = P[i] - S[i], dy = P[i+1] - S[i+1], dz = P[i+2] - S[i+2];
+    det[i] = dx*F[0] + dy*F[1] + dz*F[2]; det[i+1] = dx*F[3] + dy*F[4] + dz*F[5]; det[i+2] = dx*F[6] + dy*F[7] + dz*F[8];
   }
-  setMesh(np, ni, nm, nmir);
-  scheduleSave();
-  toast(`細分化しました（${nF.toLocaleString()} ポリゴン）`);
+  return det;
+}
+function decodeDetails(S, det, L) {
+  const N = computeNormals(S, L.idx), P = new Float32Array(S.length), F = new Float32Array(9);
+  for (let v = 0, i = 0; i < S.length; v++, i += 3) {
+    frameAt(S, L, v, F, N);
+    const a = det[i], b = det[i+1], c = det[i+2];
+    P[i] = S[i] + a*F[0] + b*F[3] + c*F[6]; P[i+1] = S[i+1] + a*F[1] + b*F[4] + c*F[7]; P[i+2] = S[i+2] + a*F[2] + b*F[5] + c*F[8];
+  }
+  return P;
+}
+function upMask(m, hi) {
+  const n = m.length, ev = hi.ev, out = new Float32Array(n + ev.length / 4);
+  out.set(m);
+  for (let e = 0; e < ev.length / 4; e++) out[n + e] = (m[ev[e*4]] + m[ev[e*4+1]]) / 2;
+  return out;
+}
+const levelInfo = (r = active) => ({ lv: r.lv, count: r.levels.length });
+
+// Move the active subtool to level `target` (lossless for the top level's shape)
+function setLevel(target, quiet = false) {
+  const rec = active, L = rec.levels;
+  target = Math.max(0, Math.min(L.length - 1, target));
+  if (target === rec.lv || stroke) return false;
+  flushNormals();
+  let m = mask;
+  while (rec.lv > target) {
+    const hi = L[rec.lv], lo = L[rec.lv - 1], nLo = lo.pos.length / 3;
+    // carry the edits made at this level since it was entered (P - ref0) down to the matching lower
+    // vertices; everything else is kept exactly as detail relative to the new lower level
+    const P = hi.pos, nl = lo.pos.slice(), R = hi.ref0 && hi.ref0.length === P.length ? hi.ref0 : subdivPositions(lo.pos, lo, hi);
+    for (let i = 0; i < nLo * 3; i++) nl[i] += P[i] - R[i];
+    hi.det = encodeDetails(P, subdivPositions(nl, lo, hi), hi); hi.pos = null; hi.ref0 = null;
+    lo.pos = nl; m = m.slice(0, nLo);
+    rec.lv--;
+  }
+  while (rec.lv < target) {
+    const lo = L[rec.lv], hi = L[rec.lv + 1];
+    hi.pos = decodeDetails(subdivPositions(lo.pos, lo, hi), hi.det, hi); hi.det = null;
+    hi.ref0 = hi.pos.slice();
+    m = upMask(m, hi);
+    rec.lv++;
+  }
+  const cur = L[rec.lv];
+  setMesh(cur.pos, cur.idx, m, cur.mirror && cur.mirror.length === cur.pos.length / 3 ? cur.mirror : null);
+  syncScene(); if (gizmoOn) attachGizmo();
+  if (!quiet) toast(`レベル ${rec.lv + 1} / ${L.length}（${nF.toLocaleString()} ポリゴン）`);
+  return true;
+}
+const lvSnap = () => ({ kind:'lv', rec: active, levels: active.levels.slice(), lv: active.lv });
+const levelVerts = L => (L.pos || L.det).length / 3;
+function restoreLv(e) {
+  // bring the current state to the level that the snapshot had active (levels are identified by vertex count)
+  const want0 = levelVerts(e.levels[e.lv]), at = active.levels.findIndex(L => levelVerts(L) === want0);
+  setLevel(at >= 0 ? at : 0, true);
+  const cur = active.levels[active.lv];
+  active.levels = e.levels; active.lv = e.lv;
+  const want = active.levels[active.lv];
+  if (want !== cur) { // current arrays belong to an object that the snapshot doesn't have (delete-lower): adopt them
+    want.pos = cur.pos; want.idx = cur.idx; want.mirror = cur.mirror; want.det = null; if (!want.ref0 && cur.ref0) want.ref0 = cur.ref0;
+  }
+  setMesh(want.pos, want.idx, mask, want.mirror);
+  syncScene(); if (gizmoOn) attachGizmo();
+}
+function addLevel() {
+  if (stroke) return;
+  if (active.lv < active.levels.length - 1) setLevel(active.levels.length - 1, true);
+  if (nF * 4 > 2_400_000) { toast('これ以上細かくすると重くなりすぎるため中止しました'); return; }
+  flushNormals();
+  pushEntry(lvSnap());
+  const lo = active.levels[active.lv];
+  const topo = loopTopology(idx, nV), hi = { idx: topo.idx, ev: topo.ev };
+  hi.pos = subdivPositions(pos, lo, hi); hi.ref0 = hi.pos.slice();
+  const m = upMask(mask, hi);
+  active.levels.push(hi); active.lv++;
+  setMesh(hi.pos, hi.idx, m);
+  syncScene(); if (gizmoOn) attachGizmo(); scheduleSave();
+  toast(`細分化しました（レベル ${active.lv + 1} / ${active.levels.length}・${nF.toLocaleString()} ポリゴン）`);
+}
+function deleteHigher() {
+  if (active.lv >= active.levels.length - 1) { toast('上のレベルはありません'); return; }
+  pushEntry(lvSnap());
+  active.levels = active.levels.slice(0, active.lv + 1);
+  syncScene(); scheduleSave(); toast('上のレベルを削除しました');
+}
+function deleteLower() {
+  if (active.lv === 0) { toast('下のレベルはありません'); return; }
+  pushEntry(lvSnap());
+  const cur = active.levels[active.lv];
+  active.levels = [{ idx: cur.idx, pos: cur.pos, mirror: cur.mirror, quads: cur.quads }, ...active.levels.slice(active.lv + 1)];
+  active.lv = 0;
+  syncScene(); scheduleSave(); toast('下のレベルを削除しました（今のレベルが一番下になりました）');
+}
+
+// Project the active subtool's surface onto another subtool (e.g. after retopology + subdividing)
+function projectFrom(src) {
+  if (!src || src === active) { toast('投影元のパーツを選んでください'); return; }
+  return busy(() => {
+    flushNormals();
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(src.pos, 3));
+    g.setIndex(new THREE.BufferAttribute(src.idx.slice(), 1));
+    const bvh = new MeshBVH(g);
+    const box = sceneBounds([src]), maxD = box.getSize(new V3()).length() * 0.04;
+    pushUndo();
+    const ray = new THREE.Ray(), p = new V3(), n = new V3(), hit = { point: new V3(), distance: 0, faceIndex: 0 };
+    let moved = 0;
+    for (let v = 0; v < nV; v++) {
+      const w = 1 - mask[v]; if (w <= 0) continue;
+      const i = v * 3; p.set(pos[i], pos[i+1], pos[i+2]); n.set(nrm[i], nrm[i+1], nrm[i+2]);
+      let best = null, bd = maxD;
+      for (const s of [1, -1]) {
+        ray.origin.copy(p); ray.direction.copy(n).multiplyScalar(s);
+        const h = bvh.raycastFirst(ray, THREE.DoubleSide);
+        if (h && h.distance < bd) { bd = h.distance; best = h.point.clone(); }
+      }
+      if (!best && bvh.closestPointToPoint(p, hit, 0, maxD)) best = hit.point;
+      if (!best) continue;
+      pos[i] += (best.x - pos[i]) * w; pos[i+1] += (best.y - pos[i+1]) * w; pos[i+2] += (best.z - pos[i+2]) * w;
+      touch(v); moved++;
+    }
+    g.dispose();
+    flushNormals(); geo.computeBoundingSphere(); scheduleSave();
+    toast(`「${src.name}」から形を投影しました（${moved.toLocaleString()} 頂点）`);
+  });
+}
+
+// ---------------- auto retopology ----------------
+function retopo() {
+  if (stroke || gizmo.dragging) return;
+  const target = Math.max(100, Math.min(200000, +$('rtTarget').value || 3000));
+  return busy(() => {
+    flushNormals();
+    const t0 = performance.now();
+    const r = quadRemesh({ pos, idx }, { target, smooth: +$('rtSmooth').value, sym: $('rtSym').checked, voxelLimit: VOXEL_LIMIT });
+    if (!r) { toast('リトポできませんでした。目標ポリゴン数を変えてみてください'); return; }
+    pushStruct();
+    const src = active;
+    const rec = newRec(uniqueName(src.name + ' リトポ'), r.pos, r.idx);
+    rec.levels[0].quads = r.quads;
+    src.visible = false;
+    insertAfterActive(rec); activate(rec); scheduleSave();
+    toast(`四角ポリゴン ${(r.quads.length / 4).toLocaleString()} 枚で作り直しました（${((performance.now() - t0) / 1000).toFixed(1)}秒）。元の「${src.name}」は非表示にしています`);
+  });
 }
 
 // ---------------- project state ----------------
@@ -1440,7 +1696,7 @@ function projectMeta() {
 }
 function applyProject(meta, subs, opts) {
   if (gizmoOn) setGizmo(false);
-  subtools = subs.map(s => { const r = newRec(s.name, s.pos, s.idx, s.mask, s.mirror); r.visible = s.visible !== false; return r; });
+  subtools = subs.map(recFromData);
   active = null;
   activate(subtools[Math.min(Math.max(0, meta.active | 0), subtools.length - 1)], true);
   undoStack.length = redoStack.length = 0; updateUndoButtons();
@@ -1466,7 +1722,7 @@ async function saveProject(saveAs = false) {
   if (stroke || gizmo.dragging) return false;
   flushNormals();
   let data;
-  try { data = await encodeProject(projectMeta(), subtools); } catch (err) { console.error(err); toast('保存に失敗しました: ' + err.message); return false; }
+  try { data = await encodeProject(projectMeta(), subtools.map(recData)); } catch (err) { console.error(err); toast('保存に失敗しました: ' + err.message); return false; }
   if (!native) {
     download(new Blob([data], { type:'application/octet-stream' }), `${projectName}.bpp`);
     setDirty(false); autosaveSoon(); return true;
@@ -1528,6 +1784,10 @@ function makeOBJ() {
     chunk += `o ${r.name.replace(/\s+/g, '_')}\n`;
     for (let i = 0; i < p.length; i += 3) { chunk += `v ${p[i].toFixed(6)} ${p[i+1].toFixed(6)} ${p[i+2].toFixed(6)}\n`; flush(); }
     for (let i = 0; i < n.length; i += 3) { chunk += `vn ${n[i].toFixed(4)} ${n[i+1].toFixed(4)} ${n[i+2].toFixed(4)}\n`; flush(); }
+    const qd = r.levels[r.lv].quads;
+    if (qd && qd.length / 2 === ix.length / 3) {
+      for (let k = 0; k < qd.length; k += 4) { const a = qd[k]+1+base, b = qd[k+1]+1+base, c = qd[k+2]+1+base, d = qd[k+3]+1+base; chunk += `f ${a}//${a} ${b}//${b} ${c}//${c} ${d}//${d}\n`; flush(); }
+    } else
     for (let f = 0; f < ix.length; f += 3) { const a = ix[f]+1+base, b = ix[f+1]+1+base, c = ix[f+2]+1+base; chunk += `f ${a}//${a} ${b}//${b} ${c}//${c}\n`; flush(); }
     base += vn;
   }
@@ -1588,7 +1848,7 @@ async function saveNow() {
   try {
     const data = {
       version: 2, t: Date.now(), meta: projectMeta(), projectPath, projectName, dirty,
-      subtools: subtools.map(r => ({ name: r.name, visible: r.visible, pos: r.pos, idx: r.idx, mask: r.mask, mirror: r.mirror })),
+      subtools: subtools.map(recData),
     };
     const db = await idb();
     await new Promise(res => { const tx = db.transaction('s', 'readwrite'); tx.objectStore('s').put(data, 'auto'); tx.oncomplete = tx.onerror = tx.onabort = res; });
@@ -1623,7 +1883,8 @@ function updateStats() {
   const b = BRUSHES.find(x => x.id === (held.shift ? 'smooth' : held.ctrl ? 'mask' : S.brush));
   let total = 0; for (const r of subtools) total += r.idx.length / 3;
   const many = subtools.length > 1;
-  $('stats').innerHTML = `${many && active ? `<em>${active.name.replace(/[<&]/g, '')}</em> · ` : ''}頂点 <em>${nV.toLocaleString()}</em> · ポリゴン <em>${nF.toLocaleString()}</em>${many ? `（全体 ${total.toLocaleString()}）` : ''} · <em>${b.name}</em>${S.sym ? ' · 対称X' : ''}`;
+  const lvTxt = active && active.levels.length > 1 ? ` · Lv <em>${active.lv + 1}/${active.levels.length}</em>` : '';
+  $('stats').innerHTML = `${many && active ? `<em>${active.name.replace(/[<&]/g, '')}</em>${lvTxt} · ` : lvTxt ? lvTxt.slice(3) + ' · ' : ''}頂点 <em>${nV.toLocaleString()}</em> · ポリゴン <em>${nF.toLocaleString()}</em>${many ? `（全体 ${total.toLocaleString()}）` : ''} · <em>${b.name}</em>${S.sym ? ' · 対称X' : ''}`;
 }
 
 // ---------------- UI wiring ----------------
@@ -1753,7 +2014,14 @@ $('chipSym').onclick = () => setSym(!S.sym);
 $('chipWire').onclick = () => setWire(!S.wire);
 $('chipFrame').onclick = frame;
 $('btnUndo').onclick = undo; $('btnRedo').onclick = redo;
-$('btnDivide').onclick = $('opDivide').onclick = () => busy(subdivide);
+$('btnDivide').onclick = $('opDivide').onclick = $('lvAdd').onclick = () => busy(addLevel);
+$('lvUp').onclick = () => busy(() => setLevel(active.lv + 1));
+$('lvDown').onclick = () => busy(() => setLevel(active.lv - 1));
+$('lvDelHigh').onclick = () => deleteHigher();
+$('lvDelLow').onclick = () => deleteLower();
+$('projGo').onclick = () => projectFrom(subtools.find(r => String(r.id) === $('projSrc').value));
+$('rtGo').onclick = () => retopo();
+$('rtSmooth').addEventListener('input', () => { $('rtSmoothOut').textContent = $('rtSmooth').value; });
 $('opSmooth').onclick = () => busy(() => smoothAll(Math.min(50, Math.max(1, +$('smoothIter').value || 3))));
 $('opSymm').onclick = () => busy(symmetrize);
 $('opCenter').onclick = () => busy(centerAll);
@@ -1805,6 +2073,17 @@ function renderSubtoolList() {
   });
   const i = subtools.indexOf(active);
   $('subCount').textContent = `${subtools.length}`;
+  // levels panel
+  const L = active.levels;
+  $('lvLabel').textContent = `${active.lv + 1} / ${L.length}`;
+  $('lvDown').disabled = $('lvDelLow').disabled = active.lv === 0;
+  $('lvUp').disabled = $('lvDelHigh').disabled = active.lv >= L.length - 1;
+  const ps = $('projSrc'), prev = ps.value;
+  ps.textContent = '';
+  for (const r of subtools) if (r !== active) { const o = document.createElement('option'); o.value = r.id; o.textContent = r.name + (r.visible ? '' : '（非表示）'); ps.appendChild(o); }
+  if ([...ps.options].some(o => o.value === prev)) ps.value = prev;
+  else { const hidden = subtools.find(r => r !== active && !r.visible); if (hidden) ps.value = hidden.id; }
+  ps.disabled = $('projGo').disabled = !ps.options.length;
   $('subDel').disabled = subtools.length < 2; $('subMerge').disabled = i >= subtools.length - 1;
   $('subUp').disabled = i <= 0; $('subDown').disabled = i >= subtools.length - 1;
 }
@@ -1835,7 +2114,7 @@ window.addEventListener('keydown', e => {
   const ctrl = e.ctrlKey || e.metaKey;
   if (ctrl && (e.key === 'z' || e.key === 'Z')) { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
   if (ctrl && (e.key === 'y' || e.key === 'Y')) { e.preventDefault(); redo(); return; }
-  if (ctrl && (e.key === 'd' || e.key === 'D')) { e.preventDefault(); busy(subdivide); return; }
+  if (ctrl && (e.key === 'd' || e.key === 'D')) { e.preventDefault(); busy(addLevel); return; }
   if (ctrl && (e.key === 'o' || e.key === 'O')) { e.preventDefault(); openModel(); return; }
   if (ctrl && (e.key === 's' || e.key === 'S')) { e.preventDefault(); saveProject(e.shiftKey); return; }
   if (ctrl && (e.key === 'n' || e.key === 'N')) { e.preventDefault(); newProject(); return; }
@@ -1849,6 +2128,7 @@ window.addEventListener('keydown', e => {
   else if (k === 'w') setWire(!S.wire);
   else if (k === 'f') frame();
   else if (k === 'g') setGizmo(!gizmoOn);
+  else if (k === 'd') busy(() => setLevel(active.lv + (e.shiftKey ? -1 : 1)));
   else if (e.key === 'Escape' && gizmoOn) setGizmo(false);
   syncHeld(e);
 });

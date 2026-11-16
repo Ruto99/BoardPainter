@@ -6,8 +6,9 @@
 import * as THREE from 'three';
 import { MeshBVH } from 'three-mesh-bvh';
 
-// Grid sampling for a given resolution (cells along the longest side)
-export function remeshGrid(pos, res) {
+// Grid sampling for a given resolution (cells along the longest side).
+// symX: lay the grid out mirror-symmetrically about x = 0 (so symmetric input gives a symmetric result)
+export function remeshGrid(pos, res, symX = false) {
   let mnx = Infinity, mny = Infinity, mnz = Infinity, mxx = -Infinity, mxy = -Infinity, mxz = -Infinity;
   for (let i = 0; i < pos.length; i += 3) {
     const x = pos[i], y = pos[i+1], z = pos[i+2];
@@ -17,6 +18,7 @@ export function remeshGrid(pos, res) {
   const pad = 2;
   const o = [mnx - pad * h, mny - pad * h, mnz - pad * h];
   const n = [Math.ceil((mxx - mnx) / h) + 2 * pad + 1, Math.ceil((mxy - mny) / h) + 2 * pad + 1, Math.ceil((mxz - mnz) / h) + 2 * pad + 1];
+  if (symX) { const half = Math.ceil(Math.max(Math.abs(mnx), Math.abs(mxx)) / h) + pad; n[0] = 2 * half + 1; o[0] = -half * h; }
   return { h, o, n, voxels: n[0] * n[1] * n[2] };
 }
 
@@ -101,8 +103,9 @@ export function surfaceNets(inside, G) {
     cellV[g] = P.length / 3;
     P.push(ox + (i + px / cnt) * h, oy + (j + py / cnt) * h, oz + (k + pz / cnt) * h);
   }
-  const I = [];
+  const I = [], Q = [];
   const quad = (a, b, c, d) => {
+    Q.push(a, b, c, d);
     // split along the shorter diagonal
     const dac = (P[a*3]-P[c*3])**2 + (P[a*3+1]-P[c*3+1])**2 + (P[a*3+2]-P[c*3+2])**2;
     const dbd = (P[b*3]-P[d*3])**2 + (P[b*3+1]-P[d*3+1])**2 + (P[b*3+2]-P[d*3+2])**2;
@@ -119,7 +122,7 @@ export function surfaceNets(inside, G) {
       if (here) quad(c0, c1, c2, c3); else quad(c0, c3, c2, c1);
     }
   }
-  return { pos: new Float32Array(P), idx: new Uint32Array(I) };
+  return { pos: new Float32Array(P), idx: new Uint32Array(I), quads: new Uint32Array(Q) };
 }
 
 function neighbors(nV, idx) {
@@ -228,4 +231,92 @@ export function remesh(src, opt) {
   }
   g.dispose();
   return { pos: P, idx: out.idx, mask, info: { h: G.h, grid: G.n } };
+}
+
+// Quad retopology: about `target` quads, evenly sized, snapped to the source surface.
+// The quads follow the voxel grid (no feature-aligned edge flow).
+export function quadRemesh(src, opt) {
+  let area = 0;
+  const p0 = src.pos, i0 = src.idx;
+  for (let f = 0; f < i0.length; f += 3) {
+    const A = i0[f]*3, B = i0[f+1]*3, C = i0[f+2]*3;
+    const ux = p0[B]-p0[A], uy = p0[B+1]-p0[A+1], uz = p0[B+2]-p0[A+2], wx = p0[C]-p0[A], wy = p0[C+1]-p0[A+1], wz = p0[C+2]-p0[A+2];
+    area += Math.hypot(uy*wz - uz*wy, uz*wx - ux*wz, ux*wy - uy*wx) / 2;
+  }
+  const h0 = Math.sqrt(1.5 * area / Math.max(50, opt.target));
+  const G0 = remeshGrid(p0, 1, opt.sym);
+  const res = Math.max(4, Math.round(G0.h / h0));
+  const G = remeshGrid(p0, res, opt.sym);
+  if (G.voxels > (opt.voxelLimit || 4e7)) return null;
+  const inside = voxelize(p0, i0, G);
+  const out = surfaceNets(inside, G);
+  const nV = out.pos.length / 3;
+  if (!nV) return null;
+  const P = out.pos, Q = out.quads;
+
+  // neighbors along quad edges only (no diagonals) -> relaxation makes quads square-ish
+  const nb = (() => {
+    const start = new Uint32Array(nV + 1);
+    for (let q = 0; q < Q.length; q += 4) for (let k = 0; k < 4; k++) start[Q[q+k] + 1] += 2;
+    for (let v = 0; v < nV; v++) start[v + 1] += start[v];
+    const raw = new Uint32Array(start[nV]), fill = start.slice(0, nV);
+    for (let q = 0; q < Q.length; q += 4) for (let k = 0; k < 4; k++) { const a = Q[q+k]; raw[fill[a]++] = Q[q+(k+1)%4]; raw[fill[a]++] = Q[q+(k+3)%4]; }
+    const seen = new Int32Array(nV).fill(-1), os = new Uint32Array(nV + 1), list = []; 
+    for (let v = 0; v < nV; v++) { os[v] = list.length; for (let j = start[v]; j < start[v + 1]; j++) { const u = raw[j]; if (seen[u] !== v) { seen[u] = v; list.push(u); } } }
+    os[nV] = list.length;
+    return { start: os, list: Uint32Array.from(list) };
+  })();
+
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(p0, 3));
+  g.setIndex(new THREE.BufferAttribute(i0.slice(), 1));
+  const bvh = new MeshBVH(g);
+  const q = new THREE.Vector3(), hit = { point: new THREE.Vector3(), distance: 0, faceIndex: 0 };
+  const snap = () => { for (let v = 0; v < nV; v++) { q.fromArray(P, v * 3); if (bvh.closestPointToPoint(q, hit, 0, G.h * 3)) hit.point.toArray(P, v * 3); } };
+
+  // mirror pairs (symmetric grid => symmetric vertices)
+  let mir = null;
+  if (opt.sym) {
+    const key = (x, y, z) => `${Math.round(x / G.h * 4)},${Math.round(y / G.h * 4)},${Math.round(z / G.h * 4)}`;
+    const map = new Map();
+    for (let v = 0; v < nV; v++) map.set(key(P[v*3], P[v*3+1], P[v*3+2]), v);
+    mir = new Int32Array(nV).fill(-1);
+    for (let v = 0; v < nV; v++) { const m = map.get(key(-P[v*3], P[v*3+1], P[v*3+2])); if (m !== undefined) mir[v] = m; }
+  }
+  const symmetrize = () => {
+    if (!mir) return;
+    for (let v = 0; v < nV; v++) {
+      const m = mir[v]; if (m < 0 || m < v) continue;
+      if (m === v) { P[v*3] = 0; continue; }
+      const x = (P[v*3] - P[m*3]) / 2, y = (P[v*3+1] + P[m*3+1]) / 2, z = (P[v*3+2] + P[m*3+2]) / 2;
+      P[v*3] = x; P[v*3+1] = y; P[v*3+2] = z; P[m*3] = -x; P[m*3+1] = y; P[m*3+2] = z;
+    }
+  };
+  const normals = () => {
+    const N = new Float32Array(P.length);
+    for (let k = 0; k < Q.length; k += 4) {
+      const a = Q[k]*3, b = Q[k+1]*3, c = Q[k+2]*3, d = Q[k+3]*3;
+      // quad normal from its diagonals
+      const ux = P[c]-P[a], uy = P[c+1]-P[a+1], uz = P[c+2]-P[a+2], wx = P[d]-P[b], wy = P[d+1]-P[b+1], wz = P[d+2]-P[b+2];
+      const x = uy*wz - uz*wy, y = uz*wx - ux*wz, z = ux*wy - uy*wx;
+      for (const t of [a, b, c, d]) { N[t] += x; N[t+1] += y; N[t+2] += z; }
+    }
+    return N;
+  };
+  snap(); symmetrize();
+  for (let it = 0; it < opt.smooth; it++) {
+    const N = normals(), np = P.slice();
+    for (let v = 0; v < nV; v++) {
+      const s0 = nb.start[v], s1 = nb.start[v + 1]; if (s1 === s0) continue;
+      let ax = 0, ay = 0, az = 0;
+      for (let j = s0; j < s1; j++) { const u = nb.list[j] * 3; ax += P[u]; ay += P[u+1]; az += P[u+2]; }
+      const c = s1 - s0, i = v * 3, l = Math.hypot(N[i], N[i+1], N[i+2]) || 1, nx = N[i] / l, ny = N[i+1] / l, nz = N[i+2] / l;
+      let dx = ax / c - P[i], dy = ay / c - P[i+1], dz = az / c - P[i+2];
+      const d = dx*nx + dy*ny + dz*nz; dx -= nx * d; dy -= ny * d; dz -= nz * d;
+      np[i] += dx * 0.5; np[i+1] += dy * 0.5; np[i+2] += dz * 0.5;
+    }
+    P.set(np); snap(); symmetrize();
+  }
+  g.dispose();
+  return { pos: P, idx: out.idx, quads: Q, info: { h: G.h } };
 }

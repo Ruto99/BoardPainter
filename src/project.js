@@ -6,7 +6,7 @@
 // The header lists every subtool and, for each typed array, its type, offset in the blob and element count.
 export const EXT = 'bpp';
 const MAGIC = 'BPPROJ';
-const VERSION = 1;
+const VERSION = 2;   // 2: arbitrary nested arrays (subdivision levels, quads); 1 is still readable
 const TYPES = { Float32Array, Uint32Array, Int32Array };
 const ARRAYS = ['pos', 'idx', 'mask', 'mirror'];
 
@@ -14,20 +14,24 @@ async function pipe(bytes, stream) {
   return new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(stream)).arrayBuffer());
 }
 
-// meta: plain JSON-safe object · subtools: [{ name, visible, pos, idx, mask, mirror }]
+// meta: plain JSON-safe object
+// subtools: [{ name, visible, pos, idx, mask, mirror, ...anything else }] — typed arrays may appear at any depth
+// (e.g. subdivision levels); they are moved into the binary blob and replaced by {$a: type, o: offset, n: count}.
 export async function encodeProject(meta, subtools) {
   const parts = [];
   let off = 0;
-  const subs = subtools.map(s => {
-    const e = { name: s.name, visible: s.visible !== false };
-    for (const k of ARRAYS) {
-      const a = s[k];
-      e[k] = { type: a.constructor.name, offset: off, length: a.length };
-      parts.push(new Uint8Array(a.buffer, a.byteOffset, a.byteLength));
-      off += a.byteLength;
+  const walk = x => {
+    if (ArrayBuffer.isView(x)) {
+      const d = { $a: x.constructor.name, o: off, n: x.length };
+      parts.push(new Uint8Array(x.buffer, x.byteOffset, x.byteLength));
+      off += x.byteLength; off += (4 - off % 4) % 4; parts.push(new Uint8Array((4 - x.byteLength % 4) % 4));
+      return d;
     }
-    return e;
-  });
+    if (Array.isArray(x)) return x.map(walk);
+    if (x && typeof x === 'object') { const o = {}; for (const k in x) if (x[k] !== undefined && k !== 'view') o[k] = walk(x[k]); return o; }
+    return x;
+  };
+  const subs = subtools.map(walk);
   const header = new TextEncoder().encode(JSON.stringify({ format: 'boardpainter-project', version: VERSION, ...meta, subtools: subs }));
   const pre = 6 + 2 + 4 + header.length, pad = (4 - pre % 4) % 4;
   const out = new Uint8Array(pre + pad + off), dv = new DataView(out.buffer);
@@ -51,15 +55,19 @@ export async function decodeProject(buffer) {
   const hlen = dv.getUint32(8, true);
   const header = JSON.parse(new TextDecoder().decode(bytes.subarray(12, 12 + hlen)));
   const pre = 12 + hlen, base = pre + (4 - pre % 4) % 4;
+  const arr = d => {
+    const T = TYPES[d.$a || d.type], o = d.$a ? d.o : d.offset, n = d.$a ? d.n : d.length;
+    if (!T) throw new Error('ファイルが壊れています');
+    const start = base + o, end = start + n * T.BYTES_PER_ELEMENT;
+    if (end > bytes.length) throw new Error('ファイルが壊れています（途中で切れています）');
+    return new T(bytes.slice(start, end).buffer);
+  };
+  const isDesc = x => x && typeof x === 'object' && (('$a' in x) || (ver === 1 && 'type' in x && 'offset' in x));
+  const walk = x => isDesc(x) ? arr(x) : Array.isArray(x) ? x.map(walk) : x && typeof x === 'object' ? Object.fromEntries(Object.entries(x).map(([k, v]) => [k, walk(v)])) : x;
   const subtools = (header.subtools || []).map((e, n) => {
-    const s = { name: String(e.name || `サブツール${n + 1}`), visible: e.visible !== false };
-    for (const k of ARRAYS) {
-      const d = e[k], T = d && TYPES[d.type];
-      if (!T) throw new Error('ファイルが壊れています');
-      const start = base + d.offset, end = start + d.length * T.BYTES_PER_ELEMENT;
-      if (end > bytes.length) throw new Error('ファイルが壊れています（途中で切れています）');
-      s[k] = new T(bytes.slice(start, end).buffer);
-    }
+    const s = walk(e);
+    s.name = String(s.name || `サブツール${n + 1}`); s.visible = s.visible !== false;
+    for (const k of ARRAYS) if (!(s[k] instanceof TYPES[k === 'pos' || k === 'mask' ? 'Float32Array' : k === 'idx' ? 'Uint32Array' : 'Int32Array'])) throw new Error('ファイルが壊れています');
     const nV = s.pos.length / 3;
     if (s.pos.length % 3 || s.idx.length % 3 || s.mask.length !== nV || s.mirror.length !== nV) throw new Error('ファイルが壊れています');
     for (let i = 0; i < s.idx.length; i++) if (s.idx[i] >= nV) throw new Error('ファイルが壊れています');
