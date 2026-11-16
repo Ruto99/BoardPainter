@@ -37,7 +37,7 @@ header{grid-column:1/-1;display:flex;align-items:center;gap:8px;padding:0 12px;b
 #btnPanel{display:none}
 
 nav.tools{grid-row:2;display:flex;flex-direction:column;gap:4px;padding:8px 6px;background:var(--panel);border-right:1px solid var(--line);overflow-y:auto}
-.tool{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;height:50px;border:1px solid transparent;border-radius:8px;background:transparent;cursor:pointer;flex:none}
+.tool{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;height:46px;border:1px solid transparent;border-radius:8px;background:transparent;cursor:pointer;flex:none}
 .tool b{font-family:var(--mono);font-size:15px;line-height:1}
 .tool span{font-size:9.5px;color:var(--muted);margin-top:4px;line-height:1}
 .tool i{position:absolute;top:3px;right:5px;font-style:normal;font-size:9px;color:var(--muted);font-family:var(--mono)}
@@ -45,6 +45,17 @@ nav.tools{grid-row:2;display:flex;flex-direction:column;gap:4px;padding:8px 6px;
 .tool.on{background:var(--panel-2);border-color:var(--accent)}
 .tool.on b{color:var(--accent)}
 .tool.temp{border-style:dashed}
+nav.tools hr{border:0;border-top:1px solid var(--line);margin:3px 6px;flex:none;width:calc(100% - 12px)}
+.alphas{display:grid;grid-template-columns:repeat(5,1fr);gap:5px;margin-bottom:6px}
+.alpha{position:relative;aspect-ratio:1;padding:0;border:1px solid var(--line);border-radius:5px;background:#000;cursor:pointer;overflow:hidden}
+.alpha canvas{width:100%;height:100%;display:block}
+.alpha:hover{border-color:#6a6b73}
+.alpha.on{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.alpha.custom::after{content:'';position:absolute;right:3px;top:3px;width:5px;height:5px;border-radius:50%;background:var(--accent)}
+#alphaSec.off .alphas,#alphaSec.off .alpha-opts{opacity:.35;pointer-events:none}
+#falloffCv{border:1px solid var(--line);border-radius:4px;background:var(--bg);flex:none}
+select.wide{width:100%}
+#lazyLine{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible}
 
 #view{position:relative;overflow:hidden;background:radial-gradient(ellipse at 50% 42%,#3c3d44 0%,#25262b 58%,#1b1c1f 100%)}
 #view canvas{position:absolute;inset:0;display:block;cursor:crosshair}
@@ -125,6 +136,7 @@ dl.keys dd{margin:0;color:var(--muted)}
       <button class="chip" id="chipFrame" title="F">全体表示</button>
     </div>
     <div id="toast"></div>
+    <svg id="lazyLine" aria-hidden="true"><line id="lazyL" stroke="#ffd49a" stroke-width="1.5" stroke-dasharray="3 3" opacity=".8" visibility="hidden"/></svg>
     <div class="overlay" id="stats"></div>
     <div class="overlay" id="hint">
       モデル上を<kbd>左ドラッグ</kbd>で造形 · 背景ドラッグで回転 · <kbd>右</kbd>で平行移動 · ホイールでズーム<br>
@@ -141,9 +153,28 @@ dl.keys dd{margin:0;color:var(--muted)}
       <input type="range" id="size" min="5" max="300" step="1" value="55">
       <div class="row"><label for="strength">強さ</label><output id="strOut"></output></div>
       <input type="range" id="strength" min="0.02" max="1" step="0.01" value="0.45">
+      <div class="row"><label for="falloff">減衰カーブ</label><canvas id="falloffCv" width="88" height="30" aria-hidden="true"></canvas></div>
+      <select id="falloff" class="wide" aria-label="減衰カーブ"></select>
+      <div class="row"><label for="strokeType">ストローク</label><select id="strokeType"><option value="dots">連続で塗る</option><option value="drag">ドラッグで配置</option></select></div>
+      <div class="row"><label for="spacing">間隔</label><output id="spacingOut"></output></div>
+      <input type="range" id="spacing" min="0.05" max="1.5" step="0.01" value="0.22">
+      <div class="row"><label for="lazy">手ぶれ補正 (px)</label><output id="lazyOut"></output></div>
+      <input type="range" id="lazy" min="0" max="120" step="1" value="0">
       <div class="row"><input type="checkbox" id="invert"><label for="invert">反転（掘る／マスク解除） <span class="note">Alt</span></label></div>
       <div class="row"><input type="checkbox" id="backface" checked><label for="backface">裏側に影響させない</label></div>
-      <p class="note">ペンタブレットの筆圧で強さが変わります。</p>
+      <p class="note">強さ・減衰カーブ・ストローク・アルファはブラシごとに記憶されます。ペンタブレットの筆圧で強さが変わります。</p>
+    </section>
+
+    <section id="alphaSec">
+      <h2>アルファ（ブラシの型）</h2>
+      <div class="alphas" id="alphaGrid" role="listbox" aria-label="アルファ"></div>
+      <div class="alpha-opts">
+        <div class="row"><input type="checkbox" id="alphaInv"><label for="alphaInv">アルファを反転</label></div>
+        <div class="row"><input type="checkbox" id="alphaFollow"><label for="alphaFollow">ストロークの向きに回転</label></div>
+      </div>
+      <div class="grid2"><button class="btn" id="alphaAdd">画像から追加…</button><button class="btn" id="alphaDel" disabled>選択中を削除</button></div>
+      <input type="file" id="alphaFile" accept="image/png,image/jpeg,image/webp,image/bmp,image/gif" multiple hidden>
+      <p class="note" id="alphaNote">白い所ほど強く効きます。画像はビューにドラッグ＆ドロップでも追加できます。細かい模様は「細分化」でポリゴンを増やすときれいに出ます。</p>
     </section>
 
     <section>
@@ -181,7 +212,7 @@ dl.keys dd{margin:0;color:var(--muted)}
     <section>
       <h2>ショートカット</h2>
       <dl class="keys">
-        <dt>1–9</dt><dd>ブラシ切り替え</dd>
+        <dt>1–9, 0</dt><dd>ブラシ切り替え</dd>
         <dt>[ / ]</dt><dd>ブラシサイズ</dd>
         <dt>Shift</dt><dd>押している間スムーズ</dd>
         <dt>Ctrl</dt><dd>押している間マスク</dd>
@@ -206,6 +237,7 @@ import { STLLoader } from 'three/addons/loaders/STLLoader.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { mergeVertices, mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { computeBoundsTree, acceleratedRaycast } from 'three-mesh-bvh';
+import { BUILTIN, builtinAlpha, imageToAlpha, sampleAlpha, drawAlpha, alphaRGBA, RES as ALPHA_RES } from './alphas.js';
 
 THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree;
 THREE.Mesh.prototype.raycast = acceleratedRaycast;
@@ -214,18 +246,61 @@ const $ = id => document.getElementById(id);
 const V3 = THREE.Vector3;
 
 // ---------------- settings ----------------
+// key: number-key shortcut · alpha: alphas / drag stamping apply · sep: divider above · def: per-brush defaults
 const BRUSHES = [
-  { id:'standard', short:'St', name:'スタンダード', desc:'盛り上げる（Altで掘る）' },
-  { id:'clay',     short:'Cl', name:'クレイ',       desc:'粘土を平らに盛る' },
-  { id:'inflate',  short:'In', name:'膨らませる',   desc:'面ごとに膨らむ' },
-  { id:'smooth',   short:'Sm', name:'スムーズ',     desc:'なめらかにする' },
-  { id:'flatten',  short:'Fl', name:'平らにする',   desc:'面を平面に揃える' },
-  { id:'pinch',    short:'Pi', name:'つまむ',       desc:'エッジを鋭くする' },
-  { id:'crease',   short:'Cr', name:'溝',           desc:'細い溝を彫る' },
-  { id:'move',     short:'Mv', name:'ムーブ',       desc:'つかんで大きく動かす' },
-  { id:'mask',     short:'Mk', name:'マスク',       desc:'塗った所を保護する' },
+  { id:'standard',  key:'1', short:'St', name:'スタンダード', desc:'盛り上げる（Altで掘る）', alpha:true },
+  { id:'clay',      key:'2', short:'Cl', name:'クレイ',       desc:'粘土を平らに盛る', alpha:true },
+  { id:'claybuild', key:'3', short:'CB', name:'クレイ盛り',   desc:'四角い粘土を盛り重ねる', alpha:true, def:{ alpha:'square', falloff:'flat', strength:0.5 } },
+  { id:'inflate',   key:'4', short:'In', name:'膨らませる',   desc:'面ごとに膨らむ', alpha:true },
+  { id:'layer',     key:'',  short:'Ly', name:'レイヤー',     desc:'一定の高さで盛る（重ねても高くならない）', alpha:true, def:{ falloff:'flat', strength:0.4 } },
+  { id:'smooth',    key:'5', short:'Sm', name:'スムーズ',     desc:'なめらかにする', alpha:false, sep:true },
+  { id:'polish',    key:'',  short:'Po', name:'ポリッシュ',   desc:'細かい凹凸を削って面を磨く', alpha:true, def:{ strength:0.6 } },
+  { id:'flatten',   key:'6', short:'Fl', name:'平らにする',   desc:'面を平面に揃える', alpha:true },
+  { id:'trim',      key:'',  short:'Tr', name:'トリム',       desc:'出っ張りだけ平らに削る（Altで凹みを埋める）', alpha:true, def:{ falloff:'flat', strength:0.5 } },
+  { id:'dam',       key:'7', short:'Dm', name:'シャープ溝',   desc:'鋭いV字の溝を彫る（Altで尾根）', alpha:false, sep:true, def:{ falloff:'sharp', strength:0.5 } },
+  { id:'crease',    key:'',  short:'Cr', name:'溝',           desc:'丸みのある溝を彫る', alpha:true },
+  { id:'pinch',     key:'',  short:'Pi', name:'つまむ',       desc:'エッジを鋭くする', alpha:false },
+  { id:'move',      key:'8', short:'Mv', name:'ムーブ',       desc:'つかんで大きく動かす', alpha:false, sep:true },
+  { id:'snake',     key:'0', short:'Sh', name:'引き伸ばし',   desc:'ドラッグした方向へ伸ばす（角・触手）', alpha:false, def:{ strength:0.8 } },
+  { id:'mask',      key:'9', short:'Mk', name:'マスク',       desc:'塗った所を保護する', alpha:true, sep:true },
 ];
-const S = { brush:'standard', size:55, strength:0.45, invert:false, backface:true, sym:true, wire:false };
+const BRUSH = Object.fromEntries(BRUSHES.map(b => [b.id, b]));
+const canDrag = id => BRUSH[id].alpha && id !== 'layer';
+
+// falloff: u = 1 at the brush center, 0 at the edge
+const sstep = t => t * t * (3 - 2 * t);
+const FALLOFFS = [
+  { id:'smooth', name:'なめらか',       f: u => sstep(u) },
+  { id:'sharp',  name:'とがり（細い）', f: u => u * u * u },
+  { id:'flat',   name:'平ら（硬い縁）', f: u => u >= 0.3 ? 1 : sstep(u / 0.3) },
+  { id:'linear', name:'直線',           f: u => u },
+  { id:'dome',   name:'ドーム（太い）', f: u => Math.sqrt(1 - (1 - u) * (1 - u)) },
+];
+const FO = Object.fromEntries(FALLOFFS.map(x => [x.id, x.f]));
+
+const S = { brush:'standard', size:55, spacing:0.22, lazy:0, invert:false, backface:true, sym:true, wire:false };
+const BASE_CFG = { strength:0.45, falloff:'smooth', stroke:'dots', alpha:'none', alphaInv:false, follow:false };
+const BS = Object.fromEntries(BRUSHES.map(b => [b.id, { ...BASE_CFG, ...(b.def || {}) }]));
+try {
+  const saved = JSON.parse(localStorage.getItem('bp-brushes') || 'null');
+  if (saved) {
+    for (const id in saved.bs || {}) if (BS[id]) Object.assign(BS[id], saved.bs[id]);
+    for (const k of ['size', 'spacing', 'lazy', 'brush']) if (saved[k] !== undefined) S[k] = saved[k];
+  }
+} catch { /* ignore broken prefs */ }
+if (!BRUSH[S.brush]) S.brush = 'standard';
+let prefsT = 0;
+function saveBrushPrefs() {
+  clearTimeout(prefsT);
+  prefsT = setTimeout(() => { try { localStorage.setItem('bp-brushes', JSON.stringify({ bs:BS, size:S.size, spacing:S.spacing, lazy:S.lazy, brush:S.brush })); } catch {} }, 300);
+}
+
+// alphas: built-in ids, or 'c:<n>' for images the user added
+const customAlphas = [];
+function getAlpha(id) {
+  if (id && id.startsWith('c:')) { const c = customAlphas.find(a => a.id === id); return c ? c.data : null; }
+  return builtinAlpha(id);
+}
 
 // ---------------- three setup ----------------
 const view = $('view');
@@ -259,6 +334,29 @@ const ringMat = new THREE.MeshBasicMaterial({ color:0xffd49a, transparent:true, 
 const ring = new THREE.Mesh(ringGeo, ringMat); ring.renderOrder = 999; ring.visible = false; ring.raycast = () => {};
 const ring2 = new THREE.Mesh(ringGeo, ringMat.clone()); ring2.material.opacity = 0.35; ring2.renderOrder = 999; ring2.visible = false; ring2.raycast = () => {};
 scene.add(ring, ring2);
+
+// alpha preview drawn on the surface under the cursor
+const alphaTex = new THREE.DataTexture(new Uint8Array(ALPHA_RES * ALPHA_RES * 4), ALPHA_RES, ALPHA_RES);
+alphaTex.magFilter = alphaTex.minFilter = THREE.LinearFilter;
+const quadGeo = new THREE.PlaneGeometry(2, 2);
+function makeQuad(op) {
+  const q = new THREE.Mesh(quadGeo, new THREE.MeshBasicMaterial({ map:alphaTex, color:0xffd49a, transparent:true, opacity:op, depthTest:false, depthWrite:false, side:THREE.DoubleSide }));
+  q.renderOrder = 998; q.visible = false; q.matrixAutoUpdate = false; q.raycast = () => {}; scene.add(q); return q;
+}
+const quad = makeQuad(0.55), quad2 = makeQuad(0.25);
+let alphaTexKey = '';
+function syncAlphaTex(id, inv) {
+  const a = getAlpha(id); if (!a) return false;
+  const key = id + '|' + inv;
+  if (key !== alphaTexKey) { alphaTexKey = key; alphaTex.image.data.set(alphaRGBA(a, inv)); alphaTex.needsUpdate = true; }
+  return true;
+}
+const _m4 = new THREE.Matrix4(), _bu = new V3(), _bv = new V3(), _bn = new V3();
+function placeQuad(q, P, N, F, r) {
+  _bu.set(F.ux, F.uy, F.uz).multiplyScalar(r); _bv.set(F.vx, F.vy, F.vz).multiplyScalar(r); _bn.copy(N).multiplyScalar(r);
+  q.matrix.makeBasis(_bu, _bv, _bn).setPosition(P.x + N.x * r * 0.03, P.y + N.y * r * 0.03, P.z + N.z * r * 0.03);
+  q.matrixWorldNeedsUpdate = true; q.visible = true;
+}
 
 // ---------------- mesh state ----------------
 let geo, mesh, wireMesh;
@@ -409,8 +507,10 @@ function redo() { if (!redoStack.length || stroke) return; const e = redoStack.p
 function updateUndoButtons() { $('btnUndo').disabled = !undoStack.length; $('btnRedo').disabled = !redoStack.length; }
 
 // ---------------- brushes ----------------
-function gather(P, N0, r) {
-  const r2 = r * r, px = P.x, py = P.y, pz = P.z, bf = S.backface;
+// F: dab frame { ux..uz / vx..vz: alpha axes in the tangent plane, A: alpha or null, inv, fo: falloff, bf: backface test, sd*: stroke direction }
+function gather(P, N0, r, F) {
+  const r2 = r * r, px = P.x, py = P.y, pz = P.z;
+  const bf = F ? F.bf : S.backface, fo = F ? F.fo : FO.smooth, A = F ? F.A : null, inv = F ? F.inv : false;
   let n = 0;
   for (let v = 0, i = 0; v < nV; v++, i += 3) {
     const dx = pos[i] - px; if (dx > r || dx < -r) continue;
@@ -418,15 +518,21 @@ function gather(P, N0, r) {
     const dz = pos[i+2] - pz; if (dz > r || dz < -r) continue;
     const d2 = dx*dx + dy*dy + dz*dz; if (d2 >= r2) continue;
     if (bf && nrm[i]*N0.x + nrm[i+1]*N0.y + nrm[i+2]*N0.z < -0.1) continue;
-    const u = 1 - Math.sqrt(d2) / r;
-    selIds[n] = v; selW[n] = u * u * (3 - 2 * u); n++;
+    let w = fo(1 - Math.sqrt(d2) / r);
+    if (A) {
+      let a = sampleAlpha(A, (dx*F.ux + dy*F.uy + dz*F.uz) / r, (dx*F.vx + dy*F.vy + dz*F.vz) / r);
+      if (inv) a = 1 - a;
+      w *= a; if (w < 1e-4) continue;
+    }
+    selIds[n] = v; selW[n] = w; n++;
   }
   return n;
 }
 
-function applyDab(P, N0, r, s, dir, brush) {
-  const n = gather(P, N0, r);
+function applyDab(P, N0, r, s, dir, brush, F) {
+  const n = gather(P, N0, r, F);
   if (!n) return;
+  const rec = stroke && stroke.drag ? stroke.drag.rec : null;
   let nx = 0, ny = 0, nz = 0, cx = 0, cy = 0, cz = 0, ws = 0;
   for (let k = 0; k < n; k++) {
     const i = selIds[k] * 3, w = selW[k];
@@ -442,11 +548,13 @@ function applyDab(P, N0, r, s, dir, brush) {
       const v = selIds[k];
       mask[v] = Math.min(1, Math.max(0, mask[v] + selW[k] * Math.max(s, 0.25) * 2.2 * dir));
       setColor(v);
+      if (rec) rec.push(v);
     }
     colorDirty = gpuDirty = true;
     return;
   }
 
+  const L = stroke && stroke.layer;
   for (let k = 0; k < n; k++) {
     const v = selIds[k], i = v * 3;
     const w = selW[k] * (1 - mask[v]);
@@ -455,23 +563,49 @@ function applyDab(P, N0, r, s, dir, brush) {
     switch (brush) {
       case 'standard': { const a = r * 0.035 * s * dir * w; x += nx*a; y += ny*a; z += nz*a; break; }
       case 'inflate':  { const a = r * 0.03 * s * dir * w; x += nrm[i]*a; y += nrm[i+1]*a; z += nrm[i+2]*a; break; }
-      case 'clay': {
-        const off = dir * r * 0.09 * s;
+      case 'clay':
+      case 'claybuild': {
+        const build = brush === 'claybuild';
+        const off = dir * r * (build ? 0.13 : 0.09) * s;
         const d = (x-cx)*nx + (y-cy)*ny + (z-cz)*nz;
         const delta = off - d;
-        if (dir > 0 ? delta > 0 : delta < 0) { const a = delta * w * 0.35; x += nx*a; y += ny*a; z += nz*a; }
+        if (dir > 0 ? delta > 0 : delta < 0) { const a = delta * w * (build ? 0.5 : 0.35); x += nx*a; y += ny*a; z += nz*a; }
+        break;
+      }
+      case 'layer': {
+        // height is fixed for the whole stroke, so overlapping dabs don't pile up
+        const h = L.h * s * dir * w, acc = L.acc;
+        if (dir > 0 ? h > acc[v] : h < acc[v]) acc[v] = h;
+        x = L.start[i] + L.sn[i] * acc[v]; y = L.start[i+1] + L.sn[i+1] * acc[v]; z = L.start[i+2] + L.sn[i+2] * acc[v];
         break;
       }
       case 'flatten': {
         const d = (x-cx)*nx + (y-cy)*ny + (z-cz)*nz;
         const a = -d * w * s * 0.45 * (dir > 0 ? 1 : -1); x += nx*a; y += ny*a; z += nz*a; break;
       }
-      case 'smooth': {
+      case 'trim': {
+        const d = (x-cx)*nx + (y-cy)*ny + (z-cz)*nz;
+        if (dir > 0 ? d > 0 : d < 0) { const a = -d * w * Math.min(1, s * 0.9); x += nx*a; y += ny*a; z += nz*a; }
+        break;
+      }
+      case 'smooth':
+      case 'polish': {
         const s0 = vvStart[v], s1 = vvStart[v + 1]; if (s1 === s0) break;
         let ax = 0, ay = 0, az = 0;
         for (let j = s0; j < s1; j++) { const u = vvList[j] * 3; ax += pos[u]; ay += pos[u+1]; az += pos[u+2]; }
-        const c = s1 - s0, f = Math.min(1, w * Math.max(s, 0.15) * 1.1);
-        x += (ax/c - x) * f; y += (ay/c - y) * f; z += (az/c - z) * f; break;
+        const c = s1 - s0;
+        if (brush === 'smooth') {
+          const f = Math.min(1, w * Math.max(s, 0.15) * 1.1);
+          x += (ax/c - x) * f; y += (ay/c - y) * f; z += (az/c - z) * f;
+        } else {
+          // only remove the height component (keeps edges/silhouette), then pull gently toward the local plane
+          const ex = ax/c - x, ey = ay/c - y, ez = az/c - z;
+          const dn = (ex*nrm[i] + ey*nrm[i+1] + ez*nrm[i+2]) * Math.min(1, w * s * 0.9);
+          x += nrm[i]*dn; y += nrm[i+1]*dn; z += nrm[i+2]*dn;
+          const d = (x-cx)*nx + (y-cy)*ny + (z-cz)*nz, a = -d * w * s * 0.12;
+          x += nx*a; y += ny*a; z += nz*a;
+        }
+        break;
       }
       case 'pinch': {
         let tx = P.x - x, ty = P.y - y, tz = P.z - z;
@@ -485,9 +619,18 @@ function applyDab(P, N0, r, s, dir, brush) {
         const d = tx*nx + ty*ny + tz*nz; tx -= nx*d; ty -= ny*d; tz -= nz*d;
         const b = w * s * 0.18; x += tx*b; y += ty*b; z += tz*b; break;
       }
+      case 'dam': {
+        // deep narrow cut + pull toward the stroke's center line (not toward a point) => crisp V groove
+        const a = -r * 0.16 * s * dir * w; x += nx*a; y += ny*a; z += nz*a;
+        let tx = P.x - x, ty = P.y - y, tz = P.z - z;
+        const d = tx*nx + ty*ny + tz*nz; tx -= nx*d; ty -= ny*d; tz -= nz*d;
+        if (F) { const e = tx*F.sdx + ty*F.sdy + tz*F.sdz; tx -= F.sdx*e; ty -= F.sdy*e; tz -= F.sdz*e; }
+        const b = Math.min(0.9, w * s * 0.5); x += tx*b; y += ty*b; z += tz*b; break;
+      }
     }
     pos[i] = x; pos[i+1] = y; pos[i+2] = z;
     touch(v);
+    if (rec) rec.push(v);
   }
 }
 
@@ -497,23 +640,43 @@ const ndc = new THREE.Vector2();
 let stroke = null;
 const held = { shift:false, ctrl:false, alt:false };
 
-function setNDC(e) { const b = canvas.getBoundingClientRect(); ndc.set(((e.clientX - b.left) / b.width) * 2 - 1, -((e.clientY - b.top) / b.height) * 2 + 1); }
+function setNDCxy(x, y) { const b = canvas.getBoundingClientRect(); ndc.set(((x - b.left) / b.width) * 2 - 1, -((y - b.top) / b.height) * 2 + 1); }
+function setNDC(e) { setNDCxy(e.clientX, e.clientY); }
 function pick() { if (!mesh) return null; ensureBVH(); raycaster.setFromCamera(ndc, camera); const h = raycaster.intersectObject(mesh, false); return h.length ? h[0] : null; }
 function hitNormal(h) {
   const f = h.faceIndex * 3, v = new V3(faceN[f], faceN[f+1], faceN[f+2]);
   return v.lengthSq() > 0 ? v.normalize() : camera.position.clone().sub(h.point).normalize();
 }
-function worldRadius(P) {
-  const d = camera.position.distanceTo(P);
-  return S.size * 2 * d * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) / Math.max(1, canvas.clientHeight);
-}
+function worldPerPx(P) { return 2 * camera.position.distanceTo(P) * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) / Math.max(1, canvas.clientHeight); }
+function worldRadius(P) { return S.size * worldPerPx(P); }
 const pres = e => e.pointerType === 'pen' && e.pressure > 0 ? Math.max(0.08, e.pressure) : 1;
 function effectiveBrush(e) { if (e.shiftKey) return 'smooth'; if (e.ctrlKey || e.metaKey) return 'mask'; return S.brush; }
+function camAxis(col) { const e = camera.matrixWorld.elements, k = col * 4; return new V3(e[k], e[k+1], e[k+2]); }
 
-function dabSym(P, N, r) {
-  const s = S.strength * stroke.pressure;
-  applyDab(P, N, r, s, stroke.dir, stroke.brush);
-  if (S.sym) applyDab(new V3(-P.x, P.y, P.z), new V3(-N.x, N.y, N.z), r, s, stroke.dir, stroke.brush);
+// Alpha axes on the tangent plane at N; the alpha's "up" follows `ref` (camera up, stroke or drag direction)
+function makeFrame(N, ref, cfg, brush) {
+  let v = ref.clone().addScaledVector(N, -ref.dot(N));
+  if (v.lengthSq() < 1e-10) v = camAxis(0).addScaledVector(N, -camAxis(0).dot(N));
+  v.normalize();
+  const u = new V3().crossVectors(v, N);
+  return {
+    ux:u.x, uy:u.y, uz:u.z, vx:v.x, vy:v.y, vz:v.z,
+    A: BRUSH[brush].alpha ? getAlpha(cfg.alpha) : null, inv: cfg.alphaInv,
+    fo: FO[cfg.falloff] || FO.smooth, bf: S.backface, sdx:0, sdy:0, sdz:0,
+  };
+}
+const mirrorFrame = F => ({ ...F, ux:-F.ux, vx:-F.vx, sdx:-F.sdx });
+
+function dabSym(P, N, r, ref, reps = 1) {
+  const st = stroke, s = st.cfg.strength * st.pressure;
+  const F = makeFrame(N, ref || (st.cfg.follow && st.dirVec ? st.dirVec : st.refUp), st.cfg, st.brush);
+  if (st.dirVec) { F.sdx = st.dirVec.x; F.sdy = st.dirVec.y; F.sdz = st.dirVec.z; }
+  const mP = new V3(-P.x, P.y, P.z), mN = new V3(-N.x, N.y, N.z), mF = mirrorFrame(F);
+  for (let k = 0; k < reps; k++) {
+    applyDab(P, N, r, s, st.dir, st.brush, F);
+    if (S.sym) applyDab(mP, mN, r, s, st.dir, st.brush, mF);
+  }
+  return F;
 }
 
 function onDown(e) {
@@ -524,35 +687,65 @@ function onDown(e) {
   controls.enabled = false;
   e.preventDefault();
   canvas.setPointerCapture(e.pointerId);
-  const brush = effectiveBrush(e);
+  const brush = effectiveBrush(e), cfg = BS[brush];
   const dir = (S.invert ? -1 : 1) * (e.altKey ? -1 : 1);
   pushUndo();
-  stroke = { brush, dir, last:null, pressure:pres(e), id:e.pointerId };
+  const top = undoStack[undoStack.length - 1];
+  stroke = { brush, cfg, dir, last:null, pressure:pres(e), id:e.pointerId, refUp:camAxis(1), dirVec:null, lazy:{ x:e.clientX, y:e.clientY } };
   const P = hit.point.clone(), N = hitNormal(hit), r = worldRadius(P);
   if (brush === 'move') startMove(P, N, r);
-  else { stroke.last = P.clone(); dabSym(P, N, r); flushNormals(); }
-  updateCursor(stroke.brush === 'move' ? null : hit);
+  else if (brush === 'snake') stroke.sn = { P, N };
+  else if (cfg.stroke === 'drag' && canDrag(brush)) stroke.drag = { P, N, x0:e.clientX, y0:e.clientY, start:top.pos, startMask:top.mask, rec:[] };
+  else {
+    if (brush === 'layer') stroke.layer = { acc:new Float32Array(nV), start:top.pos, sn:nrm.slice(), h:r * 0.12 };
+    stroke.last = P.clone(); dabSym(P, N, r); flushNormals();
+  }
+  updateCursor(stroke.drag || brush === 'move' || brush === 'snake' ? null : hit);
 }
 
 function strokeTo(hit) {
   if (!hit) { stroke.last = null; return; }
   const P = hit.point, N = hitNormal(hit), r = worldRadius(P);
   if (!stroke.last) { stroke.last = P.clone(); dabSym(P, N, r); return; }
-  const d = stroke.last.distanceTo(P), sp = Math.max(r * 0.22, 1e-6);
+  const d = stroke.last.distanceTo(P), sp = Math.max(r * S.spacing, 1e-6);
   if (d < sp) return;
   const steps = Math.floor(d / sp);
   const dv = P.clone().sub(stroke.last).normalize();
+  stroke.dirVec = dv;
   const n = Math.min(steps, 64);
   for (let i = 1; i <= n; i++) dabSym(stroke.last.clone().addScaledVector(dv, sp * i * (steps / n)), N, r);
   stroke.last.addScaledVector(dv, sp * steps);
 }
 
+// "drag to place": one stamp whose size and rotation follow the drag; re-stamped from the original shape on every move
+function dragStamp(e) {
+  const D = stroke.drag, dx = e.clientX - D.x0, dy = e.clientY - D.y0, px = Math.hypot(dx, dy);
+  for (const v of D.rec) {
+    const i = v * 3; pos[i] = D.start[i]; pos[i+1] = D.start[i+1]; pos[i+2] = D.start[i+2];
+    if (mask[v] !== D.startMask[v]) { mask[v] = D.startMask[v]; setColor(v); colorDirty = true; }
+    touch(v);
+  }
+  D.rec.length = 0; gpuDirty = true;
+  quad.visible = quad2.visible = false;
+  if (px < 4) return;
+  const r = px * worldPerPx(D.P);
+  // screen drag direction -> world (screen y grows downward)
+  const ref = camAxis(0).multiplyScalar(dx).addScaledVector(camAxis(1), -dy).normalize();
+  stroke.pressure = pres(e);
+  const F = dabSym(D.P, D.N, r, ref, 4);
+  if (F.A && syncAlphaTex(stroke.cfg.alpha, stroke.cfg.alphaInv)) {
+    placeQuad(quad, D.P, D.N, F, r);
+    if (S.sym) placeQuad(quad2, new V3(-D.P.x, D.P.y, D.P.z), new V3(-D.N.x, D.N.y, D.N.z), mirrorFrame(F), r);
+  }
+}
+
 function startMove(P, N, r) {
   const wa = new Float32Array(nV), wb = new Float32Array(nV), list = [];
-  let n = gather(P, N, r);
+  const F = { fo: FO[BS.move.falloff] || FO.smooth, bf: S.backface, A: null };
+  let n = gather(P, N, r, F);
   for (let k = 0; k < n; k++) { const v = selIds[k]; wa[v] = selW[k] * (1 - mask[v]); list.push(v); }
   if (S.sym) {
-    n = gather(new V3(-P.x, P.y, P.z), new V3(-N.x, N.y, N.z), r);
+    n = gather(new V3(-P.x, P.y, P.z), new V3(-N.x, N.y, N.z), r, F);
     for (let k = 0; k < n; k++) { const v = selIds[k]; if (wa[v] === 0 && wb[v] === 0) list.push(v); wb[v] = selW[k] * (1 - mask[v]); }
   }
   const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(camera.getWorldDirection(new V3()), P);
@@ -570,12 +763,50 @@ function moveTo() {
   }
 }
 
+// snake hook: the brush tip travels with the cursor, dragging the surface along and re-grabbing as it goes
+function snakeTo() {
+  const m = stroke.sn, P1 = new V3();
+  const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(camera.getWorldDirection(new V3()), m.P);
+  raycaster.setFromCamera(ndc, camera);
+  if (!raycaster.ray.intersectPlane(plane, P1)) return;
+  const d = P1.sub(m.P), r = worldRadius(m.P);
+  if (d.length() < r * 0.04) return;
+  const k = Math.min(1, stroke.cfg.strength * stroke.pressure * 1.25);
+  const F = { fo: FO[stroke.cfg.falloff] || FO.smooth, bf: false, A: null };
+  const pull = (P, N, dx, dy, dz) => {
+    const n = gather(P, N, r, F);
+    for (let j = 0; j < n; j++) { const v = selIds[j], i = v * 3, w = selW[j] * (1 - mask[v]) * k; pos[i] += dx*w; pos[i+1] += dy*w; pos[i+2] += dz*w; touch(v); }
+  };
+  pull(m.P, m.N, d.x, d.y, d.z);
+  if (S.sym) pull(new V3(-m.P.x, m.P.y, m.P.z), new V3(-m.N.x, m.N.y, m.N.z), -d.x, d.y, d.z);
+  m.P.addScaledVector(d, k);
+}
+
+const lazyL = $('lazyL');
+function showLazy(L, e) {
+  if (!L) { lazyL.setAttribute('visibility', 'hidden'); return; }
+  const b = view.getBoundingClientRect();
+  lazyL.setAttribute('x1', L.x - b.left); lazyL.setAttribute('y1', L.y - b.top);
+  lazyL.setAttribute('x2', e.clientX - b.left); lazyL.setAttribute('y2', e.clientY - b.top);
+  lazyL.setAttribute('visibility', 'visible');
+}
+
 canvas.addEventListener('pointermove', e => {
   setNDC(e);
   if (stroke) {
     if (e.pointerId !== stroke.id) return;
     stroke.pressure = pres(e);
+    if (stroke.drag) { dragStamp(e); flushNormals(); return; }
     if (stroke.brush === 'move') { moveTo(); flushNormals(); updateCursor(null); return; }
+    if (S.lazy > 0) {
+      // lazy mouse: the brush trails the pointer on a string of length S.lazy px
+      const L = stroke.lazy, dx = e.clientX - L.x, dy = e.clientY - L.y, d = Math.hypot(dx, dy);
+      showLazy(L, e);
+      if (d <= S.lazy) return;
+      L.x += dx * (d - S.lazy) / d; L.y += dy * (d - S.lazy) / d;
+      setNDCxy(L.x, L.y); showLazy(L, e);
+    }
+    if (stroke.brush === 'snake') { snakeTo(); flushNormals(); updateCursor(null); return; }
     const hit = pick();
     strokeTo(hit); flushNormals(); updateCursor(hit);
     return;
@@ -585,6 +816,7 @@ canvas.addEventListener('pointermove', e => {
 });
 function endStroke() {
   controls.enabled = true;
+  showLazy(null);
   if (!stroke) return;
   stroke = null;
   flushNormals(); geo.computeBoundingSphere();
@@ -592,10 +824,11 @@ function endStroke() {
 }
 canvas.addEventListener('pointerup', endStroke);
 canvas.addEventListener('pointercancel', endStroke);
-canvas.addEventListener('pointerleave', () => { if (!stroke) { ring.visible = ring2.visible = false; } });
+canvas.addEventListener('pointerleave', () => { if (!stroke) { ring.visible = ring2.visible = quad.visible = quad2.visible = false; } });
 
 const ZAX = new V3(0, 0, 1);
 function updateCursor(hit) {
+  if (!stroke || !stroke.drag) quad.visible = quad2.visible = false;
   if (!hit) { ring.visible = ring2.visible = false; return; }
   const P = hit.point, N = hitNormal(hit), r = worldRadius(P);
   const b = stroke ? stroke.brush : (held.shift ? 'smooth' : held.ctrl ? 'mask' : S.brush);
@@ -606,7 +839,16 @@ function updateCursor(hit) {
     const mN = new V3(-N.x, N.y, N.z);
     ring2.position.set(-P.x, P.y, P.z).addScaledVector(mN, r * 0.02); ring2.quaternion.setFromUnitVectors(ZAX, mN); ring2.scale.setScalar(r); ring2.visible = true;
   } else ring2.visible = false;
+  // alpha footprint preview (dots mode; drag mode previews while dragging)
+  const cfg = BS[b];
+  if (BRUSH[b].alpha && cfg.alpha !== 'none' && syncAlphaTex(cfg.alpha, cfg.alphaInv)) {
+    const ref = cfg.follow && stroke && stroke.dirVec ? stroke.dirVec : camAxis(1);
+    const F = makeFrame(N, ref, cfg, b);
+    quadMat(b); placeQuad(quad, P, N, F, r);
+    if (S.sym) placeQuad(quad2, new V3(-P.x, P.y, P.z), new V3(-N.x, N.y, N.z), mirrorFrame(F), r);
+  }
 }
+function quadMat(b) { const c = b === 'mask' ? 0x9fc0f0 : 0xffd49a; quad.material.color.set(c); quad2.material.color.set(c); }
 
 // ---------------- one-click operations ----------------
 function busy(fn) {
@@ -855,29 +1097,123 @@ function updateStats() {
 
 // ---------------- UI wiring ----------------
 const tools = $('tools');
-BRUSHES.forEach((b, i) => {
+BRUSHES.forEach(b => {
+  if (b.sep) tools.appendChild(document.createElement('hr'));
   const el = document.createElement('button');
-  el.className = 'tool'; el.dataset.id = b.id; el.title = `${b.name}（${i + 1}）`;
-  el.innerHTML = `<i>${i + 1}</i><b>${b.short}</b><span>${b.name}</span>`;
+  el.className = 'tool'; el.dataset.id = b.id; el.title = b.key ? `${b.name}（${b.key}）` : b.name;
+  el.innerHTML = `<i>${b.key}</i><b>${b.short}</b><span>${b.name}</span>`;
   el.onclick = () => selectBrush(b.id);
   tools.appendChild(el);
 });
-function selectBrush(id) { S.brush = id; refreshBrushUI(); }
+function selectBrush(id) { S.brush = id; refreshBrushUI(); saveBrushPrefs(); }
+const cur = () => BS[S.brush];
+
+$('falloff').innerHTML = FALLOFFS.map(f => `<option value="${f.id}">${f.name}</option>`).join('');
+function drawFalloff(id) {
+  const cv = $('falloffCv'), g = cv.getContext('2d'), W = cv.width, H = cv.height, f = FO[id] || FO.smooth;
+  g.clearRect(0, 0, W, H);
+  g.beginPath();
+  for (let x = 0; x <= W; x++) { const t = Math.abs(x / W * 2 - 1), y = H - 3 - f(1 - t) * (H - 6); x ? g.lineTo(x, y) : g.moveTo(x, y); }
+  g.lineTo(W, H); g.lineTo(0, H); g.closePath();
+  g.fillStyle = 'rgba(217,163,91,.22)'; g.fill();
+  g.strokeStyle = '#d9a35b'; g.lineWidth = 1.5; g.stroke();
+}
+
+// alpha grid
+const alphaGrid = $('alphaGrid');
+function renderAlphaGrid() {
+  alphaGrid.textContent = '';
+  const items = [...BUILTIN.map(a => ({ id:a.id, name:a.name, custom:false })), ...customAlphas.map(a => ({ id:a.id, name:a.name, custom:true }))];
+  for (const it of items) {
+    const btn = document.createElement('button');
+    btn.className = 'alpha' + (it.custom ? ' custom' : ''); btn.dataset.id = it.id; btn.title = it.name;
+    btn.setAttribute('role', 'option'); btn.setAttribute('aria-label', it.name);
+    const cv = document.createElement('canvas'); cv.width = cv.height = 64;
+    drawAlpha(getAlpha(it.id), cv);
+    btn.appendChild(cv);
+    btn.onclick = () => { cur().alpha = it.id; refreshBrushUI(); saveBrushPrefs(); };
+    alphaGrid.appendChild(btn);
+  }
+  syncAlphaGrid();
+}
+function syncAlphaGrid() {
+  const id = getAlpha(cur().alpha) || cur().alpha === 'none' ? cur().alpha : 'none';
+  for (const el of alphaGrid.children) { const on = el.dataset.id === id; el.classList.toggle('on', on); el.setAttribute('aria-selected', on); }
+  $('alphaDel').disabled = !id.startsWith('c:');
+}
+
 function refreshBrushUI() {
   const temp = held.shift ? 'smooth' : held.ctrl ? 'mask' : null;
-  for (const el of tools.children) { el.classList.toggle('on', el.dataset.id === S.brush); el.classList.toggle('temp', el.dataset.id === temp && temp !== S.brush); }
-  const b = BRUSHES.find(x => x.id === S.brush);
+  for (const el of tools.querySelectorAll('.tool')) { el.classList.toggle('on', el.dataset.id === S.brush); el.classList.toggle('temp', el.dataset.id === temp && temp !== S.brush); }
+  const b = BRUSH[S.brush], c = cur();
   $('brushName').textContent = b.name; $('brushDesc').textContent = b.desc;
+  $('strength').value = c.strength; $('strOut').textContent = (+c.strength).toFixed(2);
+  $('falloff').value = c.falloff; drawFalloff(c.falloff);
+  const st = $('strokeType'); st.value = canDrag(S.brush) ? c.stroke : 'dots'; st.disabled = !canDrag(S.brush);
+  $('alphaInv').checked = c.alphaInv; $('alphaFollow').checked = c.follow;
+  $('alphaSec').classList.toggle('off', !b.alpha);
+  $('alphaNote').textContent = b.alpha
+    ? '白い所ほど強く効きます。画像はビューにドラッグ＆ドロップでも追加できます。細かい模様は「細分化」でポリゴンを増やすときれいに出ます。'
+    : `「${b.name}」ではアルファは使われません。`;
+  syncAlphaGrid();
   updateStats();
 }
 function bindRange(id, outId, key, fmt) {
   const el = $(id), out = $(outId);
   const sync = () => { out.textContent = fmt(S[key]); el.value = S[key]; };
-  el.addEventListener('input', () => { S[key] = +el.value; sync(); });
+  el.addEventListener('input', () => { S[key] = +el.value; sync(); saveBrushPrefs(); });
   sync(); return sync;
 }
 const syncSize = bindRange('size', 'sizeOut', 'size', v => Math.round(v));
-bindRange('strength', 'strOut', 'strength', v => v.toFixed(2));
+bindRange('spacing', 'spacingOut', 'spacing', v => v.toFixed(2));
+bindRange('lazy', 'lazyOut', 'lazy', v => Math.round(v));
+$('strength').addEventListener('input', e => { cur().strength = +e.target.value; $('strOut').textContent = cur().strength.toFixed(2); saveBrushPrefs(); });
+$('falloff').onchange = e => { cur().falloff = e.target.value; drawFalloff(cur().falloff); saveBrushPrefs(); };
+$('strokeType').onchange = e => { cur().stroke = e.target.value; saveBrushPrefs(); };
+$('alphaInv').onchange = e => { cur().alphaInv = e.target.checked; saveBrushPrefs(); };
+$('alphaFollow').onchange = e => { cur().follow = e.target.checked; saveBrushPrefs(); };
+
+// custom alphas from images (kept in IndexedDB)
+async function addAlphaFiles(files) {
+  let added = 0, last = null;
+  for (const f of files) {
+    if (!f.type.startsWith('image/')) continue;
+    try {
+      const bmp = await createImageBitmap(f);
+      const id = 'c:' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+      customAlphas.push({ id, name: f.name.replace(/\.[^.]+$/, ''), data: imageToAlpha(bmp) });
+      bmp.close?.(); added++; last = id;
+    } catch (err) { console.error(err); }
+  }
+  if (!added) { toast('画像を読み込めませんでした（PNG / JPG などを選んでください）'); return; }
+  if (BRUSH[S.brush].alpha) cur().alpha = last;
+  renderAlphaGrid(); refreshBrushUI(); saveBrushPrefs(); saveAlphas();
+  toast(`アルファを${added}個追加しました`);
+}
+async function saveAlphas() {
+  try {
+    const db = await idb();
+    await new Promise(res => { const tx = db.transaction('s', 'readwrite'); tx.objectStore('s').put(customAlphas.map(a => ({ id:a.id, name:a.name, data:a.data })), 'alphas'); tx.oncomplete = tx.onerror = tx.onabort = res; });
+  } catch { /* storage unavailable */ }
+}
+async function loadAlphas() {
+  try {
+    const db = await idb();
+    const list = await new Promise(res => { const r = db.transaction('s').objectStore('s').get('alphas'); r.onsuccess = () => res(r.result || []); r.onerror = () => res([]); });
+    for (const a of list) if (a && a.id && a.data && a.data.length === ALPHA_RES * ALPHA_RES) customAlphas.push(a);
+  } catch { /* none */ }
+}
+$('alphaAdd').onclick = () => $('alphaFile').click();
+$('alphaFile').onchange = e => { const fs = [...e.target.files]; e.target.value = ''; if (fs.length) addAlphaFiles(fs); };
+$('alphaDel').onclick = () => {
+  const id = cur().alpha, i = customAlphas.findIndex(a => a.id === id);
+  if (i < 0) return;
+  const name = customAlphas[i].name;
+  customAlphas.splice(i, 1);
+  for (const k in BS) if (BS[k].alpha === id) BS[k].alpha = 'none';
+  renderAlphaGrid(); refreshBrushUI(); saveBrushPrefs(); saveAlphas();
+  toast(`アルファ「${name}」を削除しました`);
+};
 $('invert').onchange = e => S.invert = e.target.checked;
 $('backface').onchange = e => S.backface = e.target.checked;
 function setSym(v) { S.sym = v; $('chipSym').classList.toggle('on', v); updateStats(); }
@@ -901,7 +1237,12 @@ $('btnNew').onclick = () => busy(() => { pushUndo(true); const b = makeBase($('n
 $('btnPanel').onclick = () => $('app').classList.toggle('panel-open');
 
 view.addEventListener('dragover', e => e.preventDefault());
-view.addEventListener('drop', e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) importFile(f); });
+view.addEventListener('drop', e => {
+  e.preventDefault();
+  const fs = [...e.dataTransfer.files], imgs = fs.filter(f => f.type.startsWith('image/'));
+  if (imgs.length) addAlphaFiles(imgs);
+  else if (fs[0]) importFile(fs[0]);
+});
 
 window.addEventListener('keydown', e => {
   const t = e.target;
@@ -914,9 +1255,9 @@ window.addEventListener('keydown', e => {
   if (ctrl && (e.key === 'd' || e.key === 'D')) { e.preventDefault(); busy(subdivide); return; }
   if (ctrl && (e.key === 'o' || e.key === 'O')) { e.preventDefault(); openModel(); return; }
   if (ctrl || e.altKey) { syncHeld(e); return; }
-  if (e.key >= '1' && e.key <= '9') { const b = BRUSHES[+e.key - 1]; if (b) selectBrush(b.id); return; }
-  if (e.key === '[') { S.size = Math.max(5, Math.round(S.size / 1.15)); syncSize(); return; }
-  if (e.key === ']') { S.size = Math.min(300, Math.round(S.size * 1.15)); syncSize(); return; }
+  if (e.key >= '0' && e.key <= '9') { const b = BRUSHES.find(x => x.key === e.key); if (b) selectBrush(b.id); return; }
+  if (e.key === '[') { S.size = Math.max(5, Math.round(S.size / 1.15)); syncSize(); saveBrushPrefs(); return; }
+  if (e.key === ']') { S.size = Math.min(300, Math.round(S.size * 1.15)); syncSize(); saveBrushPrefs(); return; }
   const k = e.key.toLowerCase();
   if (k === 'x') setSym(!S.sym);
   else if (k === 'w') setWire(!S.wire);
@@ -952,7 +1293,8 @@ renderer.setAnimationLoop(() => {
 {
   const b = makeBase('sphere', 'mid');
   setMesh(b.p, b.ix);
-  refreshBrushUI(); updateUndoButtons(); frame();
+  await loadAlphas();
+  renderAlphaGrid(); refreshBrushUI(); updateUndoButtons(); frame();
   const saved = await loadAuto();
   if (saved && saved.pos && saved.idx && saved.pos.length >= 9) {
     setMesh(saved.pos, saved.idx, saved.mask, saved.mirror);
@@ -965,7 +1307,7 @@ renderer.setAnimationLoop(() => {
     const first = await native.takePendingOpen();
     if (first) importFile(first);
   }
-  window.__boardPainter = { get nV() { return nV; }, get nF() { return nF; } };
+  window.__boardPainter = { get nV() { return nV; }, get nF() { return nF; }, checksum() { let s = 0; for (let i = 0; i < nV * 3; i++) s += pos[i] * ((i % 7) + 1); for (let v = 0; v < nV; v++) s += mask[v]; return s; } };
 }
 </script>
 </body>
