@@ -4,12 +4,14 @@
 
 ## ダウンロード / インストール（Windows）
 
-GitHub の **Actions → Build desktop app** の最新の実行結果から `BoardPainter-Windows` をダウンロードしてください。中に2種類の実行ファイルが入っています。
+**[最新版のダウンロードページ（Releases）](https://github.com/Ruto99/BoardPainter/releases/latest)** から、使いたいファイルをダウンロードしてください。
 
 | ファイル | 内容 |
 | --- | --- |
-| `BoardPainter-Setup-x.y.z.exe` | インストーラー（スタートメニュー・デスクトップにショートカット作成） |
+| `BoardPainter-Setup-x.y.z.exe` | インストーラー（おすすめ。スタートメニュー・デスクトップにショートカット作成、`.bpp` をダブルクリックで開ける） |
 | `BoardPainter-x.y.z-portable.exe` | インストール不要。ダブルクリックでそのまま起動 |
+
+macOS 用（`.dmg`）と Linux 用（`.AppImage`）も同じページにあります。
 
 > 署名していないため、初回起動時に Windows SmartScreen が「WindowsによってPCが保護されました」と表示することがあります。「詳細情報」→「実行」で起動できます。
 
@@ -80,7 +82,9 @@ npm run dist:mac     # macOS 用 dmg
 npm run dist:linux   # Linux 用 AppImage
 ```
 
-Windows のインストーラーは Windows 上でビルドしてください（Linux/macOS から作る場合は wine が必要）。`main` ブランチや `v*` タグへの push で GitHub Actions が3つのOS向けに自動ビルドします。
+Windows のインストーラーは Windows 上でビルドしてください（Linux/macOS から作る場合は wine が必要）。`main` ブランチへの push で GitHub Actions が3つのOS向けに自動ビルドします。
+
+**新しい版を公開するとき**: `package.json` の `version` を上げてから `v1.2.3` のようなタグを push する（または Actions の「Build desktop app」を手動実行して `release_tag` を入力する）と、ビルドされたファイルが Releases に自動で公開されます。
 
 ### 構成
 

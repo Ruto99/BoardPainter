@@ -2,6 +2,11 @@ name: Build desktop app
 
 on:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Publish a GitHub Release with this tag (e.g. v1.0.0). Leave empty to only build.'
+        required: false
+        default: ''
   push:
     tags: ['v*']
     branches: ['main', 'claude/**']
@@ -15,7 +20,8 @@ jobs:
           - os: windows-latest
             cmd: npm run dist:win
             files: |
-              dist/*.exe
+              dist/BoardPainter-Setup-*.exe
+              dist/BoardPainter-*-portable.exe
           - os: macos-latest
             cmd: npm run dist:mac
             files: |
@@ -40,3 +46,37 @@ jobs:
           name: BoardPainter-${{ runner.os }}
           path: ${{ matrix.files }}
           if-no-files-found: error
+
+  # Publishes the installers on the repository's Releases page (public download links).
+  # Runs when a v* tag is pushed, or when the workflow is started by hand with a release_tag.
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ inputs.release_tag || github.ref_name }}
+        run: |
+          ls -la assets
+          gh release create "$TAG" assets/* \
+            --target "$GITHUB_SHA" \
+            --title "BoardPainter $TAG" \
+            --notes "## ダウンロード
+
+          | ファイル | 内容 |
+          | --- | --- |
+          | \`BoardPainter-Setup-*.exe\` | Windows インストーラー（おすすめ） |
+          | \`BoardPainter-*-portable.exe\` | Windows ポータブル版（インストール不要） |
+          | \`*.dmg\` | macOS |
+          | \`*.AppImage\` | Linux |
+
+          署名していないため、Windows では初回起動時に SmartScreen の警告が出ることがあります。「詳細情報」→「実行」で起動できます。"
