@@ -1,6 +1,12 @@
 // Exposes a narrow native API to the page as window.bp
 const { contextBridge, ipcRenderer } = require('electron');
 
+function nativeCall(op, args) {
+  const r = ipcRenderer.sendSync('bp:native', op, args);
+  if (!r || r.error) throw new Error(r ? r.error : 'native call failed');
+  return r.result;
+}
+
 contextBridge.exposeInMainWorld('bp', {
   isDesktop: true,
   platform: process.platform,
@@ -11,6 +17,13 @@ contextBridge.exposeInMainWorld('bp', {
   saveProject: (filePath, name, data, saveAs) => ipcRenderer.invoke('bp:save-project', { filePath, name, data, saveAs }),
   confirmClose: name => ipcRenderer.invoke('bp:confirm-close', name),
   reveal: p => ipcRenderer.invoke('bp:reveal', p),
+  // Native (C++) mesh kernels. Synchronous: the page waits for the result, like the JavaScript versions.
+  accel: {
+    info: () => ipcRenderer.sendSync('bp:native-info'),
+    voxelize: (pos, idx, o, n, h) => nativeCall('voxelize', { pos, idx, o, n, h }),
+    surfaceNets: (inside, o, n, h) => nativeCall('surfaceNets', { inside, o, n, h }),
+    fitSurface: (pos, idx, srcPos, srcIdx, buried, maxSnap, smooth, project) => nativeCall('fitSurface', { pos, idx, srcPos, srcIdx, buried, maxSnap, smooth, project }),
+  },
   onOpenModel: cb => ipcRenderer.on('bp:open-model', (_e, m) => m && cb(m)),
   // cb resolves to false to keep the window open
   onBeforeClose: cb => ipcRenderer.on('bp:before-close', async () => {

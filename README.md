@@ -2,6 +2,8 @@
 
 無料のデジタルスカルプト（3D造形）**デスクトップアプリ**です。Windows / macOS / Linux で動作し、インストール後はネット接続なしで使えます。
 
+デスクトップ版専用です（ブラウザ版の公開は終了しました）。重い処理は C++ のネイティブモジュールで、CPU のすべてのコアを使って実行します。
+
 ## ダウンロード / インストール（Windows）
 
 **[最新版のダウンロードページ（Releases）](https://github.com/Ruto99/BoardPainter/releases/latest)** から、使いたいファイルをダウンロードしてください。
@@ -19,6 +21,7 @@ macOS 用（`.dmg`）と Linux 用（`.AppImage`）も同じページにあり�
 
 ## 機能
 
+- **高速処理（ネイティブ C++）**: リメッシュ・ブーリアン・格子状リトポ・ZSphere・文字の立体化・中を空けるの中核処理（ボクセル化・Surface Nets・元の形への吸着）を C++ で実行し、すべての CPU コアを使います（JavaScript 版と同じ結果で、約 5〜10 倍速い）。メモリ上限も広がり、リメッシュの細かさは最大 512 まで指定できます。「表示の設定」で処理エンジンを確認でき、読み込めない環境では自動で JavaScript 版を使います
 - **プロジェクトファイル（.bpp）**: すべてのサブツール・マスク・表示状態・カメラ位置を1ファイルに保存（`Ctrl+S` / `Ctrl+Shift+S`）。圧縮形式で、書き込み途中に落ちても元のファイルは壊れません。保存先のある作業を閉じるときは保存するか確認します
 - **サブツール（複数パーツ）**: 球・立方体・円柱・トーラスを追加、OBJ/STLを追加読み込み（OBJ内の複数オブジェクトはそれぞれサブツールに）、複製・削除・並べ替え・名前変更・表示/非表示・ソロ表示、下と結合、マスク部分を分離。ビュー上のダブルクリックでパーツを選択。元に戻すはパーツをまたいで効きます
 - **ギズモ（`G`）**: 選択中のサブツールを移動・回転・拡大縮小
@@ -109,10 +112,11 @@ macOS 用（`.dmg`）と Linux 用（`.AppImage`）も同じページにあり�
 **Windows で手軽に起動する**: リポジトリのフォルダにある `BoardPainter.bat` をダブルクリックすると、初回だけ必要なものを自動でインストールしてからアプリを起動します（Node.js 20 以上が必要。初回は数分かかります）。
 
 
-Node.js 20 以上が必要です。
+Node.js 20 以上と C++ コンパイラ（Windows: Visual Studio の「C++ によるデスクトップ開発」、macOS: Xcode Command Line Tools、Linux: g++ と make）が必要です。コンパイラがない場合も起動はできますが、重い処理が JavaScript 版（低速）になります。
 
 ```bash
-npm install          # 依存関係のインストール（three.js を src/vendor にコピー）
+npm install          # 依存関係のインストール（three.js を src/vendor にコピーし、ネイティブモジュールをビルド）
+npm run build:native # ネイティブモジュール（native/）だけをビルドし直す
 npm start            # 開発用に起動
 npm run dist:win     # Windows 用 exe（インストーラー + ポータブル）を dist/ に作成
 npm run dist:mac     # macOS 用 dmg
@@ -128,7 +132,7 @@ Windows のインストーラーは Windows 上でビルドしてください（
 | パス | 役割 |
 | --- | --- |
 | `electron/main.js` | アプリ本体（ウィンドウ・ファイルダイアログ・`app://` でUIを配信） |
-| `electron/preload.js` | 画面側に公開するネイティブAPI（`window.bp`） |
+| `electron/preload.js` | 画面側に公開するネイティブAPI（`window.bp`、ネイティブ処理は `window.bp.accel`） |
 | `src/index.html` | 造形エンジンとUI |
 | `src/remesh.js` | ボクセルリメッシュ・ブーリアン（内外判定・Surface Nets・元の形への吸着）と格子状の自動リトポ |
 | `src/fieldretopo.js` | 形に沿った自動リトポ（方向場・位置場・四角ポリゴンの抽出） |
@@ -137,7 +141,10 @@ Windows のインストーラーは Windows 上でビルドしてください（
 | `src/project.js` | プロジェクトファイル（.bpp）の読み書き |
 | `src/alphas.js` | 内蔵アルファの生成と画像からの読み込み |
 | `src/zspheres.js` | ZSphere の球とつなぎ目を距離場で1つのなめらかなメッシュにする |
+| `electron/native-worker.js` | ネイティブモジュールを別スレッドで動かし、画面からの依頼を受け付ける |
+| `native/bp_native.cc` | ネイティブモジュール（C++・Node-API）: ボクセル化・Surface Nets・最近点探索による吸着となめらかにする処理 |
 | `scripts/vendor.js` | three.js などをオフライン用に `src/vendor/` へコピー |
+| `scripts/build-native.js` | ネイティブモジュールを node-gyp でビルド（失敗時は JavaScript 版で動作） |
 
 ## 使用ライブラリ
 

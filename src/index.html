@@ -416,6 +416,7 @@ dl.keys dd{margin:0;color:var(--muted)}
       <input type="range" id="vsLightK" min="0.2" max="2" step="0.01" value="1">
       <div class="row"><label for="vsBg">背景</label><select id="vsBg"><option value="dark">暗いグレー</option><option value="gray">グレー</option><option value="light">明るい</option><option value="blue">青</option><option value="black">黒</option></select></div>
       <div class="row"><label for="vsUndo">元に戻せる回数</label><input type="number" id="vsUndo" min="5" max="200" step="5" value="40"></div>
+      <div class="row"><span>処理エンジン</span><span id="vsEngine" style="white-space:nowrap"></span></div>
       <button class="btn full" id="vsReset">表示の設定を元に戻す</button>
       <p class="note">光の向きと強さは「標準（ライト）」マテリアルとレンダリングに効きます。元に戻せる回数を増やすと、細かいメッシュではメモリを多く使います。</p>
     </section>
@@ -649,13 +650,22 @@ import { mergeVertices, mergeGeometries } from 'three/addons/utils/BufferGeometr
 import { computeBoundsTree, acceleratedRaycast, MeshBVH, INTERSECTED, NOT_INTERSECTED } from 'three-mesh-bvh';
 import { zsphereMesh } from './zspheres.js';
 import { encodeProject, decodeProject } from './project.js';
-import { remesh, remeshGrid, quadRemesh, booleanMesh, voxelize, surfaceNets } from './remesh.js';
+import { remesh, remeshGrid, quadRemesh, booleanMesh, voxelize, surfaceNets, setAccel, accelTimes } from './remesh.js';
 import { unwrap, drawUV } from './uv.js';
 import { bakeMaps } from './bake.js';
 import { MeshoptSimplifier } from 'meshopt-simplifier';
 import { fieldRetopo } from './fieldretopo.js';
 import { BUILTIN, builtinAlpha, imageToAlpha, sampleAlpha, drawAlpha, alphaRGBA, RES as ALPHA_RES } from './alphas.js';
 
+// native (C++) processing from the desktop app; null when unavailable (then the JavaScript versions run)
+const ACCEL = (() => {
+  try {
+    const a = window.bp && window.bp.accel, i = a && a.info();
+    if (i && i.ok) { setAccel(a); return i.info; }
+    if (i) console.warn('native module unavailable:', i.error, i.path);
+  } catch (err) { console.warn('native module unavailable:', err); }
+  return null;
+})();
 THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree;
 THREE.Mesh.prototype.raycast = acceleratedRaycast;
 
@@ -3006,7 +3016,7 @@ function hollow() {
     const T = thickMm / mmPerUnit(), size = geo.boundingBox.getSize(new V3()), longest = Math.max(size.x, size.y, size.z);
     if (T * 2.5 >= Math.min(size.x, size.y, size.z)) { toast('壁が厚すぎて中を空けられません（壁の厚さを小さくしてください）'); return; }
     let res = Math.min(360, Math.ceil(longest / (T / 3)));
-    let G = remeshGrid(pos, res); while (G.voxels > 30_000_000 && res > 64) { res = Math.floor(res * 0.85); G = remeshGrid(pos, res); }
+    let G = remeshGrid(pos, res); while (G.voxels > (ACCEL ? 80_000_000 : 30_000_000) && res > 64) { res = Math.floor(res * 0.85); G = remeshGrid(pos, res); }
     const t0 = performance.now(), inside = voxelize(pos, idx, G), [nx, ny] = G.n, sy = nx, sz = nx * ny;
     const steps = Math.max(1, Math.round(T / G.h));
     let cur = inside;
@@ -3440,7 +3450,7 @@ function bakeGizmo() {
 }
 
 // ---------------- voxel remesh ----------------
-const VOXEL_LIMIT = 40_000_000;   // ~40M grid points: about 300 MB of working memory at peak
+const VOXEL_LIMIT = ACCEL ? 100_000_000 : 40_000_000;   // grid points; native: ~1 GB of working memory at peak, JavaScript: ~300 MB
 const remeshOpts = () => ({ res: +$('rmRes').value, smooth: +$('rmSmooth').value, project: $('rmProject').checked });
 function meshArea(p, ix) {
   let a = 0;
@@ -4534,6 +4544,10 @@ $('vsBg').onchange = e => { VS.bg = e.target.value; applyView(true); };
 $('vsUndo').onchange = e => { VS.undo = Math.max(5, Math.min(200, +e.target.value || 40)); applyView(true); };
 $('vsReset').onclick = () => { VS = { ...VIEW_DEF }; applyView(true); toast('表示の設定を元に戻しました'); };
 applyView(false);
+$('vsEngine').textContent = ACCEL ? `ネイティブ（C++・${ACCEL.threads} スレッド）` : 'JavaScript（低速）';
+$('vsEngine').title = ACCEL ? 'リメッシュ・ブーリアン・リトポ・ZSphere・文字の立体化などの重い処理を C++ で実行しています' : 'ネイティブモジュールが読み込めなかったため、JavaScript で処理しています（結果は同じで、速度だけが遅くなります）';
+if (ACCEL) { $('rmRes').max = 512; }
+if (!native) setTimeout(() => toast('BoardPainter はデスクトップ版専用です。Releases からアプリをダウンロードしてください'), 600);
 $('zsStart').onclick = zsStart; $('zsMake').onclick = zsMake; $('zsUndo').onclick = zsUndo; $('zsCancel').onclick = zsEnd;
 
 view.addEventListener('dragover', e => e.preventDefault());
@@ -4641,6 +4655,8 @@ renderer.setAnimationLoop(() => {
     bounds() { const b = sceneBounds([active]); return [b.min.toArray(), b.max.toArray()]; },
     centerOnScreen() { const v = sceneBounds([active]).getCenter(new V3()).project(camera), b = canvas.getBoundingClientRect(); return [b.left + (v.x + 1) / 2 * b.width, b.top + (1 - v.y) / 2 * b.height]; },
     get retopoStats() { return lastRetopoStats; },
+    get accelTimes() { return { ...accelTimes }; },
+    useNative(on) { setAccel(on && ACCEL ? window.bp.accel : null); return !!(on && ACCEL); },
     get gizmoState() { return { axis: gizmo.axis, dragging: gizmo.dragging, enabled: gizmo.enabled, attached: !!gizmo.object, mode: gizmo.mode }; },
     openEdges() { const em = new Map(); for (let f = 0; f < nF; f++) { const a = idx[f*3], b = idx[f*3+1], c = idx[f*3+2]; for (const [x, y] of [[a, b], [b, c], [c, a]]) { const k = x < y ? x * nV + y : y * nV + x; em.set(k, (em.get(k) || 0) + 1); } } const out = []; for (const [k, c] of em) if (c === 1) { const a = Math.floor(k / nV), b = k % nV; out.push([[pos[a*3], pos[a*3+1], pos[a*3+2]].map(x => +x.toFixed(3)), [pos[b*3], pos[b*3+1], pos[b*3+2]].map(x => +x.toFixed(3))]); } return out; },
     meshCheck() {

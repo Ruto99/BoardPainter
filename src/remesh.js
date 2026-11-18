@@ -6,6 +6,18 @@
 import * as THREE from 'three';
 import { MeshBVH } from 'three-mesh-bvh';
 
+// Desktop app: the C++ versions of voxelize / surfaceNets (same results, all CPU cores).
+// Falls back to the JavaScript versions below if the native module is missing or fails.
+let accel = null;
+export function setAccel(a) { accel = a; }
+export function accelInfo() { return accel; }
+export const accelTimes = {}; // last duration (ms) of each native call, including the copy to / from the app
+function tryAccel(op, args) {
+  if (!accel) return null;
+  try { const t = performance.now(), r = accel[op](...args); accelTimes[op] = Math.round(performance.now() - t); return r; }
+  catch (err) { console.warn(`native ${op} failed, using JavaScript:`, err); return null; }
+}
+
 // Grid sampling for a given resolution (cells along the longest side).
 // symX: lay the grid out mirror-symmetrically about x = 0 (so symmetric input gives a symmetric result)
 export function remeshGrid(pos, res, symX = false) {
@@ -76,6 +88,8 @@ function windingAlongAxis(pos, idx, G, a, votes) {
 }
 
 export function voxelize(pos, idx, G) {
+  const nat = tryAccel('voxelize', [pos instanceof Float32Array ? pos : Float32Array.from(pos), idx instanceof Uint32Array ? idx : Uint32Array.from(idx), G.o, G.n, G.h]);
+  if (nat) return nat;
   const votes = new Uint8Array(G.voxels);
   for (let a = 0; a < 3; a++) windingAlongAxis(pos, idx, G, a, votes);
   for (let i = 0; i < votes.length; i++) votes[i] = votes[i] >= 2 ? 1 : 0;
@@ -84,6 +98,8 @@ export function voxelize(pos, idx, G) {
 
 // Surface Nets over the inside[] grid -> indexed triangle mesh
 export function surfaceNets(inside, G) {
+  const nat = tryAccel('surfaceNets', [inside instanceof Uint8Array ? inside : Uint8Array.from(inside), G.o, G.n, G.h]);
+  if (nat) return nat;
   const [nx, ny, nz] = G.n, h = G.h, [ox, oy, oz] = G.o;
   const sx = 1, sy = nx, sz = nx * ny;
   const cellV = new Int32Array(G.voxels).fill(-1);
@@ -196,14 +212,6 @@ function surfaceFromField(inside, G, src, opt, strict) {
   const nV = out.pos.length / 3;
   if (!nV || !out.idx.length) return null;
 
-  // source BVH for closest-point queries (snapping and mask transfer)
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.BufferAttribute(src.pos, 3));
-  g.setIndex(new THREE.BufferAttribute(src.idx.slice(), 1));
-  const bvh = new MeshBVH(g);
-  const sIdx = g.index.array;
-  const P = out.pos, nb = neighbors(nV, out.idx);
-  const q = new THREE.Vector3(), hit = { point: new THREE.Vector3(), distance: 0, faceIndex: 0 };
   const maxSnap = G.h * 1.5;
   // inside test at an arbitrary point (nearest grid sample)
   const [gx, gy, gz] = G.n;
@@ -214,16 +222,54 @@ function surfaceFromField(inside, G, src, opt, strict) {
   };
   // Source faces that ended up buried inside the solid (where overlapping parts were fused) must not attract vertices:
   // a point just outside such a face along its normal is still inside the solid.
-  const buried = new Uint8Array(sIdx.length / 3);
-  for (let f = 0; f < buried.length; f++) {
-    const a = sIdx[f*3]*3, b = sIdx[f*3+1]*3, c = sIdx[f*3+2]*3, sp = src.pos;
-    const ux = sp[b]-sp[a], uy = sp[b+1]-sp[a+1], uz = sp[b+2]-sp[a+2], wx = sp[c]-sp[a], wy = sp[c+1]-sp[a+1], wz = sp[c+2]-sp[a+2];
-    let nx = uy*wz - uz*wy, ny = uz*wx - ux*wz, nz = ux*wy - uy*wx; const l = Math.hypot(nx, ny, nz); if (!l) continue;
-    nx /= l; ny /= l; nz /= l;
-    const cx = (sp[a] + sp[b] + sp[c]) / 3, cy = (sp[a+1] + sp[b+1] + sp[c+1]) / 3, cz = (sp[a+2] + sp[b+2] + sp[c+2]) / 3, d = G.h * 1.5;
-    const o = insideAt(cx + nx * d, cy + ny * d, cz + nz * d), i = insideAt(cx - nx * d, cy - ny * d, cz - nz * d);
-    if ((o && i) || (strict && !o && !i)) buried[f] = 1;
+  const buriedFor = sIdx => {
+    const buried = new Uint8Array(sIdx.length / 3), sp = src.pos;
+    for (let f = 0; f < buried.length; f++) {
+      const a = sIdx[f*3]*3, b = sIdx[f*3+1]*3, c = sIdx[f*3+2]*3;
+      const ux = sp[b]-sp[a], uy = sp[b+1]-sp[a+1], uz = sp[b+2]-sp[a+2], wx = sp[c]-sp[a], wy = sp[c+1]-sp[a+1], wz = sp[c+2]-sp[a+2];
+      let nx = uy*wz - uz*wy, ny = uz*wx - ux*wz, nz = ux*wy - uy*wx; const l = Math.hypot(nx, ny, nz); if (!l) continue;
+      nx /= l; ny /= l; nz /= l;
+      const cx = (sp[a] + sp[b] + sp[c]) / 3, cy = (sp[a+1] + sp[b+1] + sp[c+1]) / 3, cz = (sp[a+2] + sp[b+2] + sp[c+2]) / 3, d = G.h * 1.5;
+      const o = insideAt(cx + nx * d, cy + ny * d, cz + nz * d), i = insideAt(cx - nx * d, cy - ny * d, cz - nz * d);
+      if ((o && i) || (strict && !o && !i)) buried[f] = 1;
+    }
+    return buried;
+  };
+  // mask / paint: barycentric from the closest source triangle (faceOf(v) -> { ia, ib, ic, x, y, z } or null)
+  const hasMask = src.mask && src.mask.some(m => m > 0), sp = src.paint || null;
+  const finish = (P, faceOf) => {
+    const mask = new Float32Array(nV), paint = sp ? new Float32Array(nV * 3) : null;
+    if (hasMask || sp) for (let v = 0; v < nV; v++) {
+      const r = faceOf(v); if (!r) continue;
+      const { ia, ib, ic, x, y, z } = r;
+      if (hasMask) mask[v] = Math.min(1, Math.max(0, src.mask[ia] * x + src.mask[ib] * y + src.mask[ic] * z));
+      if (sp) for (let k = 0; k < 3; k++) paint[v*3+k] = sp[ia*3+k] * x + sp[ib*3+k] * y + sp[ic*3+k] * z;
+    }
+    return { pos: P, idx: out.idx, mask, paint, info: { h: G.h, grid: G.n } };
+  };
+
+  // desktop: snapping, relaxation and closest faces in C++
+  if (accel && accel.fitSurface) {
+    const sPos = src.pos instanceof Float32Array ? src.pos : Float32Array.from(src.pos), sIdx = src.idx instanceof Uint32Array ? src.idx : Uint32Array.from(src.idx);
+    const nat = tryAccel('fitSurface', [out.pos, out.idx, sPos, sIdx, buriedFor(sIdx), maxSnap, opt.smooth | 0, !!opt.project]);
+    if (nat) {
+      const r = { ia: 0, ib: 0, ic: 0, x: 0, y: 0, z: 0 };
+      return finish(nat.pos, v => {
+        const f = nat.face[v]; if (f < 0) return null;
+        r.ia = sIdx[f*3]; r.ib = sIdx[f*3+1]; r.ic = sIdx[f*3+2]; r.x = nat.bary[v*3]; r.y = nat.bary[v*3+1]; r.z = nat.bary[v*3+2];
+        return r;
+      });
+    }
   }
+
+  // source BVH for closest-point queries (snapping and mask transfer); MeshBVH reorders this copy of the index
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(src.pos, 3));
+  g.setIndex(new THREE.BufferAttribute(src.idx.slice(), 1));
+  const bvh = new MeshBVH(g);
+  const sIdx = g.index.array, buried = buriedFor(sIdx);
+  const P = out.pos, nb = neighbors(nV, out.idx);
+  const q = new THREE.Vector3(), hit = { point: new THREE.Vector3(), distance: 0, faceIndex: 0 };
   const snap = () => {
     for (let v = 0; v < nV; v++) {
       q.set(P[v*3], P[v*3+1], P[v*3+2]);
@@ -256,24 +302,19 @@ function surfaceFromField(inside, G, src, opt, strict) {
   if (opt.project) snap();
   for (let it = 0; it < opt.smooth; it++) { relax(); if (opt.project) snap(); }
 
-  // mask / paint: barycentric from the closest non-buried source triangle
-  const mask = new Float32Array(nV), hasMask = src.mask && src.mask.some(m => m > 0), sp = src.paint || null;
-  const paint = sp ? new Float32Array(nV * 3) : null;
-  if (hasMask || sp) {
-    const tri = new THREE.Triangle(), bc = new THREE.Vector3(), A = new THREE.Vector3(), B = new THREE.Vector3(), C = new THREE.Vector3();
-    for (let v = 0; v < nV; v++) {
-      q.set(P[v*3], P[v*3+1], P[v*3+2]);
-      if (!bvh.closestPointToPoint(q, hit)) continue;
-      const f = hit.faceIndex * 3, ia = sIdx[f], ib = sIdx[f+1], ic = sIdx[f+2];
-      if (!Number.isFinite(f)) continue;
-      A.fromArray(src.pos, ia * 3); B.fromArray(src.pos, ib * 3); C.fromArray(src.pos, ic * 3);
-      tri.set(A, B, C).getBarycoord(hit.point, bc);
-      if (hasMask) mask[v] = Math.min(1, Math.max(0, src.mask[ia] * bc.x + src.mask[ib] * bc.y + src.mask[ic] * bc.z));
-      if (sp) for (let k = 0; k < 3; k++) paint[v*3+k] = sp[ia*3+k] * bc.x + sp[ib*3+k] * bc.y + sp[ic*3+k] * bc.z;
-    }
-  }
+  const tri = new THREE.Triangle(), bc = new THREE.Vector3(), A = new THREE.Vector3(), B = new THREE.Vector3(), C = new THREE.Vector3();
+  const r = { ia: 0, ib: 0, ic: 0, x: 0, y: 0, z: 0 };
+  const res = finish(P, v => {
+    q.set(P[v*3], P[v*3+1], P[v*3+2]);
+    if (!bvh.closestPointToPoint(q, hit)) return null;
+    const f = hit.faceIndex * 3; if (!Number.isFinite(f)) return null;
+    r.ia = sIdx[f]; r.ib = sIdx[f+1]; r.ic = sIdx[f+2];
+    A.fromArray(src.pos, r.ia * 3); B.fromArray(src.pos, r.ib * 3); C.fromArray(src.pos, r.ic * 3);
+    tri.set(A, B, C).getBarycoord(hit.point, bc); r.x = bc.x; r.y = bc.y; r.z = bc.z;
+    return r;
+  });
   g.dispose();
-  return { pos: P, idx: out.idx, mask, paint, info: { h: G.h, grid: G.n } };
+  return res;
 }
 
 // Quad retopology: about `target` quads, evenly sized, snapped to the source surface.

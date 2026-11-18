@@ -11,6 +11,12 @@ const HOST = 'bp';
 const SRC = path.join(__dirname, '..', 'src');
 // Library files (three.js etc.) are copied into src/vendor by scripts/vendor.js.
 
+// Development / testing: run with separate settings and autosave (BP_USER_DATA=<folder>).
+if (process.env.BP_USER_DATA) app.setPath('userData', path.resolve(process.env.BP_USER_DATA));
+
+// Desktop only: let big meshes use far more memory than a browser tab would allow.
+app.commandLine.appendSwitch('js-flags', '--max-old-space-size=8192');
+
 protocol.registerSchemesAsPrivileged([
   { scheme: SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true } },
 ]);
@@ -169,6 +175,41 @@ ipcMain.on('bp:close-ack', () => { clearTimeout(closeTimer); closeTimer = 'askin
 ipcMain.on('bp:close-ready', () => { clearTimeout(closeTimer); allowClose = true; if (win) win.close(); });
 ipcMain.on('bp:close-cancel', () => { clearTimeout(closeTimer); closeTimer = null; });
 
+// ---------------- native processing (C++ module in a worker thread) ----------------
+// The renderer calls these synchronously (ipcRenderer.sendSync) because the mesh code that uses them is
+// synchronous; the reply is set when the worker finishes, so only the page waits, not this process.
+const NATIVE_PATH = path.join(__dirname, '..', 'native', 'build', 'Release', 'bp_native.node').replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
+let nativeWorker = null, nativeState = { ok: false, error: 'not started', info: null };
+const nativeJobs = new Map();
+let nativeSeq = 0;
+function startNative() {
+  return new Promise(resolve => {
+    try {
+      const { Worker } = require('node:worker_threads');
+      const w = new Worker(path.join(__dirname, 'native-worker.js'), { workerData: { modulePath: NATIVE_PATH } });
+      w.on('message', m => {
+        if (m.ready) { nativeState = { ok: m.ok, error: m.error, info: m.info }; if (!m.ok) console.warn('native module unavailable:', m.error); resolve(); return; }
+        const job = nativeJobs.get(m.id); if (!job) return;
+        nativeJobs.delete(m.id); job(m);
+      });
+      w.on('error', err => { nativeState = { ok: false, error: String(err.message || err), info: null }; console.error('native worker:', err); resolve(); });
+      w.on('exit', () => { nativeWorker = null; nativeState.ok = false; for (const job of nativeJobs.values()) job({ error: 'native worker stopped' }); nativeJobs.clear(); });
+      nativeWorker = w;
+    } catch (err) { nativeState = { ok: false, error: String(err.message || err), info: null }; resolve(); }
+  });
+}
+const nativeReady = startNative();
+ipcMain.on('bp:native-info', async e => { await nativeReady; e.returnValue = { ...nativeState, path: NATIVE_PATH }; });
+ipcMain.on('bp:native', async (e, op, args) => {
+  await nativeReady;
+  if (!nativeWorker || !nativeState.ok) { e.returnValue = { error: nativeState.error || 'native module unavailable' }; return; }
+  const id = ++nativeSeq;
+  nativeJobs.set(id, m => { e.returnValue = m.error ? { error: m.error } : { result: m.result }; });
+  const transfer = [];
+  for (const v of Object.values(args || {})) if (ArrayBuffer.isView(v) && !transfer.includes(v.buffer)) transfer.push(v.buffer);
+  nativeWorker.postMessage({ id, op, args }, transfer);
+});
+
 let exportDir = null;
 function lastDir() { return exportDir || app.getPath('documents'); }
 function rememberDir(d) { exportDir = d; }
@@ -198,7 +239,11 @@ if (!app.requestSingleInstanceLock()) {
       const u = new URL(req.url);
       const p = u.host === HOST ? resolveAppPath(u.pathname) : null;
       if (!p) return new Response('Not found', { status: 404 });
-      return net.fetch(pathToFileURL(p).toString());
+      // no caching: after an update the page must never mix old and new module files
+      return net.fetch(pathToFileURL(p).toString()).then(r => {
+        const headers = new Headers(r.headers); headers.set('Cache-Control', 'no-store');
+        return new Response(r.body, { status: r.status, statusText: r.statusText, headers });
+      });
     });
     createWindow();
     app.on('activate', () => { if (!BrowserWindow.getAllWindows().length) createWindow(); });
