@@ -10,6 +10,9 @@ const OPS = {
   voxelize: a => mod.voxelize(a.pos, a.idx, a.o, a.n, a.h),
   surfaceNets: a => mod.surfaceNets(a.inside, a.o, a.n, a.h),
   fitSurface: a => mod.fitSurface(a.pos, a.idx, a.srcPos, a.srcIdx, a.buried, a.maxSnap, a.smooth, a.project),
+  smoothOrient: a => mod.smoothOrient(a.N, a.Q, a.start, a.list, a.fq, a.iters, a.shuffle, a.parallel),
+  smoothPos: a => mod.smoothPos(a.V, a.N, a.Q, a.O, a.start, a.list, a.fo, a.fx, a.s, a.iters, a.shuffle, a.parallel),
+  bake: a => mod.bake(a.lowPos, a.uvIdx, a.uv, a.highPos, a.highIdx, a.paint, a.size, a.maxDist, a.dilate),
 };
 
 function buffersOf(v, out = []) {

@@ -6,6 +6,7 @@
 // low mesh, cast a ray from just outside it back along -normal, and read the high mesh where it hits.
 import * as THREE from 'three';
 import { MeshBVH } from 'three-mesh-bvh';
+import { tryAccel } from './remesh.js';
 
 const lin2srgb = x => x <= 0.0031308 ? 12.92 * x : 1.055 * Math.pow(x, 1 / 2.4) - 0.055;
 
@@ -29,6 +30,9 @@ function vertexNormals(p, ix) {
  */
 export function bakeMaps(low, high, opt) {
   const S = opt.size, maxD = opt.maxDist;
+  const f32 = a => a instanceof Float32Array ? a : Float32Array.from(a), u32 = a => a instanceof Uint32Array ? a : Uint32Array.from(a);
+  const nat = tryAccel('bake', [f32(low.pos), u32(low.uvIdx), f32(low.uv), f32(high.pos), u32(high.idx), high.paint ? f32(high.paint) : null, S, maxD, opt.dilate ?? 8]);
+  if (nat) return nat;   // desktop: C++ on all cores
   const lp = low.pos, li = low.uvIdx, uv = low.uv, nF = li.length / 3;
   const ln = vertexNormals(lp, li);
   const g = new THREE.BufferGeometry();

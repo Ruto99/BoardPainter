@@ -4545,8 +4545,8 @@ $('vsUndo').onchange = e => { VS.undo = Math.max(5, Math.min(200, +e.target.valu
 $('vsReset').onclick = () => { VS = { ...VIEW_DEF }; applyView(true); toast('表示の設定を元に戻しました'); };
 applyView(false);
 $('vsEngine').textContent = ACCEL ? `ネイティブ（C++・${ACCEL.threads} スレッド）` : 'JavaScript（低速）';
-$('vsEngine').title = ACCEL ? 'リメッシュ・ブーリアン・リトポ・ZSphere・文字の立体化などの重い処理を C++ で実行しています' : 'ネイティブモジュールが読み込めなかったため、JavaScript で処理しています（結果は同じで、速度だけが遅くなります）';
-if (ACCEL) { $('rmRes').max = 512; }
+$('vsEngine').title = ACCEL ? 'リメッシュ・ブーリアン・リトポ・テクスチャ焼き付け・ZSphere・文字の立体化などの重い処理を C++ で実行しています' : 'ネイティブモジュールが読み込めなかったため、JavaScript で処理しています（結果は同じで、速度だけが遅くなります）';
+if (ACCEL) { $('rmRes').max = 512; $('bakeSize').add(new Option('4096', '4096')); }   // native bake: 4096 px in a second or two
 if (!native) setTimeout(() => toast('BoardPainter はデスクトップ版専用です。Releases からアプリをダウンロードしてください'), 600);
 $('zsStart').onclick = zsStart; $('zsMake').onclick = zsMake; $('zsUndo').onclick = zsUndo; $('zsCancel').onclick = zsEnd;
 

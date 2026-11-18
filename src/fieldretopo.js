@@ -10,7 +10,7 @@
 //  4. relaxation along polygon edges, snapping to the source surface / sharp edges / corners
 import * as THREE from 'three';
 import { MeshBVH } from 'three-mesh-bvh';
-import { remesh } from './remesh.js';
+import { remesh, tryAccel, accelInfo } from './remesh.js';
 
 const cross = (a, b) => [a[1]*b[2] - a[2]*b[1], a[2]*b[0] - a[0]*b[2], a[0]*b[1] - a[1]*b[0]];
 const get = (A, i) => [A[i*3], A[i*3+1], A[i*3+2]];
@@ -154,7 +154,12 @@ function order(n, seed) {
   for (let i = n - 1; i > 0; i--) { r = (r * 1664525 + 1013904223) >>> 0; const j = r % (i + 1); const t = o[i]; o[i] = o[j]; o[j] = t; }
   return o;
 }
+const f32 = a => a instanceof Float32Array ? a : Float32Array.from(a);
+// native field smoothing runs on all cores (graph-coloured Gauss-Seidel); off = the exact JavaScript visiting order
+export const PARALLEL = { on: true };
 function smoothOrientations(L, Q, iters, shuffle) {
+  const nat = tryAccel('smoothOrient', [f32(L.N), Q, L.adj.start, L.adj.list, L.con.fq, iters, !!shuffle, PARALLEL.on]);
+  if (nat) { Q.set(nat); return; }
   const n = L.V.length / 3, ord = shuffle ? order(n, 7) : null;
   for (let it = 0; it < iters; it++) for (let ii = 0; ii < n; ii++) {
     const i = ord ? ord[ii] : ii;
@@ -196,6 +201,8 @@ function compatPos(p0, n0, q0, o0, p1, n1, q1, o1, s) {
   return [r0, r1];
 }
 function smoothPositions(L, Q, O, s, iters, shuffle) {
+  const nat = tryAccel('smoothPos', [f32(L.V), f32(L.N), Q, O, L.adj.start, L.adj.list, L.con.fo, L.con.fx, s, iters, !!shuffle, PARALLEL.on]);
+  if (nat) { O.set(nat); return; }
   const n = L.V.length / 3, ord = shuffle ? order(n, 13) : null;
   for (let it = 0; it < iters; it++) for (let ii = 0; ii < n; ii++) {
     const i = ord ? ord[ii] : ii;
@@ -233,6 +240,96 @@ function quadQuality(P, f) {   // worst corner angle deviation from 90 deg (radi
   return worst;
 }
 
+// Make the polygon set a closed manifold: at most two faces per edge (one on the symmetry seam, whose other
+// side is the mirror copy), and every remaining hole closed: one polygon in pure-quad mode (split through its
+// centre below), else a fan of quads (and a triangle if the count is odd).
+// Faces earlier in the list win when an edge is over-used, so the polygons added to fill holes go first.
+function repairSurface(faces, seamV, pure, orient) {
+  const ek = (a, b) => a < b ? a * 1e7 + b : b * 1e7 + a;
+  const seamE = (a, b) => seamV(a) && seamV(b);
+  for (let pass = 0; pass < 8; pass++) {
+    const use = new Map(), keep = [];
+    for (const f of faces) {
+      const keys = f.map((v, k) => ek(v, f[(k + 1) % f.length]));
+      if (f.some((v, k) => (use.get(keys[k]) || 0) >= (seamE(v, f[(k + 1) % f.length]) ? 1 : 2))) continue;
+      for (const k of keys) use.set(k, (use.get(k) || 0) + 1);
+      keep.push(f);
+    }
+    faces = keep;
+    // consistent winding from geometry: a face whose normal disagrees with the field's normals at its corners
+    // (relative to how most faces are wound) is reversed. Local, so one bad spot can't flip a whole region.
+    {
+      if (orient) {
+        const sg = faces.map(orient), maj = sg.reduce((n, x) => n + Math.sign(x), 0) >= 0 ? 1 : -1;
+        faces = faces.map((f, i) => sg[i] * maj < 0 ? f.slice().reverse() : f);
+      }
+      // faces that still disagree with a neighbour sit in a fold: drop them, the hole is filled next pass
+      const dir = new Map(), bad = new Set();
+      faces.forEach((f, i) => f.forEach((v, k) => { const key = v * 1e7 + f[(k + 1) % f.length]; if (dir.has(key)) { bad.add(i); bad.add(dir.get(key)); } else dir.set(key, i); }));
+      if (bad.size) { faces = faces.filter((_, i) => !bad.has(i)); continue; }
+    }
+    // boundary half-edges b -> a (reverse of a face edge a -> b that no other face shares), seam edges excluded
+    const out = new Map();
+    let nb = 0;
+    for (const f of faces) for (let k = 0; k < f.length; k++) {
+      const a = f[k], b = f[(k + 1) % f.length];
+      if (use.get(ek(a, b)) !== 1 || seamE(a, b)) continue;
+      (out.get(b) || out.set(b, []).get(b)).push(a); nb++;
+    }
+    if (!nb) break;
+    const used = new Set(), fills = [];
+    const emit = loop => {
+      if (loop.length < 3) return;
+      if (loop.length <= 4 || pure) fills.push(loop.slice());   // pure quads: split later through its centre
+      else for (const q of fanSplit(loop, use)) fills.push(q);
+    };
+    // start on the seam first, so holes touching it become open paths seam -> seam (closed along the seam)
+    const starts = [...out.keys()].sort((x, y) => (seamV(y) ? 1 : 0) - (seamV(x) ? 1 : 0));
+    for (const st of starts) for (const first of out.get(st)) {
+      if (used.has(st * 1e7 + first)) continue;
+      used.add(st * 1e7 + first);
+      const path = [st], at = new Map([[st, 0]]);
+      let v = first;
+      for (let steps = 0; steps < 4096; steps++) {
+        if (at.has(v)) {   // closed a loop (or a sub-loop at a pinch vertex): fill it and go on from v
+          const loop = path.splice(at.get(v));
+          for (const x of loop) at.delete(x);
+          emit(loop);
+        }
+        at.set(v, path.length); path.push(v);
+        const nx = (out.get(v) || []).filter(w => !used.has(v * 1e7 + w));
+        if (!nx.length) {
+          // a path that left the seam and came back: its closing edge lies on the mirror plane
+          if (path.length >= 3 && seamV(path[0]) && seamV(v)) emit(path.slice());
+          break;
+        }
+        const w = nx.includes(path[0]) ? path[0] : nx[0];
+        used.add(v * 1e7 + w); v = w;
+      }
+    }
+    if (!fills.length) break;
+    faces = faces.concat(fills);
+  }
+  if (!pure && faces.some(f => f.length > 4)) {   // quads and triangles only from here on
+    const use = new Map();
+    for (const f of faces) f.forEach((v, k) => use.set(ek(v, f[(k + 1) % f.length]), 1));
+    faces = faces.flatMap(f => f.length > 4 ? fanSplit(f, use) : [f]);
+  }
+  return faces;
+}
+// split a polygon into a fan of quads (+ one triangle if odd), from the corner whose diagonals aren't edges yet
+function fanSplit(loop, use) {
+  const L = loop.length, ek = (a, b) => a < b ? a * 1e7 + b : b * 1e7 + a, out = [];
+  let r = 0;
+  for (let t = 0; t < L; t++) { let ok = true; for (let i = 2; i < L - 1 && ok; i++) if (use.has(ek(loop[t], loop[(t + i) % L]))) ok = false; if (ok) { r = t; break; } }
+  const lp = loop.map((_, i) => loop[(r + i) % L]);
+  let i = 1;
+  for (; i + 2 < L; i += 2) out.push([lp[0], lp[i], lp[i + 1], lp[i + 2]]);
+  if (i + 1 < L) out.push([lp[0], lp[i], lp[i + 1]]);
+  for (const f of out) f.forEach((v, k) => use.set(ek(v, f[(k + 1) % f.length]), 1));
+  return out;
+}
+
 /**
  * @param src { pos, idx }
  * @param opt { target: quads, smooth: relax passes, sym: mirror about x = 0, sharpAngle: degrees (0 = off) }
@@ -253,7 +350,8 @@ export function fieldRetopo(src, opt) {
   let sym = !!opt.sym && mn[0] < -s * 0.5 && mx[0] > s * 0.5;     // only when the shape straddles x = 0
 
   // ---- working mesh
-  const res = Math.min(320, Math.max(24, Math.round(ext / (s / (opt.density ?? 2.5)))));
+  // desktop (native kernels): allow a finer working mesh, so high targets keep ~2.5 working vertices per quad edge
+  const res = Math.min(accelInfo() ? 512 : 320, Math.max(24, Math.round(ext / (s / (opt.density ?? 2.5)))));
   const W = remesh({ pos: sp, idx: si }, { res, project: true, smooth: 2, symX: sym });
   if (!W) return null;
   let V = W.pos, WI = W.idx;
@@ -517,6 +615,17 @@ export function fieldRetopo(src, opt) {
       }
     }
   }
+  // face winding vs. the field normals (Newell normal of the polygon . corner normals)
+  const orientOf = f => {
+    let nx = 0, ny = 0, nz = 0, d = 0;
+    for (let k = 0; k < f.length; k++) {
+      const a = f[k] * 3, b = f[(k + 1) % f.length] * 3;
+      nx += (Pm[a+1] - Pm[b+1]) * (Pm[a+2] + Pm[b+2]); ny += (Pm[a+2] - Pm[b+2]) * (Pm[a] + Pm[b]); nz += (Pm[a] - Pm[b]) * (Pm[a+1] + Pm[b+1]);
+    }
+    for (const v of f) if (v < m) d += nx * PN[v*3] + ny * PN[v*3+1] + nz * PN[v*3+2];
+    return d;
+  };
+  faces = repairSurface(faces, v => sym && !!onSeam[v], pure, orientOf);
   // pure quads: every n-gon -> n quads (centre + edge midpoints); shared midpoints keep the mesh closed
   let Pfinal = Pm, kindF = kind, seamF = onSeam;
   if (pure) {
@@ -539,7 +648,7 @@ export function fieldRetopo(src, opt) {
   // ---- compact, relax, snap
   const usedV = new Int32Array(Pfinal.length / 3).fill(-1); let nv = 0;
   for (const f of faces) for (const v of f) if (usedV[v] < 0) usedV[v] = nv++;
-  let X = new Float32Array(nv * 3); const K = new Uint8Array(nv), SE = new Uint8Array(nv);
+  let X = new Float32Array(nv * 3), SE = new Uint8Array(nv); const K = new Uint8Array(nv);
   for (let v = 0; v < usedV.length; v++) if (usedV[v] >= 0) { const t = usedV[v]; X[t*3] = Pfinal[v*3]; X[t*3+1] = Pfinal[v*3+1]; X[t*3+2] = Pfinal[v*3+2]; K[t] = kindF[v] || 0; SE[t] = seamF[v] || 0; }
   const FF = faces.map(f => f.map(v => usedV[v]));
   const g = new THREE.BufferGeometry();
@@ -568,7 +677,19 @@ export function fieldRetopo(src, opt) {
   const project = v => { if (!SE[v]) { project1(v); return; } for (let k = 0; k < 4; k++) { project1(v); X[v*3] = 0; } };
   const edgeN = Array.from({ length: nv }, () => new Set());
   for (const f of FF) for (let k = 0; k < f.length; k++) { const a = f[k], b = f[(k + 1) % f.length]; edgeN[a].add(b); edgeN[b].add(a); }
-  const triOf = FF => { const t = []; for (const f of FF) { if (f.length === 3) t.push(f[0], f[1], f[2]); else { const d02 = dist2(X, f[0], f[2]), d13 = dist2(X, f[1], f[3]); if (d02 <= d13) t.push(f[0], f[1], f[2], f[0], f[2], f[3]); else t.push(f[0], f[1], f[3], f[1], f[2], f[3]); } } return new Uint32Array(t); };
+  // quads -> triangles along the shorter diagonal; `safe`: never along a diagonal that is already an edge
+  const triOf = (FF, safe) => {
+    const ek = (a, b) => a < b ? a * 1e7 + b : b * 1e7 + a, seen = safe ? new Set() : null;
+    if (seen) for (const f of FF) for (let k = 0; k < f.length; k++) seen.add(ek(f[k], f[(k + 1) % f.length]));
+    const t = [];
+    for (const f of FF) {
+      if (f.length === 3) { t.push(f[0], f[1], f[2]); continue; }
+      let use02 = dist2(X, f[0], f[2]) <= dist2(X, f[1], f[3]);
+      if (seen) { const k02 = ek(f[0], f[2]), k13 = ek(f[1], f[3]); if (seen.has(use02 ? k02 : k13) && !seen.has(use02 ? k13 : k02)) use02 = !use02; seen.add(use02 ? k02 : k13); }
+      if (use02) t.push(f[0], f[1], f[2], f[0], f[2], f[3]); else t.push(f[0], f[1], f[3], f[1], f[2], f[3]);
+    }
+    return new Uint32Array(t);
+  };
   for (let v = 0; v < nv; v++) { if (SE[v]) X[v*3] = 0; project(v); }
   for (let it = 0; it < (opt.smooth ?? 8); it++) {
     const Nn = vertexNormals(X, triOf(FF)), np = X.slice();
@@ -597,7 +718,49 @@ export function fieldRetopo(src, opt) {
       if (g2.length > 1 && g2[0] === g2[g2.length - 1]) g2.pop();
       if (g2.length >= 3 && new Set(g2).size === g2.length) kept.push(g2);
     }
-    FF.length = 0; FF.push(...kept);
+    FF.length = 0; for (const f of kept) FF.push(f);
+  }
+  // ---- doublets / folds: two faces that share both edges at a vertex fold the surface over (and make them
+  //      pick the same diagonal); merge the pair into one quad / triangle
+  const rot = (f, v) => { const k = f.indexOf(v); return f.map((_, i) => f[(k + i) % f.length]); };
+  { // the same face twice: keep one; wound both ways it is a zero-volume fin: drop both
+    const seenF = new Map(), kill = new Set();
+    FF.forEach((f, i) => {
+      const k = [...f].sort((x, y) => x - y).join(',');
+      if (!seenF.has(k)) { seenF.set(k, i); return; }
+      const j = seenF.get(k); kill.add(i);
+      if (rot(FF[j], f[0])[1] !== f[1]) kill.add(j);
+    });
+    if (kill.size) { let w = 0; FF.forEach((f, i) => { if (!kill.has(i)) FF[w++] = f; }); FF.length = w; }
+  }
+  for (let pass = 0; pass < 4; pass++) {
+    const vf = Array.from({ length: nv }, () => []);
+    FF.forEach((f, i) => { for (const v of f) vf[v].push(i); });
+    const dead = new Set(); let merged = 0;
+    for (let v = 0; v < nv; v++) {
+      const L = vf[v]; if (L.length < 2 || SE[v] || K[v] === 3) continue;
+      for (let x = 0; x < L.length; x++) for (let y = x + 1; y < L.length; y++) {
+        const i = L[x], j = L[y]; if (dead.has(i) || dead.has(j)) continue;
+        const A = rot(FF[i], v), B = rot(FF[j], v);   // e.g. [v, a, x, b] and [v, b, y, a] (or triangles)
+        if (B[1] !== A[A.length - 1] || B[B.length - 1] !== A[1]) continue;
+        const q = A.slice(1).concat(B.slice(2, -1));
+        if (q.length < 3 || q.length > 4 || new Set(q).size !== q.length) continue;
+        FF[i] = q; FF[j] = null; dead.add(i); dead.add(j); merged++;
+      }
+    }
+    if (!merged) break;
+    let w = 0; for (const f of FF) if (f) FF[w++] = f; FF.length = w;
+  }
+  // drop vertices no face uses any more (welded or merged away)
+  {
+    const remap = new Int32Array(nv).fill(-1); let m2 = 0;
+    for (const f of FF) for (const v of f) if (remap[v] < 0) remap[v] = m2++;
+    if (m2 < nv) {
+      const X2 = new Float32Array(m2 * 3), SE2 = new Uint8Array(m2);
+      for (let v = 0; v < nv; v++) if (remap[v] >= 0) { const t = remap[v]; X2[t*3] = X[v*3]; X2[t*3+1] = X[v*3+1]; X2[t*3+2] = X[v*3+2]; SE2[t] = SE[v]; }
+      for (const f of FF) for (let k = 0; k < f.length; k++) f[k] = remap[f[k]];
+      X = X2; SE = SE2; nv = m2;
+    }
   }
 
   // ---- mirror the half (symmetric mode)
@@ -612,7 +775,7 @@ export function fieldRetopo(src, opt) {
     Xo = new Float32Array(next * 3); Xo.set(X); Xo.set(extra, nv * 3);
     polysOut = FF.concat(FF.map(f => f.map(v => mirrorOf[v]).reverse()));
   }
-  const tri = (() => { const save = X; X = Xo; const t = triOf(polysOut); X = save; return t; })();
+  const tri = (() => { const save = X; X = Xo; const t = triOf(polysOut, true); X = save; return t; })();
   const start = new Uint32Array(polysOut.length + 1), pidx = [];
   polysOut.forEach((f, i) => { for (const v of f) pidx.push(v); start[i + 1] = pidx.length; });
   let quads = 0, tris = 0, ngons = 0; for (const f of polysOut) { if (f.length === 4) quads++; else if (f.length === 3) tris++; else ngons++; }

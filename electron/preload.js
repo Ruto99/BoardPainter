@@ -23,6 +23,9 @@ contextBridge.exposeInMainWorld('bp', {
     voxelize: (pos, idx, o, n, h) => nativeCall('voxelize', { pos, idx, o, n, h }),
     surfaceNets: (inside, o, n, h) => nativeCall('surfaceNets', { inside, o, n, h }),
     fitSurface: (pos, idx, srcPos, srcIdx, buried, maxSnap, smooth, project) => nativeCall('fitSurface', { pos, idx, srcPos, srcIdx, buried, maxSnap, smooth, project }),
+    smoothOrient: (N, Q, start, list, fq, iters, shuffle, parallel) => nativeCall('smoothOrient', { N, Q, start, list, fq, iters, shuffle, parallel }),
+    smoothPos: (V, N, Q, O, start, list, fo, fx, s, iters, shuffle, parallel) => nativeCall('smoothPos', { V, N, Q, O, start, list, fo, fx, s, iters, shuffle, parallel }),
+    bake: (lowPos, uvIdx, uv, highPos, highIdx, paint, size, maxDist, dilate) => nativeCall('bake', { lowPos, uvIdx, uv, highPos, highIdx, paint, size, maxDist, dilate }),
   },
   onOpenModel: cb => ipcRenderer.on('bp:open-model', (_e, m) => m && cb(m)),
   // cb resolves to false to keep the window open

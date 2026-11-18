@@ -6,14 +6,14 @@
 import * as THREE from 'three';
 import { MeshBVH } from 'three-mesh-bvh';
 
-// Desktop app: the C++ versions of voxelize / surfaceNets (same results, all CPU cores).
+// Desktop app: the C++ versions of the heavy kernels here and in fieldretopo.js / bake.js (same results, much faster).
 // Falls back to the JavaScript versions below if the native module is missing or fails.
 let accel = null;
 export function setAccel(a) { accel = a; }
 export function accelInfo() { return accel; }
 export const accelTimes = {}; // last duration (ms) of each native call, including the copy to / from the app
-function tryAccel(op, args) {
-  if (!accel) return null;
+export function tryAccel(op, args) {
+  if (!accel || typeof accel[op] !== 'function') return null;   // older module without this kernel: use JavaScript
   try { const t = performance.now(), r = accel[op](...args); accelTimes[op] = Math.round(performance.now() - t); return r; }
   catch (err) { console.warn(`native ${op} failed, using JavaScript:`, err); return null; }
 }

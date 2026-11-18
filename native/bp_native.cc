@@ -1,16 +1,21 @@
 // BoardPainter native module (Node-API, so one build works across Electron versions).
-// Heavy, self-contained mesh kernels ported from src/remesh.js. They produce the same results as the
+// Heavy, self-contained mesh kernels ported from src/remesh.js, src/fieldretopo.js and src/bake.js. They produce the same results as the
 // JavaScript versions (same arithmetic, same float32 rounding) but run in C++ on all CPU cores.
 //
 //   voxelize(pos: Float32Array, idx: Uint32Array, o: number[3], n: number[3], h: number) -> Uint8Array
 //   surfaceNets(inside: Uint8Array, o: number[3], n: number[3], h: number) -> { pos, idx, quads }
 //   fitSurface(pos, idx, srcPos, srcIdx, buried: Uint8Array|null, maxSnap, smooth, project) -> { pos, face, bary }
+//   smoothOrient(N, Q, start, list, fq, iters, shuffle, parallel?) -> Float32Array            (fieldretopo.js)
+//   smoothPos(V, N, Q, O, start, list, fo, fx, s, iters, shuffle, parallel?) -> Float32Array  (fieldretopo.js)
+//   bake(lowPos, uvIdx, uv, highPos, highIdx, paint|null, size, maxDist, dilate) -> { normal, color, height, heightRange, hits, misses }  (bake.js)
 //   info() -> { version, threads }
 #define NAPI_VERSION 8
 #include <node_api.h>
 
 #include <algorithm>
 #include <atomic>
+#include <condition_variable>
+#include <mutex>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -20,7 +25,7 @@
 
 namespace {
 
-const char* kVersion = "1.1.0";
+const char* kVersion = "1.2.0";
 
 unsigned hwThreads() {
   unsigned t = std::thread::hardware_concurrency();
@@ -185,6 +190,20 @@ V3 closestOnTri(V3 p, V3 a, V3 b, V3 c, double bc[3]) {
   return a + ab * v + ac * w;
 }
 
+// ray / triangle, both sides: same test as three.js Ray.intersectTriangle (backfaceCulling = false)
+inline V3 crossv(V3 a, V3 b) { return {a.y*b.z - a.z*b.y, a.z*b.x - a.x*b.z, a.x*b.y - a.y*b.x}; }
+bool rayTri(V3 o, V3 d, V3 a, V3 b, V3 c, double& t) {
+  V3 e1 = b - a, e2 = c - a, n = crossv(e1, e2);
+  double DdN = dot(d, n), sign;
+  if (DdN > 0) sign = 1; else if (DdN < 0) { sign = -1; DdN = -DdN; } else return false;
+  V3 diff = o - a;
+  const double DdQxE2 = sign * dot(d, crossv(diff, e2)); if (DdQxE2 < 0) return false;
+  const double DdE1xQ = sign * dot(d, crossv(e1, diff)); if (DdE1xQ < 0) return false;
+  if (DdQxE2 + DdE1xQ > DdN) return false;
+  const double QdN = -sign * dot(diff, n); if (QdN < 0) return false;
+  t = QdN / DdN; return true;
+}
+
 class TriTree {
  public:
   TriTree(const float* pos, const uint32_t* idx, size_t nF) : pos_(pos), idx_(idx) {
@@ -218,6 +237,41 @@ class TriTree {
       }
     }
     return face;
+  }
+  // nearest ray hit with t >= 0 on either side of a triangle; returns face or -1
+  int64_t raycast(V3 o, V3 d, double& tHit) const {
+    if (nodes_.empty()) return -1;
+    const double inv[3] = {1 / d.x, 1 / d.y, 1 / d.z}, oc[3] = {o.x, o.y, o.z};
+    auto boxT = [&](const Node& n) -> double {
+      double t0 = 0, t1 = INFINITY;
+      for (int k = 0; k < 3; k++) {
+        double a = (n.mn[k] - oc[k]) * inv[k], b = (n.mx[k] - oc[k]) * inv[k];
+        if (std::isnan(a) || std::isnan(b)) { if (oc[k] < n.mn[k] || oc[k] > n.mx[k]) return INFINITY; continue; }
+        if (a > b) std::swap(a, b);
+        t0 = std::max(t0, a); t1 = std::min(t1, b);
+        if (t0 > t1) return INFINITY;
+      }
+      return t0;
+    };
+    int64_t face = -1; double best = INFINITY;
+    uint32_t stack[128]; int sp = 0; stack[sp++] = 0;
+    while (sp) {
+      const Node& n = nodes_[stack[--sp]];
+      const double bt = boxT(n);
+      if (bt == INFINITY || bt > best) continue;   // missed, or farther than the best hit so far
+      if (n.count) {
+        for (uint32_t t = n.start; t < n.start + n.count; t++) {
+          const uint32_t f = tris_[t]; double th;
+          if (rayTri(o, d, vtx(idx_[f*3]), vtx(idx_[f*3+1]), vtx(idx_[f*3+2]), th) && th < best) { best = th; face = f; }
+        }
+      } else {
+        const uint32_t l = n.left, r = n.left + 1;
+        const double tl = boxT(nodes_[l]), tr = boxT(nodes_[r]);
+        if (sp + 2 > 128) continue;
+        if (tl < tr) { stack[sp++] = r; stack[sp++] = l; } else { stack[sp++] = l; stack[sp++] = r; }
+      }
+    }
+    tHit = best; return face;
   }
 
  private:
@@ -253,6 +307,284 @@ class TriTree {
 // snap to the closest source face (unless it is buried), then `smooth` rounds of tangential relaxation + snap.
 // Also returns, for every vertex, the closest source face and barycentric weights (for mask / colour transfer).
 napi_value FitSurface(napi_env env, napi_callback_info info);
+
+// ---------------- field-aligned retopology: 4-RoSy orientation / position field smoothing ----------------
+// The same Gauss-Seidel sweeps as smoothOrientations / smoothPositions in src/fieldretopo.js.
+inline V3 normv(V3 v) { double l = std::hypot(v.x, v.y, v.z); if (!(l != 0)) l = 1; return {v.x / l, v.y / l, v.z / l}; }
+inline V3 tangentOf(V3 v, V3 n) { const double d = dot(v, n); return {v.x - n.x*d, v.y - n.y*d, v.z - n.z*d}; }
+inline V3 getf(const float* A, size_t i) { return {A[i*3], A[i*3+1], A[i*3+2]}; }
+inline void setf(float* A, size_t i, V3 v) { A[i*3] = (float)v.x; A[i*3+1] = (float)v.y; A[i*3+2] = (float)v.z; }
+inline double jsRound(double x) { return std::floor(x + 0.5); }   // Math.round
+
+std::vector<uint32_t> visitOrder(size_t n, uint32_t seed) {   // order() in fieldretopo.js
+  std::vector<uint32_t> o(n); for (size_t i = 0; i < n; i++) o[i] = (uint32_t)i;
+  uint32_t r = seed ? seed : 1;
+  for (size_t i = n; i-- > 1;) { r = r * 1664525u + 1013904223u; const size_t j = r % (i + 1); std::swap(o[i], o[j]); }
+  return o;
+}
+void compatOrient(V3 q0, V3 n0, V3 q1, V3 n1, V3& ra, V3& rb) {
+  const V3 A[2] = {q0, crossv(n0, q0)}, B[2] = {q1, crossv(n1, q1)};
+  double best = -1, sgn = 1; int bi = 0, bj = 0;
+  for (int i = 0; i < 2; i++) for (int j = 0; j < 2; j++) {
+    const double d = dot(A[i], B[j]);
+    if (std::fabs(d) > best) { best = std::fabs(d); bi = i; bj = j; sgn = d < 0 ? -1 : 1; }
+  }
+  ra = A[bi]; rb = {B[bj].x * sgn, B[bj].y * sgn, B[bj].z * sgn};
+}
+V3 lattice(V3 o, V3 q, V3 n, V3 p, double s, bool round) {
+  const V3 t = crossv(n, q), d = p - o;
+  const double a0 = dot(d, q) / s, b0 = dot(d, t) / s;
+  const double a = round ? jsRound(a0) : std::floor(a0), b = round ? jsRound(b0) : std::floor(b0);
+  return {o.x + (q.x*a + t.x*b)*s, o.y + (q.y*a + t.y*b)*s, o.z + (q.z*a + t.z*b)*s};
+}
+V3 middlePoint(V3 p0, V3 n0, V3 p1, V3 n1) {
+  const double n0p0 = dot(n0, p0), n0p1 = dot(n0, p1), n1p0 = dot(n1, p0), n1p1 = dot(n1, p1);
+  const double n0n1 = dot(n0, n1), den = 1 / (1 - n0n1*n0n1 + 1e-4);
+  const double l0 = 2 * (n0p1 - n0p0 - n0n1 * (n1p0 - n1p1)) * den, l1 = 2 * (n1p0 - n1p1 - n0n1 * (n0p1 - n0p0)) * den;
+  return {0.5*(p0.x+p1.x) - 0.25*(n0.x*l0 + n1.x*l1), 0.5*(p0.y+p1.y) - 0.25*(n0.y*l0 + n1.y*l1), 0.5*(p0.z+p1.z) - 0.25*(n0.z*l0 + n1.z*l1)};
+}
+void compatPos(V3 p0, V3 n0, V3 q0, V3 o0, V3 p1, V3 n1, V3 q1, V3 o1, double s, V3& r0, V3& r1) {
+  const V3 t0 = crossv(n0, q0), t1 = crossv(n1, q1), m = middlePoint(p0, n0, p1, n1);
+  const V3 a0 = lattice(o0, q0, n0, m, s, false), a1 = lattice(o1, q1, n1, m, s, false);
+  V3 c1s[4];
+  for (int j = 0; j < 4; j++) {
+    const double j0 = j & 1, j1 = (j >> 1) & 1;
+    c1s[j] = {a1.x + (j0*q1.x + j1*t1.x)*s, a1.y + (j0*q1.y + j1*t1.y)*s, a1.z + (j0*q1.z + j1*t1.z)*s};
+  }
+  double best = INFINITY;
+  for (int i = 0; i < 4; i++) {
+    const double i0 = i & 1, i1 = (i >> 1) & 1;
+    const V3 c0{a0.x + (i0*q0.x + i1*t0.x)*s, a0.y + (i0*q0.y + i1*t0.y)*s, a0.z + (i0*q0.z + i1*t0.z)*s};
+    for (int j = 0; j < 4; j++) {
+      const V3 e = c0 - c1s[j]; const double d = e.x*e.x + e.y*e.y + e.z*e.z;
+      if (d < best) { best = d; r0 = c0; r1 = c1s[j]; }
+    }
+  }
+}
+V3 onPlane(V3 o, V3 q, V3 t) {
+  const V3 d = std::fabs(q.x) >= std::fabs(t.x) ? q : t;
+  if (!(std::fabs(d.x) > 1e-3)) return o;
+  return {o.x - d.x * o.x / d.x, o.y - d.y * o.x / d.x, o.z - d.z * o.x / d.x};
+}
+// Vertices are visited in the shuffled order. With `parallel`, they are first greedily coloured so that no two
+// neighbours share a colour (as in Instant Meshes) and each colour class is updated on all cores. That changes
+// the update order, so the result is not bit-identical to the JavaScript sweep, but it is still deterministic.
+template <class F>
+void sweep(size_t n, const uint32_t* st, const uint32_t* list, const std::vector<uint32_t>& ord, bool shuffle, bool parallel, int iters, F body) {
+  if (!parallel || n < 4096) {
+    for (int it = 0; it < iters; it++) for (size_t ii = 0; ii < n; ii++) body(shuffle ? ord[ii] : ii);
+    return;
+  }
+  std::vector<int32_t> color(n, -1); std::vector<uint8_t> used; int nc = 0;
+  for (size_t ii = 0; ii < n; ii++) {
+    const size_t i = shuffle ? ord[ii] : ii;
+    used.assign(nc + 1, 0);
+    for (uint32_t j = st[i]; j < st[i + 1]; j++) { const int32_t c = color[list[j]]; if (c >= 0) used[c] = 1; }
+    int c = 0; while (used[c]) c++;
+    color[i] = c; nc = std::max(nc, c + 1);
+  }
+  std::vector<std::vector<uint32_t>> groups(nc);
+  for (size_t ii = 0; ii < n; ii++) { const size_t i = shuffle ? ord[ii] : ii; groups[color[i]].push_back((uint32_t)i); }
+  // one set of threads for all (iteration, colour) phases; a barrier separates the phases
+  const unsigned T = std::max(1u, std::min<unsigned>(hwThreads(), (unsigned)(n / 1024)));
+  const size_t phases = (size_t)iters * nc;
+  std::vector<std::atomic<size_t>> next(phases);
+  for (auto& a : next) a.store(0);
+  std::mutex mu; std::condition_variable cv; unsigned arrived = 0; size_t generation = 0;
+  auto barrier = [&]() {
+    std::unique_lock<std::mutex> lk(mu);
+    const size_t gen = generation;
+    if (++arrived == T) { arrived = 0; generation++; cv.notify_all(); }
+    else cv.wait(lk, [&] { return generation != gen; });
+  };
+  auto work = [&]() {
+    for (size_t ph = 0; ph < phases; ph++) {
+      const auto& g = groups[ph % nc];
+      const size_t chunk = std::max<size_t>(16, g.size() / (T * 8));
+      for (;;) {
+        const size_t s = next[ph].fetch_add(chunk);
+        if (s >= g.size()) break;
+        for (size_t k = s, e = std::min(g.size(), s + chunk); k < e; k++) body(g[k]);
+      }
+      barrier();
+    }
+  };
+  std::vector<std::thread> pool;
+  for (unsigned t = 1; t < T; t++) pool.emplace_back(work);
+  work();
+  for (auto& th : pool) th.join();
+}
+void smoothOrient(size_t n, const float* N, float* Q, const uint32_t* st, const uint32_t* list, const uint8_t* fq, int iters, bool shuffle, bool parallel) {
+  const std::vector<uint32_t> ord = shuffle ? visitOrder(n, 7) : std::vector<uint32_t>();
+  sweep(n, st, list, ord, shuffle, parallel, iters, [&](size_t i) {
+    if (fq[i]) return;
+    const V3 ni = getf(N, i); V3 q = getf(Q, i); double ws = 0;
+    for (uint32_t j = st[i]; j < st[i + 1]; j++) {
+      const uint32_t u = list[j]; const double w = fq[u] ? 4 : 1;
+      V3 a, b; compatOrient(q, ni, getf(Q, u), getf(N, u), a, b);
+      q = normv(tangentOf({a.x*ws + b.x*w, a.y*ws + b.y*w, a.z*ws + b.z*w}, ni));
+      ws += w;
+    }
+    setf(Q, i, q);
+  });
+}
+void smoothPos(size_t n, const float* V, const float* N, const float* Q, float* O, const uint32_t* st, const uint32_t* list,
+               const uint8_t* fo, const uint8_t* fx, double s, int iters, bool shuffle, bool parallel) {
+  const std::vector<uint32_t> ord = shuffle ? visitOrder(n, 13) : std::vector<uint32_t>();
+  sweep(n, st, list, ord, shuffle, parallel, iters, [&](size_t i) {
+    if (fo[i]) return;
+    const V3 vi = getf(V, i), ni = getf(N, i), qi = getf(Q, i);
+    V3 o = getf(O, i); double ws = 0;
+    for (uint32_t j = st[i]; j < st[i + 1]; j++) {
+      const uint32_t u = list[j]; const double w = fo[u] ? 4 : 1;
+      V3 a, b; compatPos(vi, ni, qi, o, getf(V, u), getf(N, u), getf(Q, u), getf(O, u), s, a, b);
+      o = {(a.x*ws + b.x*w) / (ws + w), (a.y*ws + b.y*w) / (ws + w), (a.z*ws + b.z*w) / (ws + w)};
+      ws += w;
+      const double d = (o.x-vi.x)*ni.x + (o.y-vi.y)*ni.y + (o.z-vi.z)*ni.z;
+      o = {o.x - ni.x*d, o.y - ni.y*d, o.z - ni.z*d};
+    }
+    o = lattice(o, qi, ni, vi, s, true);
+    if (fx[i]) o = onPlane(o, qi, crossv(ni, qi));
+    setf(O, i, o);
+  });
+}
+
+// ---------------- texture baking (see bakeMaps in src/bake.js) ----------------
+std::vector<float> vertexNormalsF(const float* p, size_t nP, const uint32_t* ix, size_t nI) {   // float32 sums, like the JS
+  std::vector<float> n(nP, 0.f);
+  for (size_t f = 0; f < nI; f += 3) {
+    const size_t a = (size_t)ix[f]*3, b = (size_t)ix[f+1]*3, c = (size_t)ix[f+2]*3;
+    const double ux = p[b]-p[a], uy = p[b+1]-p[a+1], uz = p[b+2]-p[a+2], wx = p[c]-p[a], wy = p[c+1]-p[a+1], wz = p[c+2]-p[a+2];
+    const double x = uy*wz - uz*wy, y = uz*wx - ux*wz, z = ux*wy - uy*wx;
+    for (size_t t : {a, b, c}) { n[t] = (float)(n[t] + x); n[t+1] = (float)(n[t+1] + y); n[t+2] = (float)(n[t+2] + z); }
+  }
+  for (size_t i = 0; i < nP; i += 3) {
+    double l = std::hypot((double)n[i], (double)n[i+1], (double)n[i+2]); if (!(l != 0)) l = 1;
+    n[i] = (float)(n[i] / l); n[i+1] = (float)(n[i+1] / l); n[i+2] = (float)(n[i+2] / l);
+  }
+  return n;
+}
+inline uint8_t clamp8(double v) { if (!(v > 0)) return 0; if (v >= 255) return 255; return (uint8_t)std::nearbyint(v); }   // Uint8ClampedArray
+inline double lin2srgb(double x) { return x <= 0.0031308 ? 12.92 * x : 1.055 * std::pow(x, 1 / 2.4) - 0.055; }
+void barycoord(V3 p, V3 a, V3 b, V3 c, double out[3]) {   // three.js Triangle.getBarycoord
+  const V3 v0 = c - a, v1 = b - a, v2 = p - a;
+  const double d00 = dot(v0, v0), d01 = dot(v0, v1), d02 = dot(v0, v2), d11 = dot(v1, v1), d12 = dot(v1, v2);
+  const double den = d00 * d11 - d01 * d01;
+  if (den == 0) { out[0] = 1; out[1] = out[2] = 0; return; }
+  const double inv = 1 / den, u = (d11 * d02 - d01 * d12) * inv, v = (d00 * d12 - d01 * d02) * inv;
+  out[0] = 1 - u - v; out[1] = v; out[2] = u;
+}
+struct BakeOut { std::vector<uint8_t> nrm, col, height; double range = 0; size_t hits = 0, misses = 0; };
+void bake(const float* lp, size_t nLP, const uint32_t* li, size_t nLI, const float* uv, const float* hp, size_t nHP, const uint32_t* hi, size_t nHI,
+          const float* paint, int S, double maxD, int dilate, BakeOut& out) {
+  const size_t nF = nLI / 3, SS = (size_t)S * S;
+  const unsigned T = hwThreads();
+  const std::vector<float> ln = vertexNormalsF(lp, nLP, li, nLI), hn = vertexNormalsF(hp, nHP, hi, nHI);
+  TriTree tree(hp, hi, nHI / 3);
+  // 1. rasterise in UV space (in face order, first face wins, as in the JS) -> texel's face + weights
+  std::vector<int32_t> tFace(SS, -1); std::vector<double> tW(SS * 2);
+  std::vector<double> frame(nF * 6);
+  for (size_t f = 0; f < nF; f++) {
+    const uint32_t ia = li[f*3], ib = li[f*3+1], ic = li[f*3+2];
+    const double u0 = uv[f*6] * S, v0 = uv[f*6+1] * S, u1 = uv[f*6+2] * S, v1 = uv[f*6+3] * S, u2 = uv[f*6+4] * S, v2 = uv[f*6+5] * S;
+    const double det = (u1 - u0) * (v2 - v0) - (u2 - u0) * (v1 - v0);
+    if (std::fabs(det) < 1e-12) continue;
+    const double e1x = lp[ib*3]-lp[ia*3], e1y = lp[ib*3+1]-lp[ia*3+1], e1z = lp[ib*3+2]-lp[ia*3+2];
+    const double e2x = lp[ic*3]-lp[ia*3], e2y = lp[ic*3+1]-lp[ia*3+1], e2z = lp[ic*3+2]-lp[ia*3+2];
+    const double du1 = (u1 - u0) / S, dv1 = (v1 - v0) / S, du2 = (u2 - u0) / S, dv2 = (v2 - v0) / S, r = 1 / (du1 * dv2 - du2 * dv1);
+    double* F = &frame[f*6];
+    F[0] = (e1x * dv2 - e2x * dv1) * r; F[1] = (e1y * dv2 - e2y * dv1) * r; F[2] = (e1z * dv2 - e2z * dv1) * r;
+    F[3] = (e2x * du1 - e1x * du2) * r; F[4] = (e2y * du1 - e1y * du2) * r; F[5] = (e2z * du1 - e1z * du2) * r;
+    const int x0 = (int)std::max(0.0, std::floor(std::min({u0, u1, u2}))), x1 = (int)std::min((double)S - 1, std::ceil(std::max({u0, u1, u2})));
+    const int y0 = (int)std::max(0.0, std::floor(std::min({v0, v1, v2}))), y1 = (int)std::min((double)S - 1, std::ceil(std::max({v0, v1, v2})));
+    const double eps = -0.5 / std::sqrt(std::fabs(det));
+    for (int y = y0; y <= y1; y++) for (int x = x0; x <= x1; x++) {
+      const double px = x + 0.5, py = y + 0.5;
+      const double w1 = ((px - u0) * (v2 - v0) - (u2 - u0) * (py - v0)) / det, w2 = ((u1 - u0) * (py - v0) - (px - u0) * (v1 - v0)) / det, w0 = 1 - w1 - w2;
+      if (w0 < eps || w1 < eps || w2 < eps) continue;
+      const size_t k = (size_t)(S - 1 - y) * S + x;
+      if (tFace[k] >= 0) continue;
+      tFace[k] = (int32_t)f; tW[k*2] = w1; tW[k*2+1] = w2;
+    }
+  }
+  // 2. per texel (in parallel): ray from outside along -normal, else the closest point
+  out.nrm.assign(SS * 4, 0); if (paint) out.col.assign(SS * 4, 0);
+  std::vector<uint8_t> filled(SS, 0); std::vector<float> hgt(SS, 0.f);
+  std::atomic<size_t> hits{0}, misses{0};
+  parallelFor((SS + 255) / 256, T, [&](size_t blk) {
+    size_t h = 0, m = 0;
+    for (size_t k = blk * 256, ke = std::min(SS, k + 256); k < ke; k++) {
+      const int32_t f = tFace[k]; if (f < 0) continue;
+      const uint32_t ia = li[f*3], ib = li[f*3+1], ic = li[f*3+2];
+      const double w1 = tW[k*2], w2 = tW[k*2+1], w0 = 1 - w1 - w2;
+      const V3 P{lp[ia*3]*w0 + lp[ib*3]*w1 + lp[ic*3]*w2, lp[ia*3+1]*w0 + lp[ib*3+1]*w1 + lp[ic*3+1]*w2, lp[ia*3+2]*w0 + lp[ib*3+2]*w1 + lp[ic*3+2]*w2};
+      V3 N{ln[ia*3]*w0 + ln[ib*3]*w1 + ln[ic*3]*w2, ln[ia*3+1]*w0 + ln[ib*3+1]*w1 + ln[ic*3+1]*w2, ln[ia*3+2]*w0 + ln[ib*3+2]*w1 + ln[ic*3+2]*w2};
+      { double l = std::sqrt(dot(N, N)); N = N * (1 / (l != 0 ? l : 1)); }
+      const double* F = &frame[(size_t)f*6];
+      V3 Tg{F[0], F[1], F[2]}; Tg = Tg + N * -dot(N, Tg);
+      { double l = std::sqrt(dot(Tg, Tg)); Tg = Tg * (1 / (l != 0 ? l : 1)); }
+      const V3 Bf{F[3], F[4], F[5]}, nt = crossv(N, Tg);
+      const double handed = dot(Bf, nt) < 0 ? -1 : 1;
+      const V3 B = nt * handed;
+      const V3 O = P + N * maxD, D = N * -1;
+      double t; int64_t face = tree.raycast(O, D, t); V3 point;
+      if (face >= 0 && t <= 2 * maxD) point = O + D * t;
+      else { double bc[3]; face = tree.closest(P, 4 * maxD * maxD, point, bc); if (face < 0) { m++; continue; } }
+      h++;
+      const uint32_t a = hi[face*3], b = hi[face*3+1], c = hi[face*3+2];
+      double bc[3]; barycoord(point, getf(hp, a), getf(hp, b), getf(hp, c), bc);
+      const double hx = hn[a*3]*bc[0] + hn[b*3]*bc[1] + hn[c*3]*bc[2], hy = hn[a*3+1]*bc[0] + hn[b*3+1]*bc[1] + hn[c*3+1]*bc[2], hz = hn[a*3+2]*bc[0] + hn[b*3+2]*bc[1] + hn[c*3+2]*bc[2];
+      double hl = std::hypot(hx, hy, hz); if (!(hl != 0)) hl = 1;
+      const V3 Hn{hx, hy, hz};
+      out.nrm[k*4] = clamp8((dot(Hn, Tg) / hl * 0.5 + 0.5) * 255); out.nrm[k*4+1] = clamp8((dot(Hn, B) / hl * 0.5 + 0.5) * 255);
+      out.nrm[k*4+2] = clamp8((dot(Hn, N) / hl * 0.5 + 0.5) * 255); out.nrm[k*4+3] = 255;
+      if (paint) {
+        for (int q = 0; q < 3; q++) out.col[k*4+q] = clamp8(lin2srgb(paint[a*3+q]*bc[0] + paint[b*3+q]*bc[1] + paint[c*3+q]*bc[2]) * 255);
+        out.col[k*4+3] = 255;
+      }
+      hgt[k] = (float)((point.x - P.x) * N.x + (point.y - P.y) * N.y + (point.z - P.z) * N.z);
+      filled[k] = 1;
+    }
+    hits += h; misses += m;
+  });
+  out.hits = hits; out.misses = misses;
+  // 3. dilate chart borders (each pass reads the previous pass's result)
+  for (int it = 0; it < dilate; it++) {
+    std::vector<uint8_t> nf(filled);
+    std::atomic<bool> any{false};
+    parallelFor((size_t)S, T, [&](size_t y) {
+      bool a = false;
+      for (int x = 0; x < S; x++) {
+        const size_t k = y * S + x; if (filled[k]) continue;
+        int n = 0; double s0 = 0, s1 = 0, s2 = 0, c0 = 0, c1 = 0, c2 = 0, hh = 0;
+        const int dx[4] = {1, -1, 0, 0}, dy[4] = {0, 0, 1, -1};
+        for (int d = 0; d < 4; d++) {
+          const int xx = x + dx[d], yy = (int)y + dy[d]; if (xx < 0 || yy < 0 || xx >= S || yy >= S) continue;
+          const size_t q = (size_t)yy * S + xx; if (!filled[q]) continue;
+          n++; s0 += out.nrm[q*4]; s1 += out.nrm[q*4+1]; s2 += out.nrm[q*4+2]; hh += hgt[q];
+          if (paint) { c0 += out.col[q*4]; c1 += out.col[q*4+1]; c2 += out.col[q*4+2]; }
+        }
+        if (!n) continue;
+        a = true; nf[k] = 2;
+        // stash into the pixel itself: unfilled pixels are never read by this pass
+        out.nrm[k*4] = clamp8(s0 / n); out.nrm[k*4+1] = clamp8(s1 / n); out.nrm[k*4+2] = clamp8(s2 / n); out.nrm[k*4+3] = 255;
+        if (paint) { out.col[k*4] = clamp8(c0 / n); out.col[k*4+1] = clamp8(c1 / n); out.col[k*4+2] = clamp8(c2 / n); out.col[k*4+3] = 255; }
+        hgt[k] = (float)(hh / n);
+      }
+      if (a) any = true;
+    });
+    if (!any) break;
+    for (size_t k = 0; k < SS; k++) filled[k] = nf[k] ? 1 : 0;
+  }
+  for (size_t k = 0; k < SS; k++) if (!filled[k]) {
+    out.nrm[k*4] = 128; out.nrm[k*4+1] = 128; out.nrm[k*4+2] = 255; out.nrm[k*4+3] = 255;
+    if (paint) { out.col[k*4] = out.col[k*4+1] = out.col[k*4+2] = 128; out.col[k*4+3] = 255; }
+  }
+  double range = 0; for (size_t k = 0; k < SS; k++) if (filled[k]) range = std::max(range, (double)std::fabs(hgt[k]));
+  out.range = range;
+  out.height.assign(SS * 4, 255);
+  for (size_t k = 0; k < SS; k++) { const uint8_t g = range > 0 && filled[k] ? clamp8(128 + hgt[k] / range * 127) : 128; out.height[k*4] = out.height[k*4+1] = out.height[k*4+2] = g; }
+}
 
 // ---------------- Node-API glue ----------------
 #define CHECK(call) do { if ((call) != napi_ok) { napi_throw_error(env, nullptr, "bp_native: " #call); return nullptr; } } while (0)
@@ -426,6 +758,92 @@ napi_value FitSurface(napi_env env, napi_callback_info info) {
   return obj;
 }
 
+// adjacency (CSR) must stay inside n vertices
+bool checkAdj(const uint32_t* st, size_t nSt, const uint32_t* list, size_t nList, size_t n) {
+  if (nSt != n + 1 || st[0] != 0 || st[n] > nList) return false;
+  for (size_t i = 0; i < n; i++) if (st[i + 1] < st[i]) return false;
+  for (size_t j = 0; j < st[n]; j++) if (list[j] >= n) return false;
+  return true;
+}
+
+// smoothOrient(N, Q, start, list, fq, iters, shuffle, parallel?) -> Float32Array (smoothed Q)
+napi_value SmoothOrient(napi_env env, napi_callback_info info) {
+  size_t argc = 8; napi_value argv[8];
+  CHECK(napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr));
+  float *N, *Q0; uint32_t *st, *list; uint8_t* fq; size_t nN, nQ, nSt, nL, nFq; double iters = 0; bool shuffle = false;
+  if (argc < 7 || !typedArg(env, argv[0], napi_float32_array, (void**)&N, &nN) || !typedArg(env, argv[1], napi_float32_array, (void**)&Q0, &nQ)
+      || !typedArg(env, argv[2], napi_uint32_array, (void**)&st, &nSt) || !typedArg(env, argv[3], napi_uint32_array, (void**)&list, &nL)
+      || !typedArg(env, argv[4], napi_uint8_array, (void**)&fq, &nFq) || napi_get_value_double(env, argv[5], &iters) != napi_ok
+      || napi_get_value_bool(env, argv[6], &shuffle) != napi_ok) {
+    napi_throw_type_error(env, nullptr, "smoothOrient(N, Q, start, list, fq, iters, shuffle)"); return nullptr;
+  }
+  const size_t n = nQ / 3;
+  if (nN != nQ || nQ % 3 || nFq < n || !checkAdj(st, nSt, list, nL, n)) { napi_throw_range_error(env, nullptr, "smoothOrient: inconsistent sizes"); return nullptr; }
+  std::vector<float> Q(Q0, Q0 + nQ);
+  bool parallel = false; if (argc > 7) napi_get_value_bool(env, argv[7], &parallel);
+  smoothOrient(n, N, Q.data(), st, list, fq, (int)std::min(1000.0, std::max(0.0, iters)), shuffle, parallel);
+  napi_value r = makeTyped(env, napi_float32_array, Q.data(), Q.size());
+  if (!r) { napi_throw_error(env, nullptr, "smoothOrient: out of memory"); return nullptr; }
+  return r;
+}
+
+// smoothPos(V, N, Q, O, start, list, fo, fx, s, iters, shuffle, parallel?) -> Float32Array (smoothed O)
+napi_value SmoothPos(napi_env env, napi_callback_info info) {
+  size_t argc = 12; napi_value argv[12];
+  CHECK(napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr));
+  float *V, *N, *Q, *O0; uint32_t *st, *list; uint8_t *fo, *fx; size_t nV, nN, nQ, nO, nSt, nL, nFo, nFx; double s = 0, iters = 0; bool shuffle = false;
+  if (argc < 11 || !typedArg(env, argv[0], napi_float32_array, (void**)&V, &nV) || !typedArg(env, argv[1], napi_float32_array, (void**)&N, &nN)
+      || !typedArg(env, argv[2], napi_float32_array, (void**)&Q, &nQ) || !typedArg(env, argv[3], napi_float32_array, (void**)&O0, &nO)
+      || !typedArg(env, argv[4], napi_uint32_array, (void**)&st, &nSt) || !typedArg(env, argv[5], napi_uint32_array, (void**)&list, &nL)
+      || !typedArg(env, argv[6], napi_uint8_array, (void**)&fo, &nFo) || !typedArg(env, argv[7], napi_uint8_array, (void**)&fx, &nFx)
+      || napi_get_value_double(env, argv[8], &s) != napi_ok || napi_get_value_double(env, argv[9], &iters) != napi_ok
+      || napi_get_value_bool(env, argv[10], &shuffle) != napi_ok) {
+    napi_throw_type_error(env, nullptr, "smoothPos(V, N, Q, O, start, list, fo, fx, s, iters, shuffle)"); return nullptr;
+  }
+  const size_t n = nO / 3;
+  if (nV != nO || nN != nO || nQ != nO || nO % 3 || nFo < n || nFx < n || !(s > 0) || !checkAdj(st, nSt, list, nL, n)) {
+    napi_throw_range_error(env, nullptr, "smoothPos: inconsistent sizes"); return nullptr;
+  }
+  std::vector<float> O(O0, O0 + nO);
+  bool parallel = false; if (argc > 11) napi_get_value_bool(env, argv[11], &parallel);
+  smoothPos(n, V, N, Q, O.data(), st, list, fo, fx, s, (int)std::min(1000.0, std::max(0.0, iters)), shuffle, parallel);
+  napi_value r = makeTyped(env, napi_float32_array, O.data(), O.size());
+  if (!r) { napi_throw_error(env, nullptr, "smoothPos: out of memory"); return nullptr; }
+  return r;
+}
+
+// bake(lowPos, uvIdx, uv, highPos, highIdx, paint|null, size, maxDist, dilate) -> { normal, color|null, height, heightRange, hits, misses }
+napi_value Bake(napi_env env, napi_callback_info info) {
+  size_t argc = 9; napi_value argv[9];
+  CHECK(napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr));
+  float *lp, *uv, *hp, *paint = nullptr; uint32_t *li, *hi; size_t nLP, nLI, nUV, nHP, nHI, nPaint = 0; double size = 0, maxD = 0, dilate = 0;
+  if (argc < 9 || !typedArg(env, argv[0], napi_float32_array, (void**)&lp, &nLP) || !typedArg(env, argv[1], napi_uint32_array, (void**)&li, &nLI)
+      || !typedArg(env, argv[2], napi_float32_array, (void**)&uv, &nUV) || !typedArg(env, argv[3], napi_float32_array, (void**)&hp, &nHP)
+      || !typedArg(env, argv[4], napi_uint32_array, (void**)&hi, &nHI) || napi_get_value_double(env, argv[6], &size) != napi_ok
+      || napi_get_value_double(env, argv[7], &maxD) != napi_ok || napi_get_value_double(env, argv[8], &dilate) != napi_ok) {
+    napi_throw_type_error(env, nullptr, "bake(lowPos, uvIdx, uv, highPos, highIdx, paint|null, size, maxDist, dilate)"); return nullptr;
+  }
+  napi_valuetype pt; napi_typeof(env, argv[5], &pt);
+  if (pt != napi_null && pt != napi_undefined && !typedArg(env, argv[5], napi_float32_array, (void**)&paint, &nPaint)) { napi_throw_type_error(env, nullptr, "bake: paint must be a Float32Array"); return nullptr; }
+  const size_t nLV = nLP / 3, nHV = nHP / 3, nF = nLI / 3;
+  if (nLI % 3 || nHI % 3 || nUV < nF * 6 || (paint && nPaint < nHV * 3) || !(size >= 1 && size <= 16384) || !(maxD > 0)) { napi_throw_range_error(env, nullptr, "bake: inconsistent sizes"); return nullptr; }
+  for (size_t i = 0; i < nLI; i++) if (li[i] >= nLV) { napi_throw_range_error(env, nullptr, "bake: low index out of range"); return nullptr; }
+  for (size_t i = 0; i < nHI; i++) if (hi[i] >= nHV) { napi_throw_range_error(env, nullptr, "bake: high index out of range"); return nullptr; }
+  BakeOut o;
+  bake(lp, nLP, li, nLI, uv, hp, nHP, hi, nHI, paint, (int)size, maxD, (int)std::min(64.0, std::max(0.0, dilate)), o);
+  napi_value obj, nv, cv, hv, rv, hitv, missv;
+  CHECK(napi_create_object(env, &obj));
+  nv = makeTyped(env, napi_uint8_clamped_array, o.nrm.data(), o.nrm.size());
+  hv = makeTyped(env, napi_uint8_clamped_array, o.height.data(), o.height.size());
+  if (paint) cv = makeTyped(env, napi_uint8_clamped_array, o.col.data(), o.col.size()); else CHECK(napi_get_null(env, &cv));
+  if (!nv || !hv || !cv) { napi_throw_error(env, nullptr, "bake: out of memory"); return nullptr; }
+  CHECK(napi_create_double(env, o.range, &rv)); CHECK(napi_create_double(env, (double)o.hits, &hitv)); CHECK(napi_create_double(env, (double)o.misses, &missv));
+  CHECK(napi_set_named_property(env, obj, "normal", nv)); CHECK(napi_set_named_property(env, obj, "color", cv));
+  CHECK(napi_set_named_property(env, obj, "height", hv)); CHECK(napi_set_named_property(env, obj, "heightRange", rv));
+  CHECK(napi_set_named_property(env, obj, "hits", hitv)); CHECK(napi_set_named_property(env, obj, "misses", missv));
+  return obj;
+}
+
 napi_value Info(napi_env env, napi_callback_info) {
   napi_value obj, v, t;
   CHECK(napi_create_object(env, &obj));
@@ -443,6 +861,9 @@ NAPI_MODULE_INIT() {
     {"voxelize", nullptr, Voxelize, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"surfaceNets", nullptr, SurfaceNets, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"fitSurface", nullptr, FitSurface, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"smoothOrient", nullptr, SmoothOrient, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"smoothPos", nullptr, SmoothPos, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"bake", nullptr, Bake, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"info", nullptr, Info, nullptr, nullptr, nullptr, napi_default, nullptr},
   };
   napi_define_properties(env, exports, sizeof(props) / sizeof(props[0]), props);
