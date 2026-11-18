@@ -1,6 +1,7 @@
 // Bake a high-resolution surface onto a UV-mapped low-resolution mesh:
 //  * normal map (tangent space, OpenGL / glTF convention: +Y up in the texture)
 //  * color map from the high mesh's vertex colors (polypaint), if it has any
+//  * height (displacement) map: signed distance from the low surface to the high one along the normal
 // For every texel covered by a low-poly triangle in UV space we take the point and smooth normal on the
 // low mesh, cast a ray from just outside it back along -normal, and read the high mesh where it hits.
 import * as THREE from 'three';
@@ -35,7 +36,7 @@ export function bakeMaps(low, high, opt) {
   g.setIndex(new THREE.BufferAttribute(high.idx.slice(), 1));
   const bvh = new MeshBVH(g), hi = g.index.array, hn = vertexNormals(high.pos, hi), hp = high.paint || null;
   const nrm = new Uint8ClampedArray(S * S * 4), col = hp ? new Uint8ClampedArray(S * S * 4) : null;
-  const filled = new Uint8Array(S * S);
+  const filled = new Uint8Array(S * S), hgt = new Float32Array(S * S);
   const ray = new THREE.Ray(), P = new THREE.Vector3(), N = new THREE.Vector3(), T = new THREE.Vector3(), B = new THREE.Vector3();
   const tri = new THREE.Triangle(), bc = new THREE.Vector3(), A = new THREE.Vector3(), Bv = new THREE.Vector3(), C = new THREE.Vector3();
   const hit = { point: new THREE.Vector3(), distance: 0, faceIndex: 0 };
@@ -80,6 +81,7 @@ export function bakeMaps(low, high, opt) {
       nrm[k*4] = (tn[0] * 0.5 + 0.5) * 255; nrm[k*4+1] = (tn[1] * 0.5 + 0.5) * 255; nrm[k*4+2] = (tn[2] * 0.5 + 0.5) * 255; nrm[k*4+3] = 255;
       if (col) for (let q = 0; q < 3; q++) col[k*4+q] = lin2srgb(hp[a*3+q]*bc.x + hp[b*3+q]*bc.y + hp[c*3+q]*bc.z) * 255;
       if (col) col[k*4+3] = 255;
+      hgt[k] = (point.x - P.x) * N.x + (point.y - P.y) * N.y + (point.z - P.z) * N.z;
       filled[k] = 1;
     }
   }
@@ -89,22 +91,26 @@ export function bakeMaps(low, high, opt) {
     const add = [];
     for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
       const k = y * S + x; if (filled[k]) continue;
-      let n = 0, s0 = 0, s1 = 0, s2 = 0, c0 = 0, c1 = 0, c2 = 0;
+      let n = 0, s0 = 0, s1 = 0, s2 = 0, c0 = 0, c1 = 0, c2 = 0, hh = 0;
       for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
         const xx = x + dx, yy = y + dy; if (xx < 0 || yy < 0 || xx >= S || yy >= S) continue;
         const q = yy * S + xx; if (!filled[q]) continue;
-        n++; s0 += nrm[q*4]; s1 += nrm[q*4+1]; s2 += nrm[q*4+2];
+        n++; s0 += nrm[q*4]; s1 += nrm[q*4+1]; s2 += nrm[q*4+2]; hh += hgt[q];
         if (col) { c0 += col[q*4]; c1 += col[q*4+1]; c2 += col[q*4+2]; }
       }
-      if (n) add.push(k, s0 / n, s1 / n, s2 / n, c0 / n, c1 / n, c2 / n);
+      if (n) add.push(k, s0 / n, s1 / n, s2 / n, c0 / n, c1 / n, c2 / n, hh / n);
     }
     if (!add.length) break;
-    for (let i = 0; i < add.length; i += 7) {
-      const k = add[i]; filled[k] = 1; nrm[k*4] = add[i+1]; nrm[k*4+1] = add[i+2]; nrm[k*4+2] = add[i+3]; nrm[k*4+3] = 255;
+    for (let i = 0; i < add.length; i += 8) {
+      const k = add[i]; filled[k] = 1; hgt[k] = add[i+7]; nrm[k*4] = add[i+1]; nrm[k*4+1] = add[i+2]; nrm[k*4+2] = add[i+3]; nrm[k*4+3] = 255;
       if (col) { col[k*4] = add[i+4]; col[k*4+1] = add[i+5]; col[k*4+2] = add[i+6]; col[k*4+3] = 255; }
     }
   }
   // empty texels: flat normal / neutral color
   for (let k = 0; k < S * S; k++) if (!filled[k]) { nrm[k*4] = 128; nrm[k*4+1] = 128; nrm[k*4+2] = 255; nrm[k*4+3] = 255; if (col) { col[k*4] = col[k*4+1] = col[k*4+2] = 128; col[k*4+3] = 255; } }
-  return { normal: nrm, color: col, hits, misses };
+  // height as 8-bit grey: 128 = on the low surface, 0 / 255 = -range / +range
+  let range = 0; for (let k = 0; k < S * S; k++) if (filled[k]) range = Math.max(range, Math.abs(hgt[k]));
+  const height = new Uint8ClampedArray(S * S * 4);
+  for (let k = 0; k < S * S; k++) { const g = range > 0 && filled[k] ? 128 + hgt[k] / range * 127 : 128; height[k*4] = height[k*4+1] = height[k*4+2] = g; height[k*4+3] = 255; }
+  return { normal: nrm, color: col, height, heightRange: range, hits, misses };
 }
