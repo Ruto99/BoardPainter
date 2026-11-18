@@ -54,6 +54,7 @@ nav.tools hr{border:0;border-top:1px solid var(--line);margin:3px 6px;flex:none;
 .alpha canvas{width:100%;height:100%;display:block}
 .alpha:hover{border-color:#6a6b73}
 .alpha.on{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+#refOverlay{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);max-width:none;pointer-events:none;z-index:1}
 #rdView{position:absolute;inset:0;z-index:6;display:flex;flex-direction:column;background:rgba(16,16,18,.92)}
 #rdImg{flex:1;min-height:0;object-fit:contain;width:100%;background:repeating-conic-gradient(#2a2b30 0 25%,#232428 0 50%) 0 0/20px 20px}
 .rd-bar{display:flex;align-items:center;gap:8px;padding:10px 12px;border-top:1px solid var(--line)}
@@ -193,6 +194,7 @@ dl.keys dd{margin:0;color:var(--muted)}
       モデル上を<kbd>左ドラッグ</kbd>で造形 · 背景ドラッグで回転 · <kbd>右</kbd>で平行移動 · ホイールでズーム<br>
       <kbd>Shift</kbd>スムーズ <kbd>Ctrl</kbd>マスク <kbd>Alt</kbd>反転 <kbd>[</kbd><kbd>]</kbd>サイズ
     </div>
+    <img id="refOverlay" alt="" hidden>
     <div id="busy" hidden>処理中…</div>
     <div id="rdView" hidden>
       <img id="rdImg" alt="レンダリング結果">
@@ -285,6 +287,41 @@ dl.keys dd{margin:0;color:var(--muted)}
       <p class="note">変形は選択中のパーツ全体にかかります（マスクした所は動きません）。「モーフ」ブラシで塗ると、塗った所だけ保存した形に戻ります。クリップは、ボタンを押してから画面上をドラッグして線を引くと、線から出ている短い印の側（Alt で反対側）が線の位置で平らになります。</p>
     </section>
 
+    <section id="refSec">
+      <h2>下絵（参考画像）</h2>
+      <div class="grid2"><button class="btn" id="refLoad">画像を読み込む…</button><button class="btn" id="refClear" disabled>下絵を消す</button></div>
+      <input type="file" id="refFile" accept="image/png,image/jpeg,image/webp,image/bmp,image/gif" hidden>
+      <p class="note" id="refInfo"></p>
+      <div class="row"><label for="refMode">表示</label><select id="refMode"><option value="front">正面の後ろに板で置く</option><option value="side">横の後ろに板で置く</option><option value="top">下に板で置く</option><option value="screen">画面に重ねる</option><option value="off">表示しない</option></select></div>
+      <div class="row"><label for="refOp">不透明度</label><output id="refOpOut">0.50</output></div>
+      <input type="range" id="refOp" min="0.05" max="1" step="0.01" value="0.5">
+      <div class="row"><label for="refSize">大きさ</label><output id="refSizeOut">1.00</output></div>
+      <input type="range" id="refSize" min="0.2" max="2" step="0.01" value="1">
+      <div class="row"><label for="refStr">投影の強さ</label><output id="refStrOut">1.00</output></div>
+      <input type="range" id="refStr" min="0.05" max="1" step="0.01" value="1">
+      <button class="btn full" id="refProject" disabled>画像を色として投影（Spotlight 風）</button>
+      <p class="note">正面・横の写真や三面図を置いて、形を合わせるのに使います。「画面に重ねる」で見えている位置のまま「投影」すると、手前に見えている面にその画像の色がポリペイントとして塗られます（マスクした所は塗られません）。</p>
+    </section>
+
+    <section id="toolSec">
+      <h2>パーツの道具</h2>
+      <div class="row"><label for="arCount">配列：個数</label><input type="number" id="arCount" min="2" max="50" value="5"></div>
+      <div class="row"><label for="arAxis">並べる向き</label><select id="arAxis"><option value="0">X（横）</option><option value="1">Y（縦）</option><option value="2">Z（奥）</option></select></div>
+      <div class="row"><label for="arGap">間隔（大きさに対して）</label><output id="arGapOut">1.20</output></div>
+      <input type="range" id="arGap" min="0.1" max="3" step="0.05" value="1.2">
+      <div class="row"><label for="arRot">1つごとの回転（度）</label><output id="arRotOut">0</output></div>
+      <input type="range" id="arRot" min="-90" max="90" step="1" value="0">
+      <div class="row"><label for="arScale">1つごとの大きさ</label><output id="arScaleOut">1.00</output></div>
+      <input type="range" id="arScale" min="0.5" max="1.5" step="0.01" value="1">
+      <button class="btn full" id="arGo">配列を作る（Array Mesh）</button>
+      <div class="row" style="margin-top:8px"><label for="mwSide">残す側</label><select id="mwSide"><option value="+">+X 側（右）</option><option value="-">−X 側（左）</option></select></div>
+      <div class="grid2">
+        <button class="btn" id="mwGo" title="片側を反対側に写して1つにつなげます（リメッシュの細かさを使います）">片側を写してつなぐ</button>
+        <button class="btn" id="pgSplit" title="ポリグループごとに別のサブツールにします">グループごとに分ける</button>
+      </div>
+      <p class="note">配列は元のパーツを並べた新しいサブツールを作ります（元は非表示）。「片側を写してつなぐ」は左右対称でないパーツを、残す側に合わせて左右対称に作り直します。</p>
+    </section>
+
     <section id="curveSec">
       <h2>チューブ・並べる（線に沿って作る）</h2>
       <div class="row"><label for="cvThick">太さ（ブラシサイズに対する割合）</label><output id="cvThickOut">0.35</output></div>
@@ -373,6 +410,7 @@ dl.keys dd{margin:0;color:var(--muted)}
       <div class="grid2">
         <button class="btn" id="paintFill">全体をこの色で塗る</button>
         <button class="btn" id="paintClear">色をすべて消す</button>
+        <button class="btn" id="paintCavity" title="溝やしわなど凹んだ所に、今の色を塗ります">凹みにこの色を塗る</button>
       </div>
       <p class="note">ツールバーの「ペイント」ブラシで塗ります（Alt で元の色に戻す）。マスクした所には塗られません。色は細分化レベル・リメッシュ・リトポにも引き継がれ、OBJ（頂点カラー）と GLB に書き出されます。</p>
     </section>
@@ -1621,8 +1659,8 @@ function maskOp(kind) {
   mask.set(out); recolorAll(); scheduleSave();
 }
 // mask the concave areas (grooves, wrinkles): how far the neighbour average sits above the surface
-function maskCavity() {
-  pushUndo();
+// 0..1 per vertex: how concave the surface is there (grooves, wrinkles), or null if nothing is concave
+function cavityField() {
   let c = new Float32Array(nV);
   for (let v = 0; v < nV; v++) {
     const s0 = vvStart[v], s1 = vvStart[v + 1], i = v * 3; if (s1 === s0) continue;
@@ -1637,9 +1675,15 @@ function maskCavity() {
     c = t;
   }
   const posv = Array.from(c).filter(x => x > 0).sort((a, b) => a - b);
-  if (!posv.length) { toast('凹んだ所が見つかりませんでした'); return; }
+  if (!posv.length) return null;
   const hi = posv[Math.floor(posv.length * 0.85)] || posv[posv.length - 1], lo = hi * 0.15;
-  for (let v = 0; v < nV; v++) mask[v] = Math.max(mask[v], Math.min(1, Math.max(0, (c[v] - lo) / (hi - lo))));
+  for (let v = 0; v < nV; v++) c[v] = Math.min(1, Math.max(0, (c[v] - lo) / (hi - lo)));
+  return c;
+}
+function maskCavity() {
+  const c = cavityField(); if (!c) { toast('凹んだ所が見つかりませんでした'); return; }
+  pushUndo();
+  for (let v = 0; v < nV; v++) mask[v] = Math.max(mask[v], c[v]);
   recolorAll(); scheduleSave(); toast('凹んだ所をマスクしました');
 }
 
@@ -2502,6 +2546,157 @@ function finishClip() {
   }
   afterBulkEdit();
   toast(n ? `${n.toLocaleString()} 頂点を線の位置で平らにしました` : '線の片側に頂点がありません（Alt を押しながら引くと反対側）');
+}
+
+// ---------------- reference image (下絵) + Spotlight-style projection into polypaint ----------------
+let ref = null;   // { url, img, tex, plane, data }
+async function loadRef(file) {
+  const url = URL.createObjectURL(file), img = new Image();
+  try { await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = url; }); } catch { URL.revokeObjectURL(url); toast('画像を読み込めませんでした'); return; }
+  clearRef(true);
+  const tex = new THREE.Texture(img); tex.colorSpace = THREE.SRGBColorSpace; tex.needsUpdate = true;
+  const plane = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, side: THREE.DoubleSide }));
+  plane.raycast = () => {}; plane.renderOrder = -1; plane.frustumCulled = false; scene.add(plane);
+  ref = { url, img, tex, plane, data: null };
+  $('refOverlay').src = url; $('refInfo').textContent = `${file.name}（${img.naturalWidth} × ${img.naturalHeight}）`;
+  $('refClear').disabled = $('refProject').disabled = false;
+  placeRef();
+  toast('下絵を読み込みました');
+}
+function placeRef() {
+  const ov = $('refOverlay');
+  if (!ref) { ov.hidden = true; return; }
+  const mode = $('refMode').value, op = +$('refOp').value, sc = +$('refSize').value, asp = ref.img.naturalWidth / ref.img.naturalHeight;
+  ov.style.opacity = op; ov.style.height = (sc * 100) + '%'; ov.hidden = mode !== 'screen';
+  const P = ref.plane; P.visible = mode === 'front' || mode === 'side' || mode === 'top';
+  if (!P.visible) return;
+  const box = sceneBounds(shownRecs()), size = box.getSize(new V3()), c = box.getCenter(new V3());
+  const H = Math.max(size.x, size.y, size.z, 1e-3) * sc * 1.15;
+  P.scale.set(H * asp, H, 1); P.material.opacity = op;
+  if (mode === 'front') { P.rotation.set(0, 0, 0); P.position.set(c.x, c.y, box.min.z - size.z * 0.6 - H * 0.02); }
+  else if (mode === 'side') { P.rotation.set(0, Math.PI / 2, 0); P.position.set(box.min.x - size.x * 0.6 - H * 0.02, c.y, c.z); }
+  else { P.rotation.set(-Math.PI / 2, 0, 0); P.position.set(c.x, box.min.y - size.y * 0.6 - H * 0.02, c.z); }
+}
+function clearRef(quiet) {
+  if (!ref) return;
+  scene.remove(ref.plane); ref.plane.geometry.dispose(); ref.plane.material.dispose(); ref.tex.dispose(); URL.revokeObjectURL(ref.url);
+  ref = null; $('refOverlay').hidden = true; $('refOverlay').removeAttribute('src'); $('refInfo').textContent = '';
+  $('refClear').disabled = $('refProject').disabled = true;
+  if (!quiet) toast('下絵を消しました');
+}
+// paint the image onto the visible surface, as it appears in "画面に重ねる" mode (centered, height = size × view height)
+function projectRef() {
+  if (!ref) { toast('先に下絵の画像を読み込んでください'); return; }
+  flushNormals(); ensureBVH(); camera.updateMatrixWorld();
+  if (!ref.data) {
+    const c = document.createElement('canvas'); c.width = ref.img.naturalWidth; c.height = ref.img.naturalHeight;
+    const g = c.getContext('2d'); g.drawImage(ref.img, 0, 0); ref.data = g.getImageData(0, 0, c.width, c.height);
+  }
+  const D = ref.data, iw = D.width, ih = D.height, asp = iw / ih;
+  const vw = canvas.clientWidth, vh = canvas.clientHeight, Hh = vh * +$('refSize').value, Ww = Hh * asp, x0 = (vw - Ww) / 2, y0 = (vh - Hh) / 2;
+  const M = new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse), e = M.elements;
+  const cam = camera.position, ray = new THREE.Ray(), dir = new V3(), strength = +$('refStr').value;
+  const lin = x => Math.pow(x / 255, 2.2);
+  pushUndo();
+  const pt = ensurePaint(); let n = 0;
+  for (let v = 0; v < nV; v++) {
+    const i = v * 3, k0 = 1 - mask[v]; if (k0 <= 0 || (hid && hid[v])) continue;
+    const x = pos[i], y = pos[i+1], z = pos[i+2];
+    dir.set(x - cam.x, y - cam.y, z - cam.z); const dist = dir.length(); dir.multiplyScalar(1 / dist);
+    if (nrm[i] * dir.x + nrm[i+1] * dir.y + nrm[i+2] * dir.z > -0.05) continue;   // facing away
+    const w = e[3]*x + e[7]*y + e[11]*z + e[15]; if (w <= 0) continue;
+    const sx = ((e[0]*x + e[4]*y + e[8]*z + e[12]) / w * 0.5 + 0.5) * vw, sy = (0.5 - (e[1]*x + e[5]*y + e[9]*z + e[13]) / w * 0.5) * vh;
+    const u = (sx - x0) / Ww, t = (sy - y0) / Hh; if (u < 0 || t < 0 || u >= 1 || t >= 1) continue;
+    const o = ((t * ih | 0) * iw + (u * iw | 0)) * 4, a = D.data[o + 3] / 255 * strength * k0; if (a < 0.02) continue;
+    ray.origin.copy(cam); ray.direction.copy(dir);
+    const h = geo.boundsTree.raycastFirst(ray, THREE.DoubleSide);
+    if (h && h.distance < dist - dist * 2e-3) continue;   // something in front of this vertex
+    pt[i] += (lin(D.data[o]) - pt[i]) * a; pt[i+1] += (lin(D.data[o+1]) - pt[i+1]) * a; pt[i+2] += (lin(D.data[o+2]) - pt[i+2]) * a;
+    setColor(v); n++;
+  }
+  colorDirty = gpuDirty = true; scheduleSave();
+  toast(n ? `${n.toLocaleString()} 頂点に下絵の色を投影しました` : '下絵と重なっている面がありません（「画面に重ねる」で位置を確認してください）');
+}
+
+// ---------------- split into subtools by polygroup ----------------
+function splitGroups() {
+  if (!pg) { toast('グループがありません（「つながりで分ける」などで作れます）'); return; }
+  const fg = new Int32Array(nF); for (let f = 0; f < nF; f++) fg[f] = pg[idx[f*3]];
+  const ids = [...new Set(fg)];
+  if (ids.length < 2) { toast('グループが1つだけなので分けられません'); return; }
+  if (ids.length > 64) { toast(`グループが多すぎます（${ids.length} 個）。64 個以下にしてください`); return; }
+  return busy(() => {
+    flushNormals(); pushStruct();
+    const parts = ids.map((g, k) => { const x = extractFaces(fg, g), r = newRec(uniqueName(`${active.name} G${k + 1}`), x.p, x.ix); r.paint = x.pt; return r; });
+    subtools.splice(subtools.indexOf(active), 1, ...parts);
+    activate(parts[0], true); scheduleSave();
+    toast(`グループごとに ${parts.length} 個のサブツールに分けました`);
+  });
+}
+
+// ---------------- array mesh: repeated copies with offset / turn / scale ----------------
+function arrayMesh() {
+  const n = Math.max(2, Math.min(50, +$('arCount').value | 0)), ax = +$('arAxis').value, gap = +$('arGap').value, rot = +$('arRot').value * Math.PI / 180, scl = +$('arScale').value;
+  return busy(() => {
+    flushNormals(); geo.computeBoundingBox();
+    const bb = geo.boundingBox, c = bb.getCenter(new V3()), L = bb.getSize(new V3()).getComponent(ax), step = L * gap;
+    const p = new Float32Array(pos.length * n), ix = new Uint32Array(idx.length * n), pt = paint ? new Float32Array(pos.length * n) : null;
+    const q = new V3(), Y = new V3(0, 1, 0);
+    for (let k = 0; k < n; k++) {
+      const s = Math.pow(scl, k), off = new V3().setComponent(ax, step * k), ang = rot * k;
+      for (let v = 0; v < nV; v++) {
+        q.set(pos[v*3] - c.x, pos[v*3+1] - c.y, pos[v*3+2] - c.z).multiplyScalar(s).applyAxisAngle(Y, ang).add(c).add(off);
+        const o = (k * nV + v) * 3; p[o] = q.x; p[o+1] = q.y; p[o+2] = q.z;
+      }
+      for (let f = 0; f < idx.length; f++) ix[k * idx.length + f] = idx[f] + k * nV;
+      if (pt) pt.set(paint, k * pos.length);
+    }
+    pushStruct();
+    const old = active, rec = newRec(uniqueName(old.name + ' 配列'), p, ix); rec.paint = pt;
+    old.visible = false; insertAfterActive(rec); activate(rec); frame(); scheduleSave();
+    toast(`${n} 個並べた「${rec.name}」を作りました（元のパーツは非表示）`);
+  });
+}
+
+// ---------------- mirror & weld: keep one side of X = 0 and mirror it (rebuilt with the voxel remesh) ----------------
+function mirrorWeld() {
+  if (stroke) return;
+  const keepPlus = $('mwSide').value === '+';
+  return busy(() => {
+    flushNormals();
+    const t0 = performance.now(), P = new Float32Array(pos.length * 2), I = new Uint32Array(idx.length * 2), M = new Float32Array(nV * 2);
+    const PT = paint ? new Float32Array(pos.length * 2) : null;
+    for (let v = 0; v < nV; v++) {
+      let x = pos[v*3]; if (keepPlus ? x < 0 : x > 0) x = 0;   // the discarded side collapses onto the mirror plane
+      P[v*3] = x; P[v*3+1] = pos[v*3+1]; P[v*3+2] = pos[v*3+2];
+      const o = (nV + v) * 3; P[o] = -x; P[o+1] = pos[v*3+1]; P[o+2] = pos[v*3+2];
+      M[v] = M[nV + v] = mask[v];
+      if (PT) for (let k = 0; k < 3; k++) PT[v*3+k] = PT[o+k] = paint[v*3+k];
+    }
+    for (let f = 0; f < idx.length; f += 3) {
+      I[f] = idx[f]; I[f+1] = idx[f+1]; I[f+2] = idx[f+2];
+      const o = idx.length + f; I[o] = idx[f] + nV; I[o+1] = idx[f+2] + nV; I[o+2] = idx[f+1] + nV;   // mirrored => reversed winding
+    }
+    const r = runRemesh({ pos: P, idx: I, mask: M, paint: PT });
+    if (!r) return;
+    pushStruct();
+    const old = active, rec = newRec(old.name, r.pos, r.idx, r.mask); rec.paint = r.paint; rec.visible = old.visible;
+    subtools.splice(subtools.indexOf(old), 1, rec);
+    activate(rec); scheduleSave();
+    toast(`${keepPlus ? '+X' : '−X'} 側を反対側に写して作り直しました（${nF.toLocaleString()} ポリゴン・${((performance.now() - t0) / 1000).toFixed(1)}秒）`);
+  });
+}
+
+// ---------------- cavity colouring ----------------
+function paintCavity() {
+  const c = cavityField(); if (!c) { toast('凹んだ所が見つかりませんでした'); return; }
+  pushUndo();
+  const pt = ensurePaint(), col = S.paintLin;
+  for (let v = 0; v < nV; v++) {
+    const k = c[v] * (1 - mask[v]) * 0.9, i = v * 3; if (k <= 0) continue;
+    pt[i] += (col.r - pt[i]) * k; pt[i+1] += (col.g - pt[i+1]) * k; pt[i+2] += (col.b - pt[i+2]) * k; setColor(v);
+  }
+  colorDirty = gpuDirty = true; scheduleSave(); toast('凹んだ所に色を塗りました');
 }
 
 // ---------------- subtool operations ----------------
@@ -3709,6 +3904,13 @@ $('dfAmt').addEventListener('input', e => { $('dfAmtOut').textContent = (+e.targ
 $('exThick').addEventListener('input', e => { $('exThickOut').textContent = (+e.target.value).toFixed(3); });
 $('mfStore').onclick = morphStore; $('mfRestore').onclick = morphRestore; $('mfDel').onclick = morphDelete;
 $('exGo').onclick = extractShell; $('clipGo').onclick = () => clipArmed ? disarmClip() : armClip();
+$('refLoad').onclick = () => $('refFile').click();
+$('refFile').onchange = e => { const f = e.target.files[0]; if (f) loadRef(f); e.target.value = ''; };
+$('refClear').onclick = () => clearRef(false);
+$('refProject').onclick = () => busy(projectRef);
+for (const [id, d] of [['refOp', 2], ['refSize', 2], ['refStr', 2], ['arGap', 2], ['arRot', 0], ['arScale', 2]]) $(id).addEventListener('input', e => { $(id + 'Out').textContent = (+e.target.value).toFixed(d); if (id.startsWith('ref')) placeRef(); });
+$('refMode').onchange = placeRef;
+$('arGo').onclick = arrayMesh; $('mwGo').onclick = mirrorWeld; $('pgSplit').onclick = splitGroups; $('paintCavity').onclick = () => busy(paintCavity);
 $('zsStart').onclick = zsStart; $('zsMake').onclick = zsMake; $('zsUndo').onclick = zsUndo; $('zsCancel').onclick = zsEnd;
 
 view.addEventListener('dragover', e => e.preventDefault());
