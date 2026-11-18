@@ -261,7 +261,10 @@ dl.keys dd{margin:0;color:var(--muted)}
       <div class="row"><input type="checkbox" id="dynOn"><label for="dynOn">ダイナミック細分化（塗った所だけ自動で細かく）</label></div>
       <div class="row"><label for="dynDetail">細かさ（画面上の三角形の大きさ px）</label><output id="dynDetailOut">6</output></div>
       <input type="range" id="dynDetail" min="2" max="30" step="1" value="6">
-      <p class="note">強さ・減衰カーブ・ストローク・アルファはブラシごとに記憶されます。ペンタブレットの筆圧で強さが変わります。</p>
+      <div class="row" style="margin-top:8px"><label for="psList">保存した設定</label><select id="psList" style="width:150px"></select></div>
+      <div class="grid2"><button class="btn" id="psLoad">呼び出す</button><button class="btn" id="psDel">削除</button></div>
+      <div class="row"><input type="text" id="psName" placeholder="名前（空なら自動）" style="flex:1"><button class="btn" id="psSave">今の設定を保存</button></div>
+      <p class="note">強さ・減衰カーブ・ストローク・アルファはブラシごとに記憶されます。ペンタブレットの筆圧で強さが変わります。よく使う組み合わせ（ブラシ・サイズ・アルファなど）は名前を付けて保存できます。</p>
     </section>
 
     <section id="defSec">
@@ -401,6 +404,20 @@ dl.keys dd{margin:0;color:var(--muted)}
       <h2>マテリアル（素材）</h2>
       <div class="mats" id="matGrid" role="listbox" aria-label="マテリアル"></div>
       <p class="note" id="matName"></p>
+    </section>
+
+    <section id="vsSec">
+      <h2>表示の設定</h2>
+      <div class="row"><label for="vsFov">画角（小さいほど望遠・ゆがみが少ない）</label><output id="vsFovOut">35</output></div>
+      <input type="range" id="vsFov" min="10" max="90" step="1" value="35">
+      <div class="row"><label for="vsLight">光の向き（度）</label><output id="vsLightOut">54</output></div>
+      <input type="range" id="vsLight" min="0" max="359" step="1" value="54">
+      <div class="row"><label for="vsLightK">光の強さ</label><output id="vsLightKOut">1.00</output></div>
+      <input type="range" id="vsLightK" min="0.2" max="2" step="0.01" value="1">
+      <div class="row"><label for="vsBg">背景</label><select id="vsBg"><option value="dark">暗いグレー</option><option value="gray">グレー</option><option value="light">明るい</option><option value="blue">青</option><option value="black">黒</option></select></div>
+      <div class="row"><label for="vsUndo">元に戻せる回数</label><input type="number" id="vsUndo" min="5" max="200" step="5" value="40"></div>
+      <button class="btn full" id="vsReset">表示の設定を元に戻す</button>
+      <p class="note">光の向きと強さは「標準（ライト）」マテリアルとレンダリングに効きます。元に戻せる回数を増やすと、細かいメッシュではメモリを多く使います。</p>
     </section>
 
     <section id="maskSec">
@@ -1118,7 +1135,7 @@ const undoStack = [], redoStack = [];
 function snapshot(full, extraLayers) { return { rec: active, lvl: active.lv, pos: pos.slice(), mask: mask.slice(), paint: paint ? paint.slice() : null, pg: pg ? pg.slice() : null, lay: laySnap(extraLayers), idx: full ? idx.slice() : null, mirror: full ? mirror.slice() : null }; }
 const structSnap = () => ({ kind:'struct', list: subtools.slice(), active });
 const allSnap = () => ({ kind:'all', items: subtools.map(r => [r, r.pos.slice()]) });
-function pushEntry(e) { undoStack.push(e); if (undoStack.length > 40) undoStack.shift(); redoStack.length = 0; updateUndoButtons(); }
+function pushEntry(e) { undoStack.push(e); while (undoStack.length > Math.max(5, VS.undo | 0)) undoStack.shift(); redoStack.length = 0; updateUndoButtons(); }
 function pushUndo(full = false, extraLayers) { pushEntry(snapshot(full, extraLayers)); }
 function pushStruct() { pushEntry(structSnap()); }
 function restore(e) {
@@ -3196,6 +3213,58 @@ function maskPeaks() {
   recolorAll(); scheduleSave(); toast('出っ張った所をマスクしました');
 }
 
+
+// ---------------- brush presets (saved in this browser / app) ----------------
+let presets = [];
+try { presets = JSON.parse(localStorage.getItem('bp-presets') || '[]'); if (!Array.isArray(presets)) presets = []; } catch { presets = []; }
+function savePresets() { try { localStorage.setItem('bp-presets', JSON.stringify(presets)); } catch {} }
+function renderPresets(sel) {
+  const s = $('psList'); s.textContent = '';
+  if (!presets.length) { const o = document.createElement('option'); o.textContent = '（まだありません）'; o.value = ''; s.appendChild(o); }
+  presets.forEach((p, i) => { const o = document.createElement('option'); o.value = i; o.textContent = `${p.name}（${(BRUSH[p.brush] || {}).name || p.brush}）`; s.appendChild(o); });
+  if (sel !== undefined) s.value = sel;
+  $('psLoad').disabled = $('psDel').disabled = !presets.length;
+}
+function presetSave() {
+  const name = $('psName').value.trim() || `${BRUSH[S.brush].name} ${presets.length + 1}`;
+  const p = { name, brush: S.brush, cfg: { ...BS[S.brush] }, size: S.size, spacing: S.spacing, lazy: S.lazy };
+  const at = presets.findIndex(x => x.name === name);
+  if (at >= 0) presets[at] = p; else presets.push(p);
+  savePresets(); renderPresets(at >= 0 ? at : presets.length - 1); $('psName').value = '';
+  toast(`ブラシ設定「${name}」を保存しました`);
+}
+function presetLoad() {
+  const p = presets[+$('psList').value]; if (!p || !BRUSH[p.brush]) return;
+  Object.assign(BS[p.brush], p.cfg); S.size = p.size; S.spacing = p.spacing ?? S.spacing; S.lazy = p.lazy ?? S.lazy;
+  S.brush = p.brush; syncSize(); refreshBrushUI(); saveBrushPrefs();
+  for (const id of ['spacing', 'lazy']) { const el = $(id); el.value = S[id]; el.dispatchEvent(new Event('input')); }
+  toast(`ブラシ設定「${p.name}」を呼び出しました`);
+}
+function presetDelete() {
+  const i = +$('psList').value, p = presets[i]; if (!p) return;
+  presets.splice(i, 1); savePresets(); renderPresets(); toast(`「${p.name}」を削除しました`);
+}
+
+// ---------------- display settings: field of view, light, background, undo steps ----------------
+const VIEW_DEF = { fov: 35, lightAng: 54, lightK: 1, bg: 'dark', undo: 40 };
+let VS = { ...VIEW_DEF };
+try { VS = { ...VIEW_DEF, ...JSON.parse(localStorage.getItem('bp-view') || '{}') }; } catch {}
+const BGS = {
+  dark:  'radial-gradient(ellipse at 50% 42%,#3c3d44 0%,#25262b 58%,#1b1c1f 100%)',
+  gray:  'radial-gradient(ellipse at 50% 42%,#8d8f96 0%,#5f6168 70%,#4a4c52 100%)',
+  light: 'radial-gradient(ellipse at 50% 42%,#f2f1ee 0%,#d9d8d3 70%,#c6c5c0 100%)',
+  black: '#000',
+  blue:  'radial-gradient(ellipse at 50% 30%,#3d5675 0%,#1f2c3f 70%,#141c28 100%)',
+};
+function applyView(save) {
+  camera.fov = VS.fov; camera.updateProjectionMatrix();
+  const a = VS.lightAng * Math.PI / 180; keyLight.position.set(Math.cos(a) * 2.7, Math.sin(a) * 2.7, 1.2); keyLight.intensity = 1.9 * VS.lightK;
+  view.style.background = BGS[VS.bg] || BGS.dark;
+  for (const [id, k, d] of [['vsFov', 'fov', 0], ['vsLight', 'lightAng', 0], ['vsLightK', 'lightK', 2]]) { $(id).value = VS[k]; $(id + 'Out').textContent = (+VS[k]).toFixed(d); }
+  $('vsBg').value = VS.bg; $('vsUndo').value = VS.undo;
+  if (save) try { localStorage.setItem('bp-view', JSON.stringify(VS)); } catch {}
+}
+
 // ---------------- turntable video (WebM) ----------------
 let turning = false;
 async function recordTurntable() {
@@ -4459,6 +4528,12 @@ document.querySelectorAll('[data-view]').forEach(b => b.onclick = () => snapView
 S.showOver = false;
 $('rpHoles').onclick = fillHoles; $('rpFrags').onclick = removeFragments; $('rpOrient').onclick = fixOrientation;
 $('rpOver').onchange = e => setOverhang(e.target.checked); $('rpMeasure').onclick = armMeasure; $('mkPeaks').onclick = () => busy(maskPeaks);
+renderPresets(); $('psSave').onclick = presetSave; $('psLoad').onclick = presetLoad; $('psDel').onclick = presetDelete;
+for (const [id, k] of [['vsFov', 'fov'], ['vsLight', 'lightAng'], ['vsLightK', 'lightK']]) $(id).addEventListener('input', e => { VS[k] = +e.target.value; applyView(true); });
+$('vsBg').onchange = e => { VS.bg = e.target.value; applyView(true); };
+$('vsUndo').onchange = e => { VS.undo = Math.max(5, Math.min(200, +e.target.value || 40)); applyView(true); };
+$('vsReset').onclick = () => { VS = { ...VIEW_DEF }; applyView(true); toast('表示の設定を元に戻しました'); };
+applyView(false);
 $('zsStart').onclick = zsStart; $('zsMake').onclick = zsMake; $('zsUndo').onclick = zsUndo; $('zsCancel').onclick = zsEnd;
 
 view.addEventListener('dragover', e => e.preventDefault());
