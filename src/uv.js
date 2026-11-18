@@ -39,14 +39,17 @@ export function unwrap(pos, idx, opt = {}) {
       for (let k = 0; k < 3; k++) {
         const g = adj[f*3+k];
         if (g < 0 || chart[g] >= 0) continue;
+        // zero-area faces have no normal: let them join the neighbouring chart instead of forming their own
+        if (area[g] === 0) { chart[g] = id; faces.push(g); continue; }
         if (fn[g*3]*ax + fn[g*3+1]*ay + fn[g*3+2]*az < cosA) continue;
         if (fn[g*3]*fn[seed*3] + fn[g*3+1]*fn[seed*3+1] + fn[g*3+2]*fn[seed*3+2] < cosSeed) continue;   // keep the chart nearly flat
         chart[g] = id; faces.push(g);
         nx += fn[g*3] * area[g]; ny += fn[g*3+1] * area[g]; nz += fn[g*3+2] * area[g];
       }
     }
-    const l = Math.hypot(nx, ny, nz) || 1;
-    charts.push({ faces, n: [nx / l, ny / l, nz / l] });
+    const l = Math.hypot(nx, ny, nz);
+    // a chart made only of zero-area faces has no normal; any plane works for it
+    charts.push({ faces, n: l > 0 ? [nx / l, ny / l, nz / l] : [0, 0, 1] });
   }
   // project + PCA-rotate each chart
   const uv = new Float32Array(nF * 6);
