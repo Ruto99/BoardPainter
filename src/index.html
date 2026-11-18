@@ -258,6 +258,35 @@ dl.keys dd{margin:0;color:var(--muted)}
       <p class="note">強さ・減衰カーブ・ストローク・アルファはブラシごとに記憶されます。ペンタブレットの筆圧で強さが変わります。</p>
     </section>
 
+    <section id="curveSec">
+      <h2>チューブ・並べる（線に沿って作る）</h2>
+      <div class="row"><label for="cvThick">太さ（ブラシサイズに対する割合）</label><output id="cvThickOut">0.35</output></div>
+      <input type="range" id="cvThick" min="0.05" max="1" step="0.01" value="0.35">
+      <div class="row"><label for="cvTaper">先細り</label><output id="cvTaperOut">0.00</output></div>
+      <input type="range" id="cvTaper" min="0" max="1" step="0.01" value="0">
+      <div class="row"><label for="insShape">並べる形</label><select id="insShape"><option value="sphere">球（数珠・鋲）</option><option value="cube">立方体</option><option value="chain">チェーン</option><option value="cone">トゲ</option></select></div>
+      <div class="row"><label for="insGap">間隔</label><output id="insGapOut">1.00</output></div>
+      <input type="range" id="insGap" min="0.5" max="4" step="0.05" value="1">
+      <p class="note">ツールバーの「チューブ」「並べる」で、モデルの表面をなぞると新しいサブツールとして作られます（左右対称がオンなら反対側にも）。太さはブラシサイズで決まります。</p>
+    </section>
+
+    <section id="zsSec">
+      <h2>ZSphere（球をつないで形を作る）</h2>
+      <button class="btn primary full" id="zsStart">ZSphere を始める</button>
+      <div id="zsTools" hidden>
+        <div class="row"><label for="zsRes">細かさ</label><output id="zsResOut">140</output></div>
+        <input type="range" id="zsRes" min="64" max="256" step="4" value="140">
+        <div class="row"><label for="zsBlend">つなぎ目のなめらかさ</label><output id="zsBlendOut">0.30</output></div>
+        <input type="range" id="zsBlend" min="0" max="1" step="0.01" value="0.3">
+        <div class="grid3">
+          <button class="btn primary" id="zsMake">メッシュにする</button>
+          <button class="btn" id="zsUndo">元に戻す</button>
+          <button class="btn" id="zsCancel">やめる</button>
+        </div>
+      </div>
+      <p class="note" id="zsNote">人や動物の骨組みのように、球をつないでベースの形を作ります。</p>
+    </section>
+
     <section id="matSec">
       <h2>マテリアル（素材）</h2>
       <div class="mats" id="matGrid" role="listbox" aria-label="マテリアル"></div>
@@ -478,7 +507,8 @@ import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { STLLoader } from 'three/addons/loaders/STLLoader.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { mergeVertices, mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { computeBoundsTree, acceleratedRaycast, MeshBVH } from 'three-mesh-bvh';
+import { computeBoundsTree, acceleratedRaycast, MeshBVH, INTERSECTED, NOT_INTERSECTED } from 'three-mesh-bvh';
+import { zsphereMesh } from './zspheres.js';
 import { encodeProject, decodeProject } from './project.js';
 import { remesh, remeshGrid, quadRemesh, booleanMesh } from './remesh.js';
 import { unwrap, drawUV } from './uv.js';
@@ -515,6 +545,8 @@ const BRUSHES = [
   { id:'nudge',     key:'',  short:'Nd', name:'ずらす',       desc:'表面をストロークの向きに滑らせる', alpha:false, def:{ strength:0.5 } },
   { id:'move',      key:'8', short:'Mv', name:'ムーブ',       desc:'つかんで大きく動かす', alpha:false, sep:true },
   { id:'snake',     key:'0', short:'Sh', name:'引き伸ばし',   desc:'ドラッグした方向へ伸ばす（角・触手）', alpha:false, def:{ strength:0.8 } },
+  { id:'tube',      key:'',  short:'Tb', name:'チューブ',     desc:'なぞった線に沿ってチューブ（ロープ・ホース・ツノ）を作る', alpha:false, curve:true, sep:true },
+  { id:'insert',    key:'',  short:'Im', name:'並べる',       desc:'なぞった線に沿って形を並べる（鋲・数珠・チェーン）', alpha:false, curve:true },
   { id:'mask',      key:'9', short:'Mk', name:'マスク',       desc:'塗った所を保護する', alpha:true, sep:true },
   { id:'paint',     key:'',  short:'Pt', name:'ペイント',     desc:'色を塗る（Altで元の色に戻す）', alpha:true, def:{ strength:0.7 } },
 ];
@@ -881,7 +913,10 @@ function flushNormals() {
   for (const u of vertTmp) { vMark[u] = 0; vertNormal(u); }
   gpuDirty = bvhDirty = true;
 }
-function ensureBVH() { if (bvhDirty && geo.boundsTree) { geo.boundsTree.refit(); bvhDirty = false; } }
+// Refitting the BVH costs ~40 ms at 1M+ triangles, so during a stroke it is refreshed at most every 0.3 s
+// (picking and brush lookups use a stale-but-close tree in between; brush lookups add a margin for that)
+let lastRefit = 0;
+function ensureBVH(force = true) { if (bvhDirty && geo.boundsTree && (force || performance.now() - lastRefit > 300)) { geo.boundsTree.refit(); bvhDirty = false; lastRefit = performance.now(); } }
 
 // mirror pairs across the X=0 plane (by position, with tolerance)
 function computeMirror(p) {
@@ -1012,11 +1047,32 @@ function vnoise3(x, y, z) {
 const fbm3 = (x, y, z) => vnoise3(x, y, z) * 0.57 + vnoise3(x * 2.1 + 17, y * 2.1, z * 2.1) * 0.29 + vnoise3(x * 4.3, y * 4.3 + 31, z * 4.3) * 0.14;
 
 // F: dab frame { ux..uz / vx..vz: alpha axes in the tangent plane, A: alpha or null, inv, fo: falloff, bf: backface test, sd*: stroke direction }
+// Candidate vertices near P from the BVH (big meshes): visit only the triangles whose boxes touch the brush sphere.
+// The tree is refitted once per pointer move, so the sphere gets a margin for vertices moved since then.
+let gStamp = null, gCand = null, gTick = 0;
+const _gs = new THREE.Sphere();
+function bvhCandidates(P, r) {
+  if (!gStamp || gStamp.length !== nV) { gStamp = new Uint32Array(nV); gCand = new Uint32Array(nV); gTick = 0; }
+  if (++gTick >= 0xfffffff0) { gStamp.fill(0); gTick = 1; }
+  _gs.center.copy(P); _gs.radius = r * 1.3;
+  let nc = 0; const t = gTick;
+  geo.boundsTree.shapecast({
+    intersectsBounds: box => _gs.intersectsBox(box) ? INTERSECTED : NOT_INTERSECTED,
+    intersectsRange: (off, cnt) => {
+      for (let f = off * 3, e = (off + cnt) * 3; f < e; f++) { const v = idx[f]; if (gStamp[v] !== t) { gStamp[v] = t; gCand[nc++] = v; } }
+      return false;
+    },
+  });
+  return nc;
+}
 function gather(P, N0, r, F) {
   const r2 = r * r, px = P.x, py = P.y, pz = P.z;
   const bf = F ? F.bf : S.backface, fo = F ? F.fo : FO.smooth, A = F ? F.A : null, inv = F ? F.inv : false;
   let n = 0;
-  for (let v = 0, i = 0; v < nV; v++, i += 3) {
+  const useBVH = nV > 40000 && geo.boundsTree;
+  const nc = useBVH ? bvhCandidates(P, r) : nV;
+  for (let c = 0; c < nc; c++) {
+    const v = useBVH ? gCand[c] : c, i = v * 3;
     const dx = pos[i] - px; if (dx > r || dx < -r) continue;
     const dy = pos[i+1] - py; if (dy > r || dy < -r) continue;
     const dz = pos[i+2] - pz; if (dz > r || dz < -r) continue;
@@ -1188,7 +1244,7 @@ function setNDCxy(x, y) { const b = canvas.getBoundingClientRect(); ndc.set(((x 
 function setNDC(e) { setNDCxy(e.clientX, e.clientY); }
 function pick() {
   if (!mesh) return null;
-  ensureBVH(); raycaster.setFromCamera(ndc, camera);
+  ensureBVH(!stroke || nF < 200000); camera.updateMatrixWorld(); raycaster.setFromCamera(ndc, camera);
   let h;
   if (hid) {   // skip hidden faces: take every hit and keep the nearest visible one
     raycaster.firstHitOnly = false;
@@ -1202,7 +1258,7 @@ function pick() {
 }
 // which subtool is under the pointer (for double-click selection)
 function pickRec() {
-  ensureBVH(); raycaster.setFromCamera(ndc, camera);
+  ensureBVH(); camera.updateMatrixWorld(); raycaster.setFromCamera(ndc, camera);
   const h = raycaster.intersectObjects([mesh, ...visibleViews()], false);
   return h.length ? (h[0].object === mesh ? active : h[0].object.userData.rec) : null;
 }
@@ -1243,6 +1299,7 @@ function dabSym(P, N, r, ref, reps = 1) {
 }
 
 function onDown(e) {
+  if (zs) { zsDown(e); return; }
   if (e.button !== 0 || !mesh || gizmoOn) return;
   setNDC(e);
   const hit = pick();
@@ -1254,6 +1311,11 @@ function onDown(e) {
   e.preventDefault();
   canvas.setPointerCapture(e.pointerId);
   const brush = effectiveBrush(e), cfg = BS[brush];
+  if (BRUSH[brush].curve) {   // tube / insert: just record the path; the mesh is built on release
+    stroke = { brush, cfg, id: e.pointerId, pressure: 1, curve: { pts: [hit.point.clone()], nrm: [hitNormal(hit)], r: worldRadius(hit.point) } };
+    curvePreview(stroke.curve.pts); updateCursor(null);
+    return;
+  }
   const dir = (S.invert ? -1 : 1) * (e.altKey ? -1 : 1);
   let useDyn = S.dyn && DYN_BRUSHES.has(brush) && cfg.stroke !== 'drag';
   if (useDyn && active.levels.length > 1) { useDyn = false; if (!dynWarned) { dynWarned = true; toast('細分化レベルがあるパーツではダイナミック細分化は使えません'); } }
@@ -1366,10 +1428,16 @@ function showLazy(L, e) {
 }
 
 canvas.addEventListener('pointermove', e => {
+  if (zs) { if (zs.drag) zsMove(e); return; }
   if (lasso) { if (e.pointerId === lasso.id) lassoMove(e); return; }
   setNDC(e);
   if (stroke) {
     if (e.pointerId !== stroke.id) return;
+    if (stroke.curve) {
+      const hit = pick(), c = stroke.curve;
+      if (hit && hit.point.distanceTo(c.pts[c.pts.length - 1]) > c.r * 0.08) { c.pts.push(hit.point.clone()); c.nrm.push(hitNormal(hit)); curvePreview(c.pts); }
+      return;
+    }
     stroke.pressure = pres(e);
     if (stroke.drag) { dragStamp(e); flushNormals(); return; }
     if (stroke.brush === 'move') { moveTo(); flushNormals(); updateCursor(null); return; }
@@ -1398,10 +1466,12 @@ canvas.addEventListener('dblclick', e => {
   if (r && r !== active) { activate(r); toast(`「${r.name}」を選択しました`); }
 });
 function endStroke() {
+  if (zs) { zsUp(); return; }
   if (lasso) { finishLasso(); return; }
   controls.enabled = true;
   showLazy(null);
   if (!stroke) return;
+  if (stroke.curve) { const st = stroke; stroke = null; busy(() => finishCurve(st)); return; }
   if (stroke.dyn) { dynRefine(); if (stroke.dyn.changed) syncScene(); }
   const lr = stroke.layRec;
   if (lr && layersOf().includes(lr.L) && lr.L.delta.length === pos.length) {
@@ -2027,6 +2097,237 @@ async function renderImage() {
   lastRender = { blob, url: URL.createObjectURL(blob) };
   $('rdImg').src = lastRender.url; $('rdView').hidden = false;
   $('rdInfo').textContent = `${W} × ${H} px・${((performance.now() - t0) / 1000).toFixed(1)}秒`;
+}
+
+// ---------------- curve brushes: tube along a stroke / insert copies along a stroke ----------------
+const curveLine = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0xffd49a, depthTest: false, transparent: true, opacity: 0.9 }));
+curveLine.renderOrder = 999; curveLine.frustumCulled = false; curveLine.raycast = () => {}; curveLine.visible = false;
+scene.add(curveLine);
+function curvePreview(pts) {
+  const a = new Float32Array(pts.length * 3); pts.forEach((p, k) => { a[k*3] = p.x; a[k*3+1] = p.y; a[k*3+2] = p.z; });
+  curveLine.geometry.dispose(); curveLine.geometry = new THREE.BufferGeometry(); curveLine.geometry.setAttribute('position', new THREE.BufferAttribute(a, 3));
+  curveLine.visible = pts.length > 1;
+}
+// even spacing + smoothing of the stroke's surface points (and their normals)
+function resampleCurve(pts, nrms, ds) {
+  const P = [pts[0].clone()], N = [nrms[0].clone()];
+  let acc = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1], b = pts[i], L = a.distanceTo(b); if (L < 1e-9) continue;
+    let t = ds - acc;
+    while (t <= L) { P.push(a.clone().lerp(b, t / L)); N.push(nrms[i - 1].clone().lerp(nrms[i], t / L).normalize()); t += ds; }
+    acc = L - (t - ds);
+  }
+  const last = pts[pts.length - 1]; if (P[P.length - 1].distanceTo(last) > ds * 0.3) { P.push(last.clone()); N.push(nrms[nrms.length - 1].clone()); }
+  for (let pass = 0; pass < 3; pass++) for (let i = 1; i < P.length - 1; i++) { P[i].lerp(P[i - 1].clone().add(P[i + 1]).multiplyScalar(0.5), 0.5); N[i].lerp(N[i - 1].clone().add(N[i + 1]).normalize(), 0.5).normalize(); }
+  return { P, N };
+}
+function frameAlong(P, N, i) {   // tangent, normal (from the surface), binormal
+  const t = (i < P.length - 1 ? P[i + 1].clone().sub(P[i]) : P[i].clone().sub(P[i - 1])).normalize();
+  const n = N[i].clone().addScaledVector(t, -N[i].dot(t)); if (n.lengthSq() < 1e-10) n.set(0, 1, 0).addScaledVector(t, -t.y); n.normalize();
+  return { t, n, b: new V3().crossVectors(t, n) };
+}
+function tubeMesh(P, N, rad, taper) {
+  const seg = 14, rings = P.length, p = [], ix = [];
+  for (let i = 0; i < rings; i++) {
+    const { t, n, b } = frameAlong(P, N, i), r = rad * (1 - taper * i / Math.max(1, rings - 1));
+    const c = P[i].clone().addScaledVector(n, r * 0.45);   // half sunk into the surface
+    for (let s = 0; s < seg; s++) { const a = s / seg * Math.PI * 2, x = Math.cos(a) * r, y = Math.sin(a) * r; p.push(c.x + n.x * x + b.x * y, c.y + n.y * x + b.y * y, c.z + n.z * x + b.z * y); }
+  }
+  for (let i = 0; i < rings - 1; i++) for (let s = 0; s < seg; s++) {
+    const a = i * seg + s, b = i * seg + (s + 1) % seg, c = a + seg, d = b + seg;
+    ix.push(a, c, b, b, c, d);
+  }
+  // caps
+  for (const [ring, flip] of [[0, true], [rings - 1, false]]) {
+    const cen = new V3(); for (let s = 0; s < seg; s++) cen.add(new V3(p[(ring * seg + s) * 3], p[(ring * seg + s) * 3 + 1], p[(ring * seg + s) * 3 + 2]));
+    cen.multiplyScalar(1 / seg); const ci = p.length / 3; p.push(cen.x, cen.y, cen.z);
+    for (let s = 0; s < seg; s++) { const a = ring * seg + s, b = ring * seg + (s + 1) % seg; flip ? ix.push(ci, b, a) : ix.push(ci, a, b); }
+  }
+  return { p, ix };
+}
+const INS_TEMPLATES = {};
+function insTemplate(kind) {
+  if (INS_TEMPLATES[kind]) return INS_TEMPLATES[kind];
+  let g;
+  if (kind === 'cube') g = new THREE.BoxGeometry(1.4, 1.4, 1.4, 2, 2, 2);
+  else if (kind === 'chain') g = new THREE.TorusGeometry(0.9, 0.28, 10, 24).scale(1, 1.45, 1);
+  else if (kind === 'cone') g = new THREE.ConeGeometry(0.8, 2.2, 20, 3).translate(0, 1.1, 0);
+  else g = new THREE.IcosahedronGeometry(1, 3);
+  g.deleteAttribute('normal'); g.deleteAttribute('uv'); g = mergeVertices(g, 1e-5);
+  return INS_TEMPLATES[kind] = { p: g.attributes.position.array, ix: dropDegenerate(Uint32Array.from(g.index.array)) };
+}
+function insertMesh(P, N, rad, kind, gap, taper) {
+  const T = insTemplate(kind), p = [], ix = [];
+  // walk the curve placing one copy every `step`
+  const step = rad * (kind === 'chain' ? 1.7 : 2.1) * gap;
+  let acc = step, k = 0;
+  for (let i = 0; i < P.length; i++) {
+    if (i > 0) acc += P[i].distanceTo(P[i - 1]);
+    if (acc < step) continue;
+    acc = 0;
+    const { t, n, b } = frameAlong(P, N, i), r = rad * (1 - taper * i / Math.max(1, P.length - 1));
+    // template axes: chain links lie along the curve and alternate by 90°; spikes point out of the surface
+    let ax, ay, az;
+    if (kind === 'chain') { const tw = k % 2 ? n : b; ax = tw; ay = t; az = new V3().crossVectors(ax, ay); }
+    else if (kind === 'cone') { ax = b; ay = n; az = t; }
+    else { ax = b; ay = n; az = t; }
+    const c = P[i].clone().addScaledVector(n, kind === 'cone' ? 0 : r * 0.55), o = p.length / 3;
+    for (let v = 0; v < T.p.length; v += 3) {
+      const x = T.p[v] * r, y = T.p[v+1] * r, z = T.p[v+2] * r;
+      p.push(c.x + ax.x * x + ay.x * y + az.x * z, c.y + ax.y * x + ay.y * y + az.y * z, c.z + ax.z * x + ay.z * y + az.z * z);
+    }
+    // keep the winding outward if the basis is left-handed
+    const flip = new V3().crossVectors(ax, ay).dot(az) < 0;
+    for (let f = 0; f < T.ix.length; f += 3) flip ? ix.push(o + T.ix[f], o + T.ix[f+2], o + T.ix[f+1]) : ix.push(o + T.ix[f], o + T.ix[f+1], o + T.ix[f+2]);
+    k++;
+  }
+  return { p, ix };
+}
+function finishCurve(st) {
+  curveLine.visible = false;
+  const c = st.curve;
+  if (c.pts.length < 2) { toast('線が短すぎます。モデルの表面をなぞってください'); return; }
+  const rad = c.r * +$('cvThick').value, taper = +$('cvTaper').value;
+  const { P, N } = resampleCurve(c.pts, c.nrm, Math.max(rad * 0.35, 1e-4));
+  if (P.length < 2) return;
+  // closed pieces: make sure the faces point outward (positive signed volume)
+  const outward = m => {
+    let v = 0; const p = m.p, ix = m.ix;
+    for (let f = 0; f < ix.length; f += 3) { const a = ix[f]*3, b = ix[f+1]*3, c = ix[f+2]*3; v += p[a]*(p[b+1]*p[c+2]-p[b+2]*p[c+1]) - p[a+1]*(p[b]*p[c+2]-p[b+2]*p[c]) + p[a+2]*(p[b]*p[c+1]-p[b+1]*p[c]); }
+    if (v < 0) for (let f = 0; f < ix.length; f += 3) { const t = ix[f+1]; ix[f+1] = ix[f+2]; ix[f+2] = t; }
+    return m;
+  };
+  const make = (PP, NN) => outward(st.brush === 'tube' ? tubeMesh(PP, NN, rad, taper) : insertMesh(PP, NN, rad, $('insShape').value, +$('insGap').value, taper));
+  const parts = [make(P, N)];
+  const offCenter = P.some(q => Math.abs(q.x) > rad * 0.5);
+  if (S.sym && offCenter) {
+    // built from the mirrored path with fresh (right-handed) frames, so its winding is already outward
+    parts.push(make(P.map(q => new V3(-q.x, q.y, q.z)), N.map(q => new V3(-q.x, q.y, q.z))));
+  }
+  let nv = 0, nf = 0; for (const q of parts) { nv += q.p.length / 3; nf += q.ix.length; }
+  if (!nf) { toast('線が短すぎて形を並べられませんでした'); return; }
+  const p = new Float32Array(nv * 3), ix = new Uint32Array(nf); let ov = 0, of = 0;
+  for (const q of parts) { p.set(q.p, ov * 3); for (let k = 0; k < q.ix.length; k++) ix[of + k] = q.ix[k] + ov; ov += q.p.length / 3; of += q.ix.length; }
+  pushStruct();
+  const name = st.brush === 'tube' ? 'チューブ' : ({ sphere: '数珠', cube: '立方体の列', chain: 'チェーン', cone: 'トゲ' })[$('insShape').value] || '並べた形';
+  const rec = newRec(uniqueName(name), p, ix);
+  insertAfterActive(rec); syncScene(); scheduleSave();
+  toast(`「${rec.name}」を作りました（サブツール一覧で選ぶと造形できます）`);
+}
+
+// ---------------- ZSpheres: build a base mesh from connected spheres ----------------
+let zs = null;
+const zsSphereGeo = new THREE.SphereGeometry(1, 28, 20);
+const zsMat = new THREE.MeshStandardMaterial({ color: 0xd9a35b, roughness: 0.45, metalness: 0.05 });
+const zsRootMat = new THREE.MeshStandardMaterial({ color: 0xe0564b, roughness: 0.45 });
+const zsLinkMat = new THREE.MeshStandardMaterial({ color: 0x9a9da6, roughness: 0.6, transparent: true, opacity: 0.85 });
+function zsStart() {
+  if (zs) return;
+  if (gizmoOn) setGizmo(false);
+  const c = controls.target.clone();
+  // the root sits on the symmetry plane (x = 0): slide the view over to it; its size is ~1/10 of the view
+  const dx = -c.x; camera.position.x += dx; controls.target.x += dx; controls.update(); camera.updateMatrixWorld();
+  const root = new V3(0, c.y, c.z), r = Math.max(1e-3, worldPerPx(root) * Math.min(view.clientWidth, view.clientHeight) * 0.1);
+  zs = { nodes: [{ p: root, r, parent: -1, mirror: -1 }], group: new THREE.Group(), undo: [], drag: null, hidden: [] };
+  // hide the sculpt meshes while building
+  for (const o of [mesh, wireMesh, drawMesh, ...subtools.map(x => x.view)]) if (o && o.visible) { zs.hidden.push(o); o.visible = false; }
+  scene.add(zs.group); zsRebuild();
+  $('zsTools').hidden = false; $('zsStart').hidden = true;
+  $('zsNote').textContent = '球をドラッグ：子の球を作って引き出す。Alt+ドラッグ：球を動かす。Shift+ドラッグ：大きさを変える。Ctrl+クリック：球を消す（先の球も）。背景ドラッグで回転。左右対称（X）がオンなら反対側にも作られます。';
+  toast('ZSphere：赤い球からドラッグして骨組みを作ってください');
+}
+function zsEnd() {
+  if (!zs) return;
+  scene.remove(zs.group);
+  zs.group.traverse(o => { if (o.isMesh && o.geometry !== zsSphereGeo) o.geometry.dispose(); });
+  for (const o of zs.hidden) o.visible = true;
+  zs = null; controls.enabled = true;
+  $('zsTools').hidden = true; $('zsStart').hidden = false;
+  $('zsNote').textContent = '人や動物の骨組みのように、球をつないでベースの形を作ります。';
+  syncScene(); applyHidden();
+}
+function zsRebuild() {
+  const g = zs.group;
+  for (const o of [...g.children]) { g.remove(o); if (o.geometry !== zsSphereGeo) o.geometry.dispose(); }
+  zs.nodes.forEach((n, i) => {
+    const m = new THREE.Mesh(zsSphereGeo, n.parent < 0 ? zsRootMat : zsMat);
+    m.position.copy(n.p); m.scale.setScalar(n.r); m.userData.i = i; g.add(m);
+    if (n.parent >= 0) {
+      const q = zs.nodes[n.parent], d = n.p.clone().sub(q.p), L = d.length(); if (L < 1e-6) return;
+      const cyl = new THREE.Mesh(new THREE.CylinderGeometry(n.r * 0.55, q.r * 0.55, L, 16, 1, true), zsLinkMat);
+      cyl.position.copy(q.p).addScaledVector(d, 0.5); cyl.quaternion.setFromUnitVectors(new V3(0, 1, 0), d.normalize()); cyl.raycast = () => {};
+      g.add(cyl);
+    }
+  });
+  g.updateMatrixWorld(true);   // picking must see the new spheres before the next frame is drawn
+}
+const zsSnap = () => zs.nodes.map(n => ({ ...n, p: n.p.clone() }));
+function zsPush() { zs.undo.push(zsSnap()); if (zs.undo.length > 100) zs.undo.shift(); }
+function zsUndo() { if (!zs || !zs.undo.length) return; zs.nodes = zs.undo.pop(); zsRebuild(); }
+function zsPick() {
+  camera.updateMatrixWorld(); raycaster.setFromCamera(ndc, camera);
+  const h = raycaster.intersectObjects(zs.group.children.filter(o => o.userData.i !== undefined), false);
+  return h[0] || null;
+}
+function zsDelete(i) {
+  if (zs.nodes[i].parent < 0) { toast('最初の球は消せません'); return; }
+  const kill = new Set([i]); const m = zs.nodes[i].mirror; if (m >= 0) kill.add(m);
+  let grew = true; while (grew) { grew = false; zs.nodes.forEach((n, k) => { if (!kill.has(k) && kill.has(n.parent)) { kill.add(k); grew = true; } }); }
+  const remap = new Map(); const keep = [];
+  zs.nodes.forEach((n, k) => { if (!kill.has(k)) { remap.set(k, keep.length); keep.push(n); } });
+  for (const n of keep) { n.parent = n.parent < 0 ? -1 : remap.get(n.parent); n.mirror = remap.has(n.mirror) ? remap.get(n.mirror) : -1; }
+  zs.nodes = keep; zsRebuild();
+}
+function zsDown(e) {
+  if (e.button !== 0) return;
+  setNDC(e);
+  const hit = zsPick(); if (!hit) return;   // background: orbit
+  controls.enabled = false; e.preventDefault(); canvas.setPointerCapture(e.pointerId);
+  const i = hit.object.userData.i, node = zs.nodes[i];
+  zsPush();
+  if (e.ctrlKey || e.metaKey) { zsDelete(i); controls.enabled = true; return; }
+  const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(camera.getWorldDirection(new V3()), hit.point);
+  if (e.altKey) { zs.drag = { mode: 'move', i, plane, P0: hit.point.clone(), start: node.p.clone() }; return; }
+  if (e.shiftKey) { zs.drag = { mode: 'scale', i, x0: e.clientX, r0: node.r }; return; }
+  // new child sphere where the parent was grabbed, then dragged out
+  const r = node.r * 0.72, c = { p: hit.point.clone(), r, parent: i, mirror: -1 };
+  zs.nodes.push(c); const ci = zs.nodes.length - 1;
+  if (S.sym && Math.abs(hit.point.x) > r * 0.25) {
+    const mp = node.mirror >= 0 ? node.mirror : i;
+    zs.nodes.push({ p: new V3(-hit.point.x, hit.point.y, hit.point.z), r, parent: mp, mirror: ci });
+    c.mirror = zs.nodes.length - 1;
+  }
+  zs.drag = { mode: 'move', i: ci, plane, P0: hit.point.clone(), start: c.p.clone() };
+  zsRebuild();
+}
+function zsMove(e) {
+  const D = zs.drag; if (!D) return;
+  const n = zs.nodes[D.i];
+  if (D.mode === 'scale') n.r = Math.max(0.01, D.r0 * Math.exp((e.clientX - D.x0) / 120));
+  else {
+    setNDC(e); raycaster.setFromCamera(ndc, camera);
+    const P1 = new V3(); if (!raycaster.ray.intersectPlane(D.plane, P1)) return;
+    n.p.copy(D.start).add(P1.sub(D.P0));
+    if (S.sym && n.mirror < 0 && Math.abs(n.p.x) < n.r * 0.15) n.p.x = 0;   // centre spheres stay on the symmetry plane
+  }
+  if (n.mirror >= 0) { const m = zs.nodes[n.mirror]; m.p.set(-n.p.x, n.p.y, n.p.z); m.r = n.r; }
+  zsRebuild();
+}
+function zsUp() { if (zs) zs.drag = null; controls.enabled = true; }
+function zsMake() {
+  if (!zs) return;
+  if (zs.nodes.length < 2) { toast('球が1つだけです。赤い球からドラッグして球を増やしてください'); return; }
+  return busy(() => {
+    const t0 = performance.now();
+    const res = zsphereMesh(zs.nodes.map(n => ({ p: [n.p.x, n.p.y, n.p.z], r: n.r, parent: n.parent })), { res: +$('zsRes').value, blend: +$('zsBlend').value, symX: S.sym });
+    if (!res) { toast('メッシュを作れませんでした'); return; }
+    zsEnd();
+    pushStruct();
+    const rec = newRec(uniqueName('ZSphere'), res.pos, dropDegenerate(res.idx));
+    insertAfterActive(rec); activate(rec); frame(); scheduleSave();
+    toast(`ZSphere からメッシュを作りました（${nF.toLocaleString()} ポリゴン・${((performance.now() - t0) / 1000).toFixed(1)}秒）`);
+  });
 }
 
 // ---------------- subtool operations ----------------
@@ -3228,6 +3529,8 @@ $('hdAll').onclick = showAll; $('hdInv').onclick = invertHidden; $('hdDel').oncl
 $('rdGo').onclick = () => busy(() => renderImage().catch(err => { console.error(err); toast('レンダリングに失敗しました: ' + err.message); }));
 $('rdSave').onclick = () => { if (lastRender) saveOne(async () => ({ name: `${fileBase()}_render.png`, blob: lastRender.blob })); };
 $('rdClose').onclick = () => { $('rdView').hidden = true; };
+for (const [id, d] of [['cvThick', 2], ['cvTaper', 2], ['insGap', 2], ['zsRes', 0], ['zsBlend', 2]]) $(id).addEventListener('input', e => { $(id + 'Out').textContent = (+e.target.value).toFixed(d); });
+$('zsStart').onclick = zsStart; $('zsMake').onclick = zsMake; $('zsUndo').onclick = zsUndo; $('zsCancel').onclick = zsEnd;
 
 view.addEventListener('dragover', e => e.preventDefault());
 view.addEventListener('drop', e => {
@@ -3242,6 +3545,10 @@ window.addEventListener('keydown', e => {
   if (t.tagName === 'INPUT' && (t.type === 'text' || t.type === 'number')) return;
   if (t.tagName === 'SELECT') return;
   if (e.key === 'Alt') e.preventDefault();
+  if (zs) {
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) { e.preventDefault(); zsUndo(); return; }
+    if (e.key === 'Escape') { zsEnd(); return; }
+  }
   const ctrl = e.ctrlKey || e.metaKey;
   if (ctrl && (e.key === 'z' || e.key === 'Z')) { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
   if (ctrl && (e.key === 'y' || e.key === 'Y')) { e.preventDefault(); redo(); return; }
@@ -3272,11 +3579,13 @@ function syncHeld(e) {
 }
 
 // ---------------- render loop ----------------
-new ResizeObserver(() => {
-  const w = view.clientWidth, h = view.clientHeight;
+function fitView() {
+  const w = view.clientWidth, h = view.clientHeight; if (!w || !h) return;
   renderer.setSize(w, h, false); canvas.style.width = '100%'; canvas.style.height = '100%';
   camera.aspect = w / Math.max(1, h); camera.updateProjectionMatrix();
-}).observe(view);
+}
+fitView();   // right away too: the observer only fires on a rendered frame
+new ResizeObserver(fitView).observe(view);
 
 renderer.setAnimationLoop(() => {
   if (gpuDirty && geo) {
