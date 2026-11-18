@@ -247,7 +247,7 @@ dl.keys dd{margin:0;color:var(--muted)}
       <input type="range" id="strength" min="0.02" max="1" step="0.01" value="0.45">
       <div class="row"><label for="falloff">減衰カーブ</label><canvas id="falloffCv" width="88" height="30" aria-hidden="true"></canvas></div>
       <select id="falloff" class="wide" aria-label="減衰カーブ"></select>
-      <div class="row"><label for="strokeType">ストローク</label><select id="strokeType"><option value="dots">連続で塗る</option><option value="drag">ドラッグで配置</option></select></div>
+      <div class="row"><label for="strokeType">ストローク</label><select id="strokeType"><option value="dots">連続で塗る</option><option value="drag">ドラッグで配置</option><option value="spray">スプレー（散らす）</option></select></div>
       <div class="row"><label for="spacing">間隔</label><output id="spacingOut"></output></div>
       <input type="range" id="spacing" min="0.05" max="1.5" step="0.01" value="0.22">
       <div class="row"><label for="lazy">手ぶれ補正 (px)</label><output id="lazyOut"></output></div>
@@ -322,6 +322,23 @@ dl.keys dd{margin:0;color:var(--muted)}
       <p class="note">配列は元のパーツを並べた新しいサブツールを作ります（元は非表示）。「片側を写してつなぐ」は左右対称でないパーツを、残す側に合わせて左右対称に作り直します。</p>
     </section>
 
+    <section id="fbSec">
+      <h2>毛（FiberMesh 風）</h2>
+      <div class="row"><label for="fbCount">本数</label><input type="number" id="fbCount" min="10" max="20000" step="100" value="1500"></div>
+      <div class="row"><label for="fbLen">長さ</label><output id="fbLenOut">0.15</output></div>
+      <input type="range" id="fbLen" min="0.01" max="0.6" step="0.01" value="0.15">
+      <div class="row"><label for="fbVary">長さのばらつき</label><output id="fbVaryOut">0.40</output></div>
+      <input type="range" id="fbVary" min="0" max="1" step="0.01" value="0.4">
+      <div class="row"><label for="fbGrav">重力（たれ下がり）</label><output id="fbGravOut">0.30</output></div>
+      <input type="range" id="fbGrav" min="-1" max="1" step="0.01" value="0.3">
+      <div class="row"><label for="fbSpread">向きのばらつき</label><output id="fbSpreadOut">0.30</output></div>
+      <input type="range" id="fbSpread" min="0" max="1" step="0.01" value="0.3">
+      <div class="row"><label for="fbThick">太さ</label><output id="fbThickOut">0.30</output></div>
+      <input type="range" id="fbThick" min="0.05" max="2" step="0.01" value="0.3">
+      <button class="btn primary full" id="fbGo">マスクした所から毛を生やす</button>
+      <p class="note">マスクした所から毛（髪・毛皮・草）を生やして、新しいサブツールにします。根元の色はポリペイントの色を引き継ぎます。</p>
+    </section>
+
     <section id="curveSec">
       <h2>チューブ・並べる（線に沿って作る）</h2>
       <div class="row"><label for="cvThick">太さ（ブラシサイズに対する割合）</label><output id="cvThickOut">0.35</output></div>
@@ -368,6 +385,7 @@ dl.keys dd{margin:0;color:var(--muted)}
         <button class="btn" id="mkCavity" title="凹んだ所（溝・しわ）をマスクします">凹みをマスク</button>
         <button class="btn" id="mkInvert">反転</button>
       </div>
+      <div class="row"><input type="checkbox" id="topoMask"><label for="topoMask">つながりに沿ってマスク（近くの別の指などに付かない）</label></div>
       <p class="note">背景で Ctrl+ドラッグ：囲んだ所をマスク（Ctrl+Alt で解除）。背景で Ctrl+クリック：マスク反転。モデル上の Ctrl+ドラッグはマスクブラシです。</p>
     </section>
 
@@ -379,6 +397,7 @@ dl.keys dd{margin:0;color:var(--muted)}
         <button class="btn" id="pgMask">マスクから作る</button>
         <button class="btn" id="pgAngle">面の向きで分ける</button>
         <button class="btn" id="pgOne">1つにまとめる</button>
+        <button class="btn" id="pgColor">色から作る</button>
       </div>
       <div class="row"><label for="pgAngleDeg">向きの差（度）</label><output id="pgAngleOut">35</output></div>
       <input type="range" id="pgAngleDeg" min="10" max="80" step="1" value="35">
@@ -510,6 +529,9 @@ dl.keys dd{margin:0;color:var(--muted)}
       <div class="row"><input type="checkbox" id="rdShadow" checked><label for="rdShadow">床に影を落とす</label></div>
       <div class="row"><input type="checkbox" id="rdTransp"><label for="rdTransp">背景を透明にする</label></div>
       <button class="btn primary full" id="rdGo">今の視点でレンダリング</button>
+      <div class="row" style="margin-top:8px"><label for="ttSecs">ターンテーブルの長さ（秒）</label><output id="ttSecsOut">6</output></div>
+      <input type="range" id="ttSecs" min="2" max="20" step="1" value="6">
+      <button class="btn full" id="ttGo">ターンテーブル動画を書き出す（WebM）</button>
       <p class="note">今見ている角度で、影と隙間の陰影（アンビエントオクルージョン）を付けた高画質の画像を作ります。色はポリペイントの色を使います。</p>
     </section>
 
@@ -1159,7 +1181,8 @@ function gather(P, N0, r, F) {
 }
 
 function applyDab(P, N0, r, s, dir, brush, F) {
-  const n = gather(P, N0, r, F);
+  let n = gather(P, N0, r, F);
+  if (brush === 'mask' && S.topoMask) n = topoFilter(P, n);
   if (!n) return;
   const rec = stroke && stroke.drag ? stroke.drag.rec : null;
   let nx = 0, ny = 0, nz = 0, cx = 0, cy = 0, cz = 0, ws = 0;
@@ -1422,7 +1445,16 @@ function strokeTo(hit) {
   const dv = P.clone().sub(stroke.last).normalize();
   stroke.dirVec = dv;
   const n = Math.min(steps, 64);
-  for (let i = 1; i <= n; i++) dabSym(stroke.last.clone().addScaledVector(dv, sp * i * (steps / n)), N, r);
+  const spray = stroke.cfg.stroke === 'spray';
+  for (let i = 1; i <= n; i++) {
+    const q = stroke.last.clone().addScaledVector(dv, sp * i * (steps / n));
+    if (!spray) { dabSym(q, N, r); continue; }
+    // spray: scattered position, size and turn for every dab
+    const t1 = new V3(Math.abs(N.x) < 0.9 ? 1 : 0, Math.abs(N.x) < 0.9 ? 0 : 1, 0).cross(N).normalize(), t2 = new V3().crossVectors(N, t1);
+    q.addScaledVector(t1, (Math.random() * 2 - 1) * r * 0.7).addScaledVector(t2, (Math.random() * 2 - 1) * r * 0.7);
+    const ang = Math.random() * Math.PI * 2;
+    dabSym(q, N, r * (0.35 + 0.65 * Math.random()), t1.clone().multiplyScalar(Math.cos(ang)).addScaledVector(t2, Math.sin(ang)));
+  }
   stroke.last.addScaledVector(dv, sp * steps);
 }
 
@@ -2699,6 +2731,131 @@ function paintCavity() {
   colorDirty = gpuDirty = true; scheduleSave(); toast('凹んだ所に色を塗りました');
 }
 
+// ---------------- topological mask: keep only the part of the brush area connected to the clicked point ----------------
+let topoStamp = null, topoTick = 0;
+function topoFilter(P, n) {
+  if (n < 2) return n;
+  if (!topoStamp || topoStamp.length !== nV) { topoStamp = new Uint32Array(nV); topoTick = 0; }
+  const inSel = ++topoTick, reached = ++topoTick;
+  let seed = selIds[0], bd = Infinity;
+  for (let k = 0; k < n; k++) {
+    const v = selIds[k], i = v * 3; topoStamp[v] = inSel;
+    const d = (pos[i]-P.x) ** 2 + (pos[i+1]-P.y) ** 2 + (pos[i+2]-P.z) ** 2; if (d < bd) { bd = d; seed = v; }
+  }
+  const q = [seed]; topoStamp[seed] = reached;
+  for (let h = 0; h < q.length; h++) {
+    const v = q[h];
+    for (let j = vvStart[v]; j < vvStart[v + 1]; j++) { const u = vvList[j]; if (topoStamp[u] === inSel) { topoStamp[u] = reached; q.push(u); } }
+  }
+  let m = 0;
+  for (let k = 0; k < n; k++) if (topoStamp[selIds[k]] === reached) { selIds[m] = selIds[k]; selW[m] = selW[k]; m++; }
+  return m;
+}
+
+// ---------------- polygroups from polypaint colour ----------------
+function pgFromColor() {
+  if (!paint) { toast('色が塗られていません（ポリペイントで塗ってから使ってください）'); return; }
+  pushUndo();
+  const key = new Map(); pg = new Int32Array(nV);
+  for (let v = 0; v < nV; v++) {
+    const i = v * 3, k = ((paint[i] * 15.99) | 0) * 256 + ((paint[i+1] * 15.99) | 0) * 16 + ((paint[i+2] * 15.99) | 0);
+    let g = key.get(k); if (g === undefined) { g = key.size; key.set(k, g); } pg[v] = g;
+  }
+  if (!S.showPG) setShowPG(true);
+  pgUpdated(`色ごとに ${key.size} 個のグループに分けました`);
+}
+
+// ---------------- FiberMesh-style fibres (hair, fur, grass) grown from the masked area ----------------
+function growFibers() {
+  flushNormals();
+  const faces = [], area = [];
+  let total = 0;
+  for (let f = 0; f < nF; f++) {
+    const a = idx[f*3], b = idx[f*3+1], c = idx[f*3+2];
+    if (mask[a] <= 0.5 || mask[b] <= 0.5 || mask[c] <= 0.5 || isHiddenFace(f)) continue;
+    const A = faceN[f*3], B = faceN[f*3+1], C = faceN[f*3+2], ar = Math.hypot(A, B, C) / 2;
+    if (ar <= 0) continue; faces.push(f); total += ar; area.push(total);
+  }
+  if (!faces.length) { toast('毛を生やしたい所をマスクしてください（Ctrl+ドラッグ）'); return; }
+  return busy(() => {
+    geo.computeBoundingSphere();
+    const count = Math.max(10, Math.min(20000, +$('fbCount').value | 0)), size = geo.boundingSphere.radius * 2;
+    const len0 = +$('fbLen').value * size, vary = +$('fbVary').value, grav = +$('fbGrav').value, thick = +$('fbThick').value * size * 0.01, spread = +$('fbSpread').value;
+    const SEG = 6, SIDES = 3, p = [], ix = [], col = paint ? [] : null;
+    let seed = 1234567;
+    const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+    const n = new V3(), d = new V3(), t1 = new V3(), t2 = new V3(), cur = new V3(), down = new V3(0, -1, 0);
+    for (let k = 0; k < count; k++) {
+      // area-weighted random face, random point inside it
+      const x = rnd() * total; let lo = 0, hi = area.length - 1; while (lo < hi) { const m = (lo + hi) >> 1; if (area[m] < x) lo = m + 1; else hi = m; }
+      const f = faces[lo], a = idx[f*3], b = idx[f*3+1], c = idx[f*3+2];
+      let u = rnd(), w = rnd(); if (u + w > 1) { u = 1 - u; w = 1 - w; }
+      const z = 1 - u - w;
+      cur.set(pos[a*3]*z + pos[b*3]*u + pos[c*3]*w, pos[a*3+1]*z + pos[b*3+1]*u + pos[c*3+1]*w, pos[a*3+2]*z + pos[b*3+2]*u + pos[c*3+2]*w);
+      n.set(nrm[a*3]*z + nrm[b*3]*u + nrm[c*3]*w, nrm[a*3+1]*z + nrm[b*3+1]*u + nrm[c*3+1]*w, nrm[a*3+2]*z + nrm[b*3+2]*u + nrm[c*3+2]*w).normalize();
+      t1.set(Math.abs(n.x) < 0.9 ? 1 : 0, Math.abs(n.x) < 0.9 ? 0 : 1, 0).cross(n).normalize(); t2.crossVectors(n, t1);
+      const ang = rnd() * Math.PI * 2, tilt = spread * rnd();
+      d.copy(n).addScaledVector(t1, Math.cos(ang) * tilt).addScaledVector(t2, Math.sin(ang) * tilt).normalize();
+      const L = len0 * (1 - vary * rnd()), seg = L / SEG, base = p.length / 3;
+      const rc = col ? [paint[a*3]*z + paint[b*3]*u + paint[c*3]*w, paint[a*3+1]*z + paint[b*3+1]*u + paint[c*3+1]*w, paint[a*3+2]*z + paint[b*3+2]*u + paint[c*3+2]*w] : null;
+      // rings of 3 vertices along the strand, narrowing to a single tip vertex
+      for (let s = 0; s <= SEG; s++) {
+        if (s > 0) { cur.addScaledVector(d, seg); d.addScaledVector(down, grav * 0.35).normalize(); }
+        if (s === SEG) { p.push(cur.x, cur.y, cur.z); if (col) col.push(...rc); break; }
+        const r = thick * (1 - s / SEG);
+        const e1 = new V3(Math.abs(d.x) < 0.9 ? 1 : 0, Math.abs(d.x) < 0.9 ? 0 : 1, 0).cross(d).normalize(), e2 = new V3().crossVectors(d, e1);
+        for (let j = 0; j < SIDES; j++) { const q = j / SIDES * Math.PI * 2; p.push(cur.x + (e1.x * Math.cos(q) + e2.x * Math.sin(q)) * r, cur.y + (e1.y * Math.cos(q) + e2.y * Math.sin(q)) * r, cur.z + (e1.z * Math.cos(q) + e2.z * Math.sin(q)) * r); if (col) col.push(...rc); }
+      }
+      for (let s = 0; s < SEG - 1; s++) for (let j = 0; j < SIDES; j++) {
+        const A = base + s * SIDES + j, B = base + s * SIDES + (j + 1) % SIDES, C = A + SIDES, D = B + SIDES;
+        ix.push(A, B, D, A, D, C);
+      }
+      const tip = base + SEG * SIDES, last = base + (SEG - 1) * SIDES;
+      for (let j = 0; j < SIDES; j++) ix.push(last + j, last + (j + 1) % SIDES, tip);
+    }
+    pushStruct();
+    const rec = newRec(uniqueName('毛'), new Float32Array(p), new Uint32Array(ix));
+    if (col) rec.paint = new Float32Array(col);
+    insertAfterActive(rec); syncScene(); scheduleSave();
+    toast(`${count.toLocaleString()} 本の毛を生やしました（「${rec.name}」・${(ix.length / 3).toLocaleString()} ポリゴン）`);
+  });
+}
+
+// ---------------- turntable video (WebM) ----------------
+let turning = false;
+async function recordTurntable() {
+  if (turning || stroke) return;
+  if (typeof MediaRecorder !== 'function' || !canvas.captureStream) { toast('この環境では動画を書き出せません'); return; }
+  const secs = +$('ttSecs').value || 6;
+  const type = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'].find(t => MediaRecorder.isTypeSupported(t));
+  if (!type) { toast('この環境では WebM 動画を書き出せません'); return; }
+  turning = true; $('ttGo').disabled = true;
+  const keepClear = renderer.getClearAlpha(), keepCol = renderer.getClearColor(new THREE.Color());
+  renderer.setClearColor(0x2b2c31, 1);
+  ring.visible = ring2.visible = quad.visible = quad2.visible = false;
+  const chunks = [], rec = new MediaRecorder(canvas.captureStream(30), { mimeType: type, videoBitsPerSecond: 8_000_000 });
+  rec.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+  const done = new Promise(res => { rec.onstop = res; });
+  const start = camera.position.clone().sub(controls.target), t0 = performance.now();
+  rec.start();
+  toast(`${secs} 秒のターンテーブル動画を録画しています…`);
+  await new Promise(res => {
+    const step = () => {
+      const k = Math.min(1, (performance.now() - t0) / (secs * 1000));
+      camera.position.copy(controls.target).add(start.clone().applyAxisAngle(new V3(0, 1, 0), k * Math.PI * 2));
+      camera.lookAt(controls.target);
+      if (k < 1) requestAnimationFrame(step); else res();
+    };
+    requestAnimationFrame(step);
+  });
+  rec.stop(); await done;
+  camera.position.copy(controls.target).add(start); controls.update();
+  renderer.setClearColor(keepCol, keepClear);
+  turning = false; $('ttGo').disabled = false;
+  const blob = new Blob(chunks, { type: 'video/webm' });
+  saveOne(async () => ({ name: `${fileBase()}_turntable.webm`, blob }));
+}
+
 // ---------------- subtool operations ----------------
 const SHAPE_NAMES = { sphere:'球', cube:'立方体', cylinder:'円柱', torus:'トーラス' };
 function uniqueName(base) {
@@ -3911,6 +4068,9 @@ $('refProject').onclick = () => busy(projectRef);
 for (const [id, d] of [['refOp', 2], ['refSize', 2], ['refStr', 2], ['arGap', 2], ['arRot', 0], ['arScale', 2]]) $(id).addEventListener('input', e => { $(id + 'Out').textContent = (+e.target.value).toFixed(d); if (id.startsWith('ref')) placeRef(); });
 $('refMode').onchange = placeRef;
 $('arGo').onclick = arrayMesh; $('mwGo').onclick = mirrorWeld; $('pgSplit').onclick = splitGroups; $('paintCavity').onclick = () => busy(paintCavity);
+S.topoMask = false; $('topoMask').onchange = e => { S.topoMask = e.target.checked; };
+$('pgColor').onclick = pgFromColor; $('fbGo').onclick = growFibers; $('ttGo').onclick = () => recordTurntable();
+for (const [id, d] of [['fbLen', 2], ['fbVary', 2], ['fbGrav', 2], ['fbSpread', 2], ['fbThick', 2], ['ttSecs', 0]]) $(id).addEventListener('input', e => { $(id + 'Out').textContent = (+e.target.value).toFixed(d); });
 $('zsStart').onclick = zsStart; $('zsMake').onclick = zsMake; $('zsUndo').onclick = zsUndo; $('zsCancel').onclick = zsEnd;
 
 view.addEventListener('dragover', e => e.preventDefault());
