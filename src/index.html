@@ -54,6 +54,10 @@ nav.tools hr{border:0;border-top:1px solid var(--line);margin:3px 6px;flex:none;
 .alpha canvas{width:100%;height:100%;display:block}
 .alpha:hover{border-color:#6a6b73}
 .alpha.on{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+#rdView{position:absolute;inset:0;z-index:6;display:flex;flex-direction:column;background:rgba(16,16,18,.92)}
+#rdImg{flex:1;min-height:0;object-fit:contain;width:100%;background:repeating-conic-gradient(#2a2b30 0 25%,#232428 0 50%) 0 0/20px 20px}
+.rd-bar{display:flex;align-items:center;gap:8px;padding:10px 12px;border-top:1px solid var(--line)}
+.rd-bar span{flex:1;color:var(--muted);font-size:12px}
 .mats{display:grid;grid-template-columns:repeat(6,1fr);gap:5px;margin-bottom:4px}
 .mat{aspect-ratio:1;padding:0;border:1px solid var(--line);border-radius:50%;background:#000;cursor:pointer;overflow:hidden}
 .mat canvas{width:100%;height:100%;display:block}
@@ -190,6 +194,10 @@ dl.keys dd{margin:0;color:var(--muted)}
       <kbd>Shift</kbd>スムーズ <kbd>Ctrl</kbd>マスク <kbd>Alt</kbd>反転 <kbd>[</kbd><kbd>]</kbd>サイズ
     </div>
     <div id="busy" hidden>処理中…</div>
+    <div id="rdView" hidden>
+      <img id="rdImg" alt="レンダリング結果">
+      <div class="rd-bar"><span id="rdInfo"></span><button class="btn primary" id="rdSave">PNG で保存</button><button class="btn" id="rdClose">閉じる</button></div>
+    </div>
   </main>
 
   <aside id="panel">
@@ -244,6 +252,9 @@ dl.keys dd{margin:0;color:var(--muted)}
       <input type="range" id="lazy" min="0" max="120" step="1" value="0">
       <div class="row"><input type="checkbox" id="invert"><label for="invert">反転（掘る／マスク解除） <span class="note">Alt</span></label></div>
       <div class="row"><input type="checkbox" id="backface" checked><label for="backface">裏側に影響させない</label></div>
+      <div class="row"><input type="checkbox" id="dynOn"><label for="dynOn">ダイナミック細分化（塗った所だけ自動で細かく）</label></div>
+      <div class="row"><label for="dynDetail">細かさ（画面上の三角形の大きさ px）</label><output id="dynDetailOut">6</output></div>
+      <input type="range" id="dynDetail" min="2" max="30" step="1" value="6">
       <p class="note">強さ・減衰カーブ・ストローク・アルファはブラシごとに記憶されます。ペンタブレットの筆圧で強さが変わります。</p>
     </section>
 
@@ -278,7 +289,12 @@ dl.keys dd{margin:0;color:var(--muted)}
       </div>
       <div class="row"><label for="pgAngleDeg">向きの差（度）</label><output id="pgAngleOut">35</output></div>
       <input type="range" id="pgAngleDeg" min="10" max="80" step="1" value="35">
-      <p class="note">Ctrl+Shift+クリック：そのグループ以外をマスク（そのグループだけ編集できる）。背景で Ctrl+Shift+クリック：マスク解除。グループは細分化レベル・プロジェクト保存に引き継がれます。</p>
+      <div class="grid3" style="margin-top:6px">
+        <button class="btn" id="hdAll">すべて表示</button>
+        <button class="btn" id="hdInv">表示を反転</button>
+        <button class="btn" id="hdDel" title="隠している部分のポリゴンを消します">隠した所を削除</button>
+      </div>
+      <p class="note">Ctrl+Shift+クリック：そのグループだけ表示。Ctrl+Shift+Alt+クリック：そのグループを隠す。背景で Ctrl+Shift+ドラッグ：囲んだ所だけ表示（+Alt で囲んだ所を隠す）。背景で Ctrl+Shift+クリック：すべて表示。隠した所はブラシで変形しません。グループは細分化レベル・プロジェクト保存に引き継がれます。</p>
     </section>
 
     <section id="laySec">
@@ -394,6 +410,16 @@ dl.keys dd{margin:0;color:var(--muted)}
     </section>
 
     <section>
+      <h2>レンダリング（画像に書き出し）</h2>
+      <div class="row"><label for="rdScale">大きさ</label><select id="rdScale"><option value="1">画面と同じ</option><option value="2" selected>2倍</option><option value="3">3倍</option></select></div>
+      <div class="row"><label for="rdAO">陰影（AO）の品質</label><select id="rdAO"><option value="0">なし</option><option value="8">標準</option><option value="16" selected>高い</option></select></div>
+      <div class="row"><input type="checkbox" id="rdShadow" checked><label for="rdShadow">床に影を落とす</label></div>
+      <div class="row"><input type="checkbox" id="rdTransp"><label for="rdTransp">背景を透明にする</label></div>
+      <button class="btn primary full" id="rdGo">今の視点でレンダリング</button>
+      <p class="note">今見ている角度で、影と隙間の陰影（アンビエントオクルージョン）を付けた高画質の画像を作ります。色はポリペイントの色を使います。</p>
+    </section>
+
+    <section>
       <h2>書き出し</h2>
       <div class="row"><label for="fname">ファイル名</label><input type="text" id="fname" value="sculpt" style="width:130px"></div>
       <div class="row"><label for="stlH">STLの高さ (mm)</label><input type="number" id="stlH" min="1" max="2000" value="80"></div>
@@ -421,7 +447,9 @@ dl.keys dd{margin:0;color:var(--muted)}
         <dt>Alt</dt><dd>効果を反転</dd>
         <dt>背景で Ctrl+ドラッグ</dt><dd>投げ縄マスク（+Alt で解除）</dd>
         <dt>背景で Ctrl+クリック</dt><dd>マスク反転</dd>
-        <dt>Ctrl+Shift+クリック</dt><dd>そのグループ以外をマスク</dd>
+        <dt>Ctrl+Shift+クリック</dt><dd>そのグループだけ表示（+Alt で隠す）</dd>
+        <dt>背景で Ctrl+Shift+ドラッグ</dt><dd>囲んだ所だけ表示（+Alt で隠す）</dd>
+        <dt>背景で Ctrl+Shift+クリック</dt><dd>すべて表示</dd>
         <dt>Shift+F</dt><dd>ポリグループの色分け表示</dd>
         <dt>X</dt><dd>対称のオン/オフ</dd>
         <dt>W</dt><dd>ワイヤーフレーム</dd>
@@ -747,6 +775,7 @@ function setMesh(p, ix, m, mir, pt) {
   mask = m || new Float32Array(nV);
   paint = pt && pt.length === p.length ? pt : null;
   pg = active && active.pg && active.pg.length === nV ? active.pg : null;
+  hid = active && active.hid && active.hid.length === nV ? active.hid : null;
   mirror = mir || computeMirror(pos);
   selIds = new Uint32Array(nV); selW = new Float32Array(nV);
   touchMark = new Uint8Array(nV); touchList = new Uint32Array(nV); touchN = 0;
@@ -770,6 +799,8 @@ function setMesh(p, ix, m, mir, pt) {
   wireMesh.frustumCulled = false; wireMesh.visible = S.wire; wireMesh.raycast = () => {};
   mesh.matrixAutoUpdate = wireMesh.matrixAutoUpdate = false;
   scene.add(mesh, wireMesh);
+  if (active) active.hid = hid;
+  applyHidden();
   if (active) {
     active.pos = pos; active.idx = idx; active.mask = mask; active.mirror = mirror; active.paint = paint; active.pg = pg;
     const L = active.levels[active.lv]; L.pos = pos; L.idx = idx; L.mirror = mirror;
@@ -958,7 +989,7 @@ function stepHistory(from, to) {
     if (e.rec !== active) activate(e.rec);
     if (e.kind === 'lv') { to.push(lvSnap()); restoreLv(e); break; }
     if (e.lvl !== active.lv) { if (e.lvl >= active.levels.length) continue; setLevel(e.lvl, true); }
-    if (e.pos.length !== pos.length) continue;
+    if (!e.idx && e.pos.length !== pos.length) continue;   // full snapshots (with topology) restore any vertex count
     to.push(snapshot(!!e.idx, e.lay ? e.lay.deltas.map(d => d[0]) : undefined)); restore(e); break;
   }
   if (gizmoOn) attachGizmo();
@@ -990,6 +1021,7 @@ function gather(P, N0, r, F) {
     const dy = pos[i+1] - py; if (dy > r || dy < -r) continue;
     const dz = pos[i+2] - pz; if (dz > r || dz < -r) continue;
     const d2 = dx*dx + dy*dy + dz*dz; if (d2 >= r2) continue;
+    if (hid && hid[v]) continue;
     if (bf && nrm[i]*N0.x + nrm[i+1]*N0.y + nrm[i+2]*N0.z < -0.1) continue;
     let w = fo(1 - Math.sqrt(d2) / r);
     if (A) {
@@ -1039,7 +1071,7 @@ function applyDab(P, N0, r, s, dir, brush, F) {
     return;
   }
 
-  const L = stroke && stroke.layer;
+  const L = stroke && stroke.layer, dynMark = stroke && stroke.dyn ? stroke.dyn.mark : null;
   for (let k = 0; k < n; k++) {
     const v = selIds[k], i = v * 3;
     const w = selW[k] * (1 - mask[v]);
@@ -1142,6 +1174,7 @@ function applyDab(P, N0, r, s, dir, brush, F) {
     pos[i] = x; pos[i+1] = y; pos[i+2] = z;
     touch(v);
     if (rec) rec.push(v);
+    if (dynMark) dynMark[v] = 1;
   }
 }
 
@@ -1156,7 +1189,12 @@ function setNDC(e) { setNDCxy(e.clientX, e.clientY); }
 function pick() {
   if (!mesh) return null;
   ensureBVH(); raycaster.setFromCamera(ndc, camera);
-  const h = raycaster.intersectObject(mesh, false);
+  let h;
+  if (hid) {   // skip hidden faces: take every hit and keep the nearest visible one
+    raycaster.firstHitOnly = false;
+    h = raycaster.intersectObject(mesh, false).filter(x => !isHiddenFace(x.faceIndex));
+    raycaster.firstHitOnly = true;
+  } else h = raycaster.intersectObject(mesh, false);
   if (!h.length) return null;
   const vs = visibleViews();
   if (vs.length) { const o = raycaster.intersectObjects(vs, false); if (o.length && o[0].distance < h[0].distance - 1e-6) return null; }
@@ -1210,18 +1248,21 @@ function onDown(e) {
   const hit = pick();
   const ctrlK = e.ctrlKey || e.metaKey;
   if (!hit) { if (ctrlK) startLasso(e); return; }   // background: Ctrl = lasso mask, otherwise let OrbitControls rotate
-  if (ctrlK && e.shiftKey) { e.preventDefault(); pgIsolate(hit); return; }
+  if (ctrlK && e.shiftKey) { e.preventDefault(); e.altKey ? hideGroup(hit) : showOnlyGroup(hit); return; }
   if (previewMesh) { $('texPreview').checked = false; setTexPreview(false); }   // sculpting needs the real mesh
   controls.enabled = false;
   e.preventDefault();
   canvas.setPointerCapture(e.pointerId);
   const brush = effectiveBrush(e), cfg = BS[brush];
   const dir = (S.invert ? -1 : 1) * (e.altKey ? -1 : 1);
-  pushUndo();
+  let useDyn = S.dyn && DYN_BRUSHES.has(brush) && cfg.stroke !== 'drag';
+  if (useDyn && active.levels.length > 1) { useDyn = false; if (!dynWarned) { dynWarned = true; toast('細分化レベルがあるパーツではダイナミック細分化は使えません'); } }
+  pushUndo(useDyn);
   const top = undoStack[undoStack.length - 1];
   stroke = { brush, cfg, dir, last:null, pressure:pres(e), id:e.pointerId, refUp:camAxis(1), dirVec:null, lazy:{ x:e.clientX, y:e.clientY } };
   const recL = brush !== 'mask' && brush !== 'paint' ? layersOf().find(l => l.rec) : null;
   if (recL && Math.abs(layEff(recL)) > 0.05) stroke.layRec = { L: recL, base: top.pos };
+  if (useDyn) stroke.dyn = { mark: new Uint8Array(nV), t: performance.now(), Lt: S.dynDetail * worldPerPx(hit.point), changed: false };
   const P = hit.point.clone(), N = hitNormal(hit), r = worldRadius(P);
   if (brush === 'move') startMove(P, N, r);
   else if (brush === 'snake') stroke.sn = { P, N };
@@ -1236,6 +1277,7 @@ function onDown(e) {
 function strokeTo(hit) {
   if (!hit) { stroke.last = null; return; }
   const P = hit.point, N = hitNormal(hit), r = worldRadius(P);
+  if (stroke.dyn) stroke.dyn.Lt = S.dynDetail * worldPerPx(P);
   if (!stroke.last) { stroke.last = P.clone(); dabSym(P, N, r); return; }
   const d = stroke.last.distanceTo(P), sp = Math.max(r * S.spacing, 1e-6);
   if (d < sp) return;
@@ -1342,6 +1384,7 @@ canvas.addEventListener('pointermove', e => {
     if (stroke.brush === 'snake') { snakeTo(); flushNormals(); updateCursor(null); return; }
     const hit = pick();
     strokeTo(hit); flushNormals(); updateCursor(hit);
+    if (stroke.dyn && performance.now() - stroke.dyn.t > 140) dynRefine();
     return;
   }
   if (gizmoOn) updateCursor(null);
@@ -1359,6 +1402,7 @@ function endStroke() {
   controls.enabled = true;
   showLazy(null);
   if (!stroke) return;
+  if (stroke.dyn) { dynRefine(); if (stroke.dyn.changed) syncScene(); }
   const lr = stroke.layRec;
   if (lr && layersOf().includes(lr.L) && lr.L.delta.length === pos.length) {
     // record what this stroke changed into the layer (scaled so pos = base + delta * strength stays true)
@@ -1509,7 +1553,7 @@ function lassoMove(e) {
 function finishLasso() {
   const L = lasso; lasso = null;
   lassoPoly.setAttribute('visibility', 'hidden'); controls.enabled = true;
-  if (!L.moved) { if (L.shift) { maskClear(); toast('マスクを解除しました'); } else { maskInvert(); toast('マスクを反転しました'); } return; }
+  if (!L.moved) { if (L.shift) showAll(); else { maskInvert(); toast('マスクを反転しました'); } return; }
   if (L.pts.length < 3) return;
   // rasterize the outline at half resolution, then test every vertex's screen position against it
   const W = Math.max(1, Math.ceil(canvas.clientWidth / 2)), H = Math.max(1, Math.ceil(canvas.clientHeight / 2));
@@ -1519,15 +1563,24 @@ function finishLasso() {
   const px = g.getImageData(0, 0, W, H).data;
   camera.updateMatrixWorld();
   const M = new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse).multiply(mesh.matrixWorld), e = M.elements;
-  pushUndo();
-  const val = L.un ? 0 : 1; let n = 0;
+  const inside = new Uint8Array(nV); let n = 0;
   for (let v = 0; v < nV; v++) {
     const x = pos[v*3], y = pos[v*3+1], z = pos[v*3+2];
     const w = e[3]*x + e[7]*y + e[11]*z + e[15]; if (w <= 0) continue;
     const sx = ((e[0]*x + e[4]*y + e[8]*z + e[12]) / w * 0.5 + 0.5) * W, sy = (0.5 - (e[1]*x + e[5]*y + e[9]*z + e[13]) / w * 0.5) * H;
     const ix = sx | 0, iy = sy | 0; if (ix < 0 || iy < 0 || ix >= W || iy >= H) continue;
-    if (px[(iy * W + ix) * 4 + 3] > 127) { mask[v] = val; n++; }
+    if (px[(iy * W + ix) * 4 + 3] > 127) { inside[v] = 1; n++; }
   }
+  if (L.shift) {   // Ctrl+Shift: show only what was enclosed (Alt: hide it)
+    if (!n) { toast('囲んだ範囲に頂点がありません'); return; }
+    const h = new Uint8Array(nV);
+    for (let v = 0; v < nV; v++) h[v] = L.un ? ((hid && hid[v]) || inside[v] ? 1 : 0) : (inside[v] && !(hid && hid[v]) ? 0 : 1);
+    commitHidden(h, L.un ? '囲んだ所を隠しました' : '囲んだ所だけ表示しました');
+    return;
+  }
+  pushUndo();
+  const val = L.un ? 0 : 1;
+  for (let v = 0; v < nV; v++) if (inside[v] && !(hid && hid[v])) mask[v] = val;
   recolorAll(); scheduleSave();
   toast(n ? `${n.toLocaleString()} 頂点を${L.un ? 'マスク解除' : 'マスク'}しました` : '囲んだ範囲に頂点がありません');
 }
@@ -1591,16 +1644,6 @@ function pgFromMask() {
   pgUpdated('マスクした所を新しいグループにしました');
 }
 function pgOne() { if (!pg) { toast('グループは1つだけです'); return; } pushUndo(); pg = null; pgUpdated('グループを1つにまとめました'); }
-// Ctrl+Shift+click: mask everything except the clicked group
-function pgIsolate(hit) {
-  if (!pg) { toast('グループがありません（「つながりで分ける」などで作れます）'); return; }
-  const f = hit.faceIndex * 3; let best = idx[f], bd = Infinity;
-  for (let k = 0; k < 3; k++) { const v = idx[f + k]; const d = hit.point.distanceToSquared(new V3(pos[v*3], pos[v*3+1], pos[v*3+2])); if (d < bd) { bd = d; best = v; } }
-  const g = pg[best];
-  pushUndo();
-  for (let v = 0; v < nV; v++) mask[v] = pg[v] === g ? 0 : 1;
-  recolorAll(); scheduleSave(); toast('そのグループ以外をマスクしました（背景で Ctrl+Shift+クリックで解除）');
-}
 // polygroups onto another subdivision level: lower = first vertices, higher = edge vertices take a parent's group
 function pgToLevel(g, n, hi) {
   if (!g) return null;
@@ -1743,6 +1786,7 @@ function applyMaterial(id, quiet) {
   }
   for (const x of old) x.dispose();
   if (mesh) mesh.material = material;
+  if (drawMesh) drawMesh.material = material;
   for (const r of viewsAlive) if (r.view) r.view.material = r.view.geometry.attributes.color ? viewMatPaint : viewMat;
   if (mesh) recolorAll();
   for (const el of $('matGrid').children) el.classList.toggle('on', el.dataset.id === m.id);
@@ -1761,6 +1805,228 @@ function renderMatGrid() {
     b.appendChild(c); b.onclick = () => applyMaterial(m.id);
     grid.appendChild(b);
   }
+}
+
+// ---------------- hide / show (per vertex; a face is drawn only when all its vertices are shown) ----------------
+let hid = null, drawMesh = null;
+function applyHidden() {
+  if (drawMesh) { scene.remove(drawMesh); drawMesh.geometry.dispose(); drawMesh = null; }
+  if (!mesh) return;
+  if (!hid) { mesh.visible = true; if (wireMesh.isMesh) wireMesh.geometry = geo; return; }
+  const out = new Uint32Array(idx.length); let n = 0;
+  for (let f = 0; f < idx.length; f += 3) { const a = idx[f], b = idx[f+1], c = idx[f+2]; if (!hid[a] && !hid[b] && !hid[c]) { out[n++] = a; out[n++] = b; out[n++] = c; } }
+  const g = new THREE.BufferGeometry();
+  for (const k of ['position', 'normal', 'color']) g.setAttribute(k, geo.attributes[k]);
+  g.setIndex(new THREE.BufferAttribute(out.slice(0, n), 1));
+  drawMesh = new THREE.Mesh(g, material); drawMesh.frustumCulled = false; drawMesh.matrixAutoUpdate = false; drawMesh.raycast = () => {};
+  mesh.visible = false; scene.add(drawMesh);
+  if (wireMesh.isMesh) wireMesh.geometry = g;
+}
+function commitHidden(h, msg) {
+  if (h) { let shown = 0, hiddenN = 0; for (let v = 0; v < nV; v++) h[v] ? hiddenN++ : shown++; if (!shown) { toast('すべてを隠すことはできません'); return; } if (!hiddenN) h = null; }
+  hid = active.hid = h; applyHidden();
+  if (msg) toast(msg);
+}
+const isHiddenFace = f => hid && (hid[idx[f*3]] || hid[idx[f*3+1]] || hid[idx[f*3+2]]);
+function groupAtHit(hit) {
+  const f = hit.faceIndex * 3; let best = idx[f], bd = Infinity;
+  for (let k = 0; k < 3; k++) { const v = idx[f + k], d = hit.point.distanceToSquared(new V3(pos[v*3], pos[v*3+1], pos[v*3+2])); if (d < bd) { bd = d; best = v; } }
+  return pg ? pg[best] : 0;
+}
+function showOnlyGroup(hit) {
+  if (!pg) { toast('グループがありません（「つながりで分ける」などで作れます）'); return; }
+  const g = groupAtHit(hit), h = new Uint8Array(nV);
+  for (let v = 0; v < nV; v++) h[v] = pg[v] === g ? 0 : 1;
+  commitHidden(h, 'そのグループだけ表示しました（背景で Ctrl+Shift+クリックですべて表示）');
+}
+function hideGroup(hit) {
+  if (!pg) { toast('グループがありません（「つながりで分ける」などで作れます）'); return; }
+  const g = groupAtHit(hit), h = hid ? hid.slice() : new Uint8Array(nV);
+  for (let v = 0; v < nV; v++) if (pg[v] === g) h[v] = 1;
+  commitHidden(h, 'そのグループを隠しました');
+}
+function showAll() { if (!hid) return; commitHidden(null, 'すべて表示しました'); }
+function invertHidden() {
+  if (!hid) { toast('隠している所はありません'); return; }
+  const h = new Uint8Array(nV); for (let v = 0; v < nV; v++) h[v] = hid[v] ? 0 : 1;
+  commitHidden(h, '表示を反転しました');
+}
+function deleteHidden() {
+  if (!hid) { toast('隠している所はありません'); return; }
+  if (active.levels.length > 1) { toast('細分化レベルがあるパーツでは削除できません（下か上のレベルを削除してください）'); return; }
+  const keep = new Uint8Array(nF); let n = 0;
+  for (let f = 0; f < nF; f++) if (!isHiddenFace(f)) { keep[f] = 1; n++; }
+  if (!n) { toast('すべて隠れているため削除できません'); return; }
+  return busy(() => {
+    flushNormals(); pushUndo(true);
+    const map = new Int32Array(nV).fill(-1); let vn = 0;
+    for (let f = 0; f < nF; f++) if (keep[f]) for (let k = 0; k < 3; k++) { const v = idx[f*3+k]; if (map[v] < 0) map[v] = vn++; }
+    const p = new Float32Array(vn * 3), m = new Float32Array(vn), ix = new Uint32Array(n * 3);
+    const pt = paint ? new Float32Array(vn * 3) : null, g = pg ? new Int32Array(vn) : null;
+    for (let v = 0; v < nV; v++) { const t = map[v]; if (t < 0) continue; for (let k = 0; k < 3; k++) { p[t*3+k] = pos[v*3+k]; if (pt) pt[t*3+k] = paint[v*3+k]; } m[t] = mask[v]; if (g) g[t] = pg[v]; }
+    for (let f = 0, o = 0; f < nF; f++) if (keep[f]) for (let k = 0; k < 3; k++) ix[o++] = map[idx[f*3+k]];
+    const removed = nF - n;
+    clearLevelExtras(active.levels[0]);
+    active.pg = g; active.hid = null;
+    setMesh(p, ix, m, null, pt);
+    syncScene(); scheduleSave();
+    toast(`隠していた ${removed.toLocaleString()} ポリゴンを削除しました`);
+  });
+}
+// per-level data that depends on the exact triangles (quad outlines, UVs, baked textures)
+function clearLevelExtras(L) { L.quads = undefined; L.polys = undefined; L.uv = undefined; L.uvIdx = undefined; L.bake = undefined; }
+
+// ---------------- dynamic topology (Sculptris Pro style): split long edges where the brush has been ----------------
+const DYN_BRUSHES = new Set(['standard', 'clay', 'claybuild', 'inflate', 'blob', 'noise', 'crease', 'dam', 'slash', 'pinch', 'magnify', 'nudge', 'smooth', 'polish', 'flatten', 'trim']);
+let dynWarned = false;
+function dynRefine() {
+  const D = stroke && stroke.dyn; if (!D) return false;
+  D.t = performance.now();
+  flushNormals();
+  if (nF > 2_000_000 || !(D.Lt > 0)) return false;
+  const P = Array.from(pos), N = Array.from(nrm), M = Array.from(mask), C = paint ? Array.from(paint) : null, G = pg ? Array.from(pg) : null;
+  const mk = Array.from(D.mark), F = Array.from(idx);
+  const lim2 = (D.Lt * 1.3) ** 2;
+  let n = nV, changed = false;
+  for (let pass = 0; pass < 5; pass++) {
+    const nf = F.length / 3, edges = new Map();
+    // every edge with a touched end point, with BOTH of its faces (a face whose own vertices were not
+    // touched can still share such an edge; splitting only one side would leave a crack)
+    for (let f = 0; f < nf; f++) {
+      const a = F[f*3], b = F[f*3+1], c = F[f*3+2];
+      if (!mk[a] && !mk[b] && !mk[c]) continue;
+      for (const [u, v] of [[a, b], [b, c], [c, a]]) {
+        if (!mk[u] && !mk[v]) continue;
+        const key = u < v ? u * 4194304 + v : v * 4194304 + u, e = edges.get(key);
+        if (e) e[3] = f; else edges.set(key, [u, v, f, -1]);
+      }
+    }
+    const cand = [];
+    for (const e of edges.values()) {
+      const u = e[0] * 3, v = e[1] * 3, d2 = (P[u]-P[v]) ** 2 + (P[u+1]-P[v+1]) ** 2 + (P[u+2]-P[v+2]) ** 2;
+      if (d2 > lim2) cand.push([d2, e]);
+    }
+    if (!cand.length) break;
+    cand.sort((x, y) => y[0] - x[0]);
+    const used = new Uint8Array(nf);
+    for (const [, e] of cand) {
+      const [u, v, f1, f2] = e;
+      if (used[f1] || (f2 >= 0 && used[f2])) continue;
+      // new vertex at the edge midpoint, lifted by the curvature implied by the two vertex normals
+      const m = n++, a = u * 3, b = v * 3;
+      const dx = P[b]-P[a], dy = P[b+1]-P[a+1], dz = P[b+2]-P[a+2];
+      let nx = N[a] + N[b], ny = N[a+1] + N[b+1], nz = N[a+2] + N[b+2]; const nl = Math.hypot(nx, ny, nz) || 1; nx /= nl; ny /= nl; nz /= nl;
+      const off = -(dx * (N[a] - N[b]) + dy * (N[a+1] - N[b+1]) + dz * (N[a+2] - N[b+2])) / 8;
+      P.push((P[a] + P[b]) / 2 + nx * off, (P[a+1] + P[b+1]) / 2 + ny * off, (P[a+2] + P[b+2]) / 2 + nz * off);
+      N.push(nx, ny, nz); M.push((M[u] + M[v]) / 2); mk.push(1);
+      if (C) C.push((C[a] + C[b]) / 2, (C[a+1] + C[b+1]) / 2, (C[a+2] + C[b+2]) / 2);
+      if (G) G.push(G[u]);
+      for (const f of [f1, f2]) {
+        if (f < 0) continue;
+        used[f] = 1;
+        const o = f * 3; let k = 0;
+        while (k < 3 && !((F[o+k] === u && F[o+(k+1)%3] === v) || (F[o+k] === v && F[o+(k+1)%3] === u))) k++;
+        const x = F[o+k], y = F[o+(k+1)%3], z = F[o+(k+2)%3];
+        F[o] = x; F[o+1] = m; F[o+2] = z;   // (x, m, z) + (m, y, z)
+        F.push(m, y, z);
+      }
+      changed = true;
+    }
+  }
+  if (!changed) return false;
+  clearLevelExtras(active.levels[0]);
+  active.pg = G ? Int32Array.from(G) : null;
+  active.hid = null;
+  setMesh(Float32Array.from(P), Uint32Array.from(F), Float32Array.from(M), null, C ? Float32Array.from(C) : null);
+  D.mark = Uint8Array.from(mk); D.changed = true;
+  return true;
+}
+
+// ---------------- rendering: shadows + ambient occlusion, saved as PNG ----------------
+let lastRender = null;
+function aoFor(p, n, bvhs, rays, maxD, eps) {
+  const nv = p.length / 3, ao = new Float32Array(nv).fill(1);
+  if (!rays) return ao;
+  // cosine-weighted directions around +Z, rotated per vertex
+  const dirs = [];
+  for (let k = 0; k < rays; k++) { const r1 = (k + 0.5) / rays, phi = k * 2.399963, r = Math.sqrt(r1); dirs.push([r * Math.cos(phi), r * Math.sin(phi), Math.sqrt(1 - r1)]); }
+  const ray = new THREE.Ray(), o = new V3(), d = new V3(), t = new V3(), b = new V3(), nn = new V3();
+  for (let v = 0; v < nv; v++) {
+    const i = v * 3; nn.set(n[i], n[i+1], n[i+2]); if (nn.lengthSq() < 1e-12) continue;
+    t.set(Math.abs(nn.x) < 0.9 ? 1 : 0, Math.abs(nn.x) < 0.9 ? 0 : 1, 0).cross(nn).normalize(); b.crossVectors(nn, t);
+    const rot = hash3(v, 7, 13) * 6.2831853, cr = Math.cos(rot), sr = Math.sin(rot);
+    o.set(p[i] + nn.x * eps, p[i+1] + nn.y * eps, p[i+2] + nn.z * eps);
+    let occ = 0;
+    for (const [x0, y0, z0] of dirs) {
+      const x = x0 * cr - y0 * sr, y = x0 * sr + y0 * cr;
+      d.set(t.x * x + b.x * y + nn.x * z0, t.y * x + b.y * y + nn.y * z0, t.z * x + b.z * y + nn.z * z0);
+      ray.set(o, d);
+      for (const bvh of bvhs) { const h = bvh.raycastFirst(ray, THREE.DoubleSide); if (h && h.distance < maxD) { occ += 1 - h.distance / maxD * 0.5; break; } }
+    }
+    ao[v] = 1 - Math.min(1, occ / rays) * 0.85;
+  }
+  return ao;
+}
+async function renderImage() {
+  if (stroke) return;
+  flushNormals(); ensureBVH();
+  const recs = shownRecs(); if (!recs.length) return;
+  const scale = +$('rdScale').value || 1, rays = +$('rdAO').value || 0;
+  const vw = view.clientWidth || canvas.clientWidth, vh = view.clientHeight || canvas.clientHeight;
+  const W = Math.min(4096, Math.round(vw * scale)), H = Math.min(4096, Math.round(vh * scale));
+  const box = sceneBounds(recs), size = box.getSize(new V3()).length() || 1, center = box.getCenter(new V3());
+  const t0 = performance.now();
+  const parts = recs.map(r => {
+    const isA = r === active, p = isA ? pos : r.pos, ix = isA ? (drawMesh ? drawMesh.geometry.index.array : idx) : r.idx;
+    const n = isA ? nrm : (ensureView(r).geometry.attributes.normal.array);
+    const bvh = isA ? geo.boundsTree : ensureView(r).geometry.boundsTree;
+    return { r, p, ix, n, bvh, pt: isA ? paint : r.paint };
+  });
+  const bvhs = parts.map(x => x.bvh);
+  const rs = new THREE.Scene();
+  if (!$('rdTransp').checked) rs.background = new THREE.Color(0x2b2c31);
+  for (const x of parts) {
+    const ao = aoFor(x.p, x.n, bvhs, rays, size * 0.18, size * 1e-4);
+    const nv = x.p.length / 3, c = new Float32Array(nv * 3);
+    const bc = [BASE_COL.r, BASE_COL.g, BASE_COL.b], hasPt = x.pt && x.pt.length === x.p.length;
+    for (let v = 0; v < nv; v++) for (let k = 0; k < 3; k++) c[v*3+k] = (hasPt ? x.pt[v*3+k] : bc[k]) * ao[v];
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(x.p, 3)); g.setAttribute('normal', new THREE.BufferAttribute(x.n, 3));
+    g.setAttribute('color', new THREE.BufferAttribute(c, 3)); g.setIndex(new THREE.BufferAttribute(x.ix, 1));
+    const m = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.55, metalness: 0 }));
+    m.castShadow = m.receiveShadow = true; rs.add(m);
+  }
+  rs.add(new THREE.HemisphereLight(0xfff3e4, 0x30323a, 0.75));
+  const right = camAxis(0), up = camAxis(1), back = camAxis(2);
+  const key = new THREE.DirectionalLight(0xffffff, 2.3);
+  key.position.copy(center).addScaledVector(right.clone().multiplyScalar(-0.9).addScaledVector(up, 1.6).addScaledVector(back, 1.1).normalize(), size * 2);
+  key.target.position.copy(center); rs.add(key, key.target);
+  const shadow = $('rdShadow').checked;
+  if (shadow) {
+    key.castShadow = true; key.shadow.mapSize.set(2048, 2048); key.shadow.bias = -0.0004; key.shadow.normalBias = size * 0.002;
+    const sc = key.shadow.camera; sc.left = sc.bottom = -size * 0.9; sc.right = sc.top = size * 0.9; sc.near = size * 0.1; sc.far = size * 4; sc.updateProjectionMatrix();
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(size * 8, size * 8), new THREE.ShadowMaterial({ opacity: 0.38 }));
+    ground.rotation.x = -Math.PI / 2; ground.position.set(center.x, box.min.y - size * 0.002, center.z); ground.receiveShadow = true; rs.add(ground);
+  }
+  const fill = new THREE.DirectionalLight(0xc9d6ff, 0.5); fill.position.copy(center).addScaledVector(right.clone().addScaledVector(up, -0.3).addScaledVector(back, 0.6).normalize(), size * 2); rs.add(fill);
+  const rt = new THREE.WebGLRenderTarget(W, H, { samples: 4 }); rt.texture.colorSpace = THREE.SRGBColorSpace;
+  const cam = camera.clone(); cam.aspect = W / H; cam.updateProjectionMatrix();
+  const prevShadow = renderer.shadowMap.enabled, prevType = renderer.shadowMap.type;
+  renderer.shadowMap.enabled = shadow; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.setRenderTarget(rt); renderer.clear(); renderer.render(rs, cam);
+  const px = new Uint8Array(W * H * 4); renderer.readRenderTargetPixels(rt, 0, 0, W, H, px);
+  renderer.setRenderTarget(null); renderer.shadowMap.enabled = prevShadow; renderer.shadowMap.type = prevType;
+  rt.dispose(); if (key.shadow.map) key.shadow.map.dispose();
+  rs.traverse(o => { if (o.isMesh) { o.material.dispose(); o.geometry.dispose(); } });
+  // flip rows (GL origin is bottom-left)
+  const img = new ImageData(W, H), row = W * 4;
+  for (let y = 0; y < H; y++) img.data.set(px.subarray((H - 1 - y) * row, (H - y) * row), y * row);
+  const c2 = document.createElement('canvas'); c2.width = W; c2.height = H; c2.getContext('2d').putImageData(img, 0, 0);
+  const blob = await new Promise(res => c2.toBlob(res, 'image/png'));
+  if (lastRender) URL.revokeObjectURL(lastRender.url);
+  lastRender = { blob, url: URL.createObjectURL(blob) };
+  $('rdImg').src = lastRender.url; $('rdView').hidden = false;
+  $('rdInfo').textContent = `${W} × ${H} px・${((performance.now() - t0) / 1000).toFixed(1)}秒`;
 }
 
 // ---------------- subtool operations ----------------
@@ -2955,6 +3221,13 @@ $('layAdd').onclick = layAdd; $('layBake').onclick = () => layRemove(true); $('l
   });
 }
 renderMatGrid();
+S.dyn = false; S.dynDetail = 6;
+$('dynOn').onchange = e => { S.dyn = e.target.checked; if (S.dyn && active.levels.length > 1) toast('細分化レベルがあるパーツでは使えません（レベルを削除すると使えます）'); };
+$('dynDetail').oninput = e => { S.dynDetail = +e.target.value; $('dynDetailOut').textContent = e.target.value; };
+$('hdAll').onclick = showAll; $('hdInv').onclick = invertHidden; $('hdDel').onclick = deleteHidden;
+$('rdGo').onclick = () => busy(() => renderImage().catch(err => { console.error(err); toast('レンダリングに失敗しました: ' + err.message); }));
+$('rdSave').onclick = () => { if (lastRender) saveOne(async () => ({ name: `${fileBase()}_render.png`, blob: lastRender.blob })); };
+$('rdClose').onclick = () => { $('rdView').hidden = true; };
 
 view.addEventListener('dragover', e => e.preventDefault());
 view.addEventListener('drop', e => {
