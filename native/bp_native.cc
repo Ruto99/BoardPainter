@@ -8,6 +8,7 @@
 //   smoothOrient(N, Q, start, list, fq, iters, shuffle, parallel?) -> Float32Array            (fieldretopo.js)
 //   smoothPos(V, N, Q, O, start, list, fo, fx, s, iters, shuffle, parallel?) -> Float32Array  (fieldretopo.js)
 //   bake(lowPos, uvIdx, uv, highPos, highIdx, paint|null, size, maxDist, dilate) -> { normal, color, height, heightRange, hits, misses }  (bake.js)
+//   mirrorPairs(pos, origin, cell, tol2) -> Int32Array  (computeMirror in index.html)
 //   info() -> { version, threads }
 #define NAPI_VERSION 8
 #include <node_api.h>
@@ -25,7 +26,7 @@
 
 namespace {
 
-const char* kVersion = "1.2.0";
+const char* kVersion = "1.3.0";
 
 unsigned hwThreads() {
   unsigned t = std::thread::hardware_concurrency();
@@ -586,6 +587,38 @@ void bake(const float* lp, size_t nLP, const uint32_t* li, size_t nLI, const flo
   for (size_t k = 0; k < SS; k++) { const uint8_t g = range > 0 && filled[k] ? clamp8(128 + hgt[k] / range * 127) : 128; out.height[k*4] = out.height[k*4+1] = out.height[k*4+2] = g; }
 }
 
+// ---------------- mirror pairs across x = 0 (see computeMirror in index.html) ----------------
+// Grid hash of cell size `cell` from origin o; for every vertex the closest vertex to its mirror image within
+// sqrt(tol2), searching the 27 surrounding cells. Cells are visited in the same order as the JavaScript and,
+// inside a cell, vertices from the highest index down (its hash chains), so ties resolve the same way.
+void mirrorPairs(const float* p, size_t n, const double o[3], double cell, double tol2, int32_t* out) {
+  const unsigned T = hwThreads();
+  const double M = 8192;
+  auto keyOf = [&](double ix, double iy, double iz) { return (ix * M + iy) * M + iz; };
+  std::vector<double> key(n);
+  parallelFor(n, T, [&](size_t v) {
+    key[v] = keyOf(std::floor((p[v*3] - o[0]) / cell), std::floor((p[v*3+1] - o[1]) / cell), std::floor((p[v*3+2] - o[2]) / cell));
+  });
+  std::vector<uint32_t> ord(n); std::iota(ord.begin(), ord.end(), 0u);
+  std::sort(ord.begin(), ord.end(), [&](uint32_t a, uint32_t b) { return key[a] < key[b] || (key[a] == key[b] && a > b); });
+  std::vector<double> sk(n); for (size_t i = 0; i < n; i++) sk[i] = key[ord[i]];
+  parallelFor(n, T, [&](size_t v) {
+    const double x = -(double)p[v*3], y = p[v*3+1], z = p[v*3+2];
+    const double ix = std::floor((x - o[0]) / cell), iy = std::floor((y - o[1]) / cell), iz = std::floor((z - o[2]) / cell);
+    int64_t best = -1; double bd = tol2;
+    for (int a = -1; a <= 1; a++) for (int b = -1; b <= 1; b++) for (int c = -1; c <= 1; c++) {
+      const double k = keyOf(ix + a, iy + b, iz + c);
+      auto lo = std::lower_bound(sk.begin(), sk.end(), k);
+      for (size_t i = lo - sk.begin(); i < n && sk[i] == k; i++) {
+        const uint32_t u = ord[i];
+        const double dx = p[u*3] - x, dy = p[u*3+1] - y, dz = p[u*3+2] - z, d2 = dx*dx + dy*dy + dz*dz;
+        if (d2 <= bd) { bd = d2; best = u; }
+      }
+    }
+    out[v] = (int32_t)best;
+  });
+}
+
 // ---------------- Node-API glue ----------------
 #define CHECK(call) do { if ((call) != napi_ok) { napi_throw_error(env, nullptr, "bp_native: " #call); return nullptr; } } while (0)
 
@@ -844,6 +877,24 @@ napi_value Bake(napi_env env, napi_callback_info info) {
   return obj;
 }
 
+// mirrorPairs(pos: Float32Array, origin: number[3], cell, tol2) -> Int32Array (mirror vertex or -1)
+napi_value MirrorPairs(napi_env env, napi_callback_info info) {
+  size_t argc = 4; napi_value argv[4];
+  CHECK(napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr));
+  float* p; size_t nP; double o[3], cell = 0, tol2 = 0;
+  if (argc < 4 || !typedArg(env, argv[0], napi_float32_array, (void**)&p, &nP) || !vec3Arg(env, argv[1], o)
+      || napi_get_value_double(env, argv[2], &cell) != napi_ok || napi_get_value_double(env, argv[3], &tol2) != napi_ok) {
+    napi_throw_type_error(env, nullptr, "mirrorPairs(pos, origin, cell, tol2)"); return nullptr;
+  }
+  if (nP % 3 || !(cell > 0) || !(tol2 >= 0) || nP / 3 > 0x7fffffff) { napi_throw_range_error(env, nullptr, "mirrorPairs: bad arguments"); return nullptr; }
+  const size_t n = nP / 3;
+  std::vector<int32_t> out(n, -1);
+  mirrorPairs(p, n, o, cell, tol2, out.data());
+  napi_value r = makeTyped(env, napi_int32_array, out.data(), out.size());
+  if (!r) { napi_throw_error(env, nullptr, "mirrorPairs: out of memory"); return nullptr; }
+  return r;
+}
+
 napi_value Info(napi_env env, napi_callback_info) {
   napi_value obj, v, t;
   CHECK(napi_create_object(env, &obj));
@@ -864,6 +915,7 @@ NAPI_MODULE_INIT() {
     {"smoothOrient", nullptr, SmoothOrient, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"smoothPos", nullptr, SmoothPos, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"bake", nullptr, Bake, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"mirrorPairs", nullptr, MirrorPairs, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"info", nullptr, Info, nullptr, nullptr, nullptr, napi_default, nullptr},
   };
   napi_define_properties(env, exports, sizeof(props) / sizeof(props[0]), props);

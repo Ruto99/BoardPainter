@@ -12,6 +12,7 @@ const OPS = {
   fitSurface: a => mod.fitSurface(a.pos, a.idx, a.srcPos, a.srcIdx, a.buried, a.maxSnap, a.smooth, a.project),
   smoothOrient: a => mod.smoothOrient(a.N, a.Q, a.start, a.list, a.fq, a.iters, a.shuffle, a.parallel),
   smoothPos: a => mod.smoothPos(a.V, a.N, a.Q, a.O, a.start, a.list, a.fo, a.fx, a.s, a.iters, a.shuffle, a.parallel),
+  mirrorPairs: a => mod.mirrorPairs(a.pos, a.o, a.cell, a.tol2),
   bake: a => mod.bake(a.lowPos, a.uvIdx, a.uv, a.highPos, a.highIdx, a.paint, a.size, a.maxDist, a.dilate),
 };
 

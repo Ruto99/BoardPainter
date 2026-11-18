@@ -210,6 +210,60 @@ ipcMain.on('bp:native', async (e, op, args) => {
   nativeWorker.postMessage({ id, op, args }, transfer);
 });
 
+// ---------------- autosave (crash recovery) ----------------
+// The page streams the project in chunks (so a 20-million-polygon model never freezes it) into
+// autosave-<stamp>.bin; autosave.json, which names that file, is replaced last (write-then-rename),
+// so a crash mid-save leaves the previous autosave intact.
+const autoDir = () => app.getPath('userData');
+const AUTO_JSON = () => path.join(autoDir(), 'autosave.json');
+let autoJob = null;   // { id, fh, file, bytes }
+async function autoAbort() {
+  if (!autoJob) return;
+  const j = autoJob; autoJob = null;
+  await j.fh.close().catch(() => {});
+  await fs.rm(path.join(autoDir(), j.file), { force: true }).catch(() => {});
+}
+ipcMain.handle('bp:auto-begin', async () => {
+  await autoAbort();
+  const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, file = `autosave-${id}.bin`;
+  autoJob = { id, file, fh: await fs.open(path.join(autoDir(), file), 'w'), bytes: 0 };
+  return id;
+});
+ipcMain.handle('bp:auto-write', async (_e, id, chunk) => {
+  if (!autoJob || autoJob.id !== id || !ArrayBuffer.isView(chunk)) return false;
+  await autoJob.fh.write(chunk);
+  autoJob.bytes += chunk.byteLength;
+  return true;
+});
+ipcMain.handle('bp:auto-commit', async (_e, id, header) => {
+  if (!autoJob || autoJob.id !== id || typeof header !== 'string') return false;
+  const j = autoJob; autoJob = null;
+  await j.fh.close();
+  const tmp = AUTO_JSON() + '.tmp';
+  await fs.writeFile(tmp, JSON.stringify({ file: j.file, bytes: j.bytes, header }));
+  await fs.rename(tmp, AUTO_JSON());
+  // remove older data files
+  for (const f of await fs.readdir(autoDir())) if (/^autosave-.*\.bin$/.test(f) && f !== j.file) await fs.rm(path.join(autoDir(), f), { force: true }).catch(() => {});
+  return true;
+});
+// { header, bytes } of the last complete autosave, or null; the data is then read in pieces with bp:auto-read
+let autoRead = null;
+ipcMain.handle('bp:auto-info', async () => {
+  try {
+    const a = JSON.parse(await fs.readFile(AUTO_JSON(), 'utf8'));
+    const file = path.join(autoDir(), path.basename(String(a.file)));
+    if ((await fs.stat(file)).size !== a.bytes) return null;
+    autoRead = file;
+    return { header: a.header, bytes: a.bytes };
+  } catch { return null; }
+});
+ipcMain.handle('bp:auto-read', async (_e, offset, length) => {
+  if (!autoRead || !(offset >= 0) || !(length > 0 && length <= 64 * 1024 * 1024)) return null;
+  const fh = await fs.open(autoRead, 'r');
+  try { const b = Buffer.alloc(length); const { bytesRead } = await fh.read(b, 0, length, offset); return b.subarray(0, bytesRead); }
+  finally { await fh.close(); }
+});
+
 let exportDir = null;
 function lastDir() { return exportDir || app.getPath('documents'); }
 function rememberDir(d) { exportDir = d; }

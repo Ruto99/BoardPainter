@@ -10,6 +10,8 @@ function nativeCall(op, args) {
 contextBridge.exposeInMainWorld('bp', {
   isDesktop: true,
   platform: process.platform,
+  // installed memory (GB), for how big a model the page lets you build
+  memoryGB: (() => { try { return Math.round(process.getSystemMemoryInfo().total / 1048576); } catch { return 0; } })(),
   openModel: () => ipcRenderer.invoke('bp:open-model'),
   takePendingOpen: () => ipcRenderer.invoke('bp:take-pending-open'),
   saveFile: (name, data) => ipcRenderer.invoke('bp:save-file', { name, data }),
@@ -17,6 +19,12 @@ contextBridge.exposeInMainWorld('bp', {
   saveProject: (filePath, name, data, saveAs) => ipcRenderer.invoke('bp:save-project', { filePath, name, data, saveAs }),
   confirmClose: name => ipcRenderer.invoke('bp:confirm-close', name),
   reveal: p => ipcRenderer.invoke('bp:reveal', p),
+  // autosave on disk, streamed in chunks
+  autoBegin: () => ipcRenderer.invoke('bp:auto-begin'),
+  autoWrite: (id, chunk) => ipcRenderer.invoke('bp:auto-write', id, chunk),
+  autoCommit: (id, header) => ipcRenderer.invoke('bp:auto-commit', id, header),
+  autoInfo: () => ipcRenderer.invoke('bp:auto-info'),
+  autoRead: (offset, length) => ipcRenderer.invoke('bp:auto-read', offset, length),
   // Native (C++) mesh kernels. Synchronous: the page waits for the result, like the JavaScript versions.
   accel: {
     info: () => ipcRenderer.sendSync('bp:native-info'),
@@ -25,6 +33,7 @@ contextBridge.exposeInMainWorld('bp', {
     fitSurface: (pos, idx, srcPos, srcIdx, buried, maxSnap, smooth, project) => nativeCall('fitSurface', { pos, idx, srcPos, srcIdx, buried, maxSnap, smooth, project }),
     smoothOrient: (N, Q, start, list, fq, iters, shuffle, parallel) => nativeCall('smoothOrient', { N, Q, start, list, fq, iters, shuffle, parallel }),
     smoothPos: (V, N, Q, O, start, list, fo, fx, s, iters, shuffle, parallel) => nativeCall('smoothPos', { V, N, Q, O, start, list, fo, fx, s, iters, shuffle, parallel }),
+    mirrorPairs: (pos, o, cell, tol2) => nativeCall('mirrorPairs', { pos, o, cell, tol2 }),
     bake: (lowPos, uvIdx, uv, highPos, highIdx, paint, size, maxDist, dilate) => nativeCall('bake', { lowPos, uvIdx, uv, highPos, highIdx, paint, size, maxDist, dilate }),
   },
   onOpenModel: cb => ipcRenderer.on('bp:open-model', (_e, m) => m && cb(m)),

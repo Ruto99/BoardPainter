@@ -650,7 +650,7 @@ import { mergeVertices, mergeGeometries } from 'three/addons/utils/BufferGeometr
 import { computeBoundsTree, acceleratedRaycast, MeshBVH, INTERSECTED, NOT_INTERSECTED } from 'three-mesh-bvh';
 import { zsphereMesh } from './zspheres.js';
 import { encodeProject, decodeProject } from './project.js';
-import { remesh, remeshGrid, quadRemesh, booleanMesh, voxelize, surfaceNets, setAccel, accelTimes } from './remesh.js';
+import { remesh, remeshGrid, quadRemesh, booleanMesh, voxelize, surfaceNets, setAccel, accelTimes, tryAccel } from './remesh.js';
 import { unwrap, drawUV } from './uv.js';
 import { bakeMaps } from './bake.js';
 import { MeshoptSimplifier } from 'meshopt-simplifier';
@@ -805,6 +805,37 @@ let pos, nrm, col, idx, nV = 0, nF = 0;
 let vfStart, vfList, vvStart, vvList, faceN, mask, mirror, paint = null;
 let selIds, selW, touchMark, touchList, touchN = 0, vMark, faceMark;
 let gpuDirty = false, bvhDirty = false, colorDirty = false;
+// Big meshes: while sculpting only the touched parts go to the GPU and into the BVH refit.
+//  gpuDirty / bvhDirty = everything; gpuPart / bvhNodes = just the marked vertex chunks / tree nodes.
+const CHUNK = 12;                          // vertices per GPU upload chunk: 1 << CHUNK
+let chunkMark = new Uint8Array(0), chunkList = [], gpuPart = false;
+const gpuStats = { full: 0, part: 0, ranges: 0, chunks: 0 };   // uploads so far (for tests)
+let bvhLeafOf = null, bvhParent = null, bvhMark = null, bvhNodes = [];
+function markChunk(v) { const c = v >> CHUNK; if (c < chunkMark.length && !chunkMark[c]) { chunkMark[c] = 1; chunkList.push(c); } }
+// leaf of every triangle and parent of every node of the (single-root) BVH, for partial refits
+function indexBVH() {
+  bvhLeafOf = bvhParent = bvhMark = null; bvhNodes = [];
+  const roots = geo.boundsTree && geo.boundsTree._roots;
+  if (!roots || roots.length !== 1 || nF < 200000) return;   // small meshes: a full refit is cheap anyway
+  const buf = roots[0], u32 = new Uint32Array(buf), u16 = new Uint16Array(buf), nNodes = buf.byteLength / 32;
+  bvhParent = new Int32Array(nNodes).fill(-1); bvhLeafOf = new Uint32Array(nF); bvhMark = new Uint8Array(nNodes);
+  const stack = [0];
+  while (stack.length) {
+    const n32 = stack.pop();
+    if (u16[n32 * 2 + 15] === 0xffff) {   // leaf: triangles [offset, offset + count)
+      const off = u32[n32 + 6], cnt = u16[n32 * 2 + 14];
+      bvhLeafOf.fill(n32 >> 3, off, off + cnt);
+    } else {
+      const l = n32 + 8, r = u32[n32 + 6];
+      bvhParent[l >> 3] = bvhParent[r >> 3] = n32 >> 3;
+      stack.push(l, r);
+    }
+  }
+}
+function markFaceBVH(f) {
+  if (!bvhLeafOf) { bvhDirty = true; return; }
+  for (let n = bvhLeafOf[f]; n > 0 && !bvhMark[n]; n = bvhParent[n]) { bvhMark[n] = 1; bvhNodes.push(n); }
+}
 
 // polygon faces of a level (quads from grid retopo, mixed polygons from flow retopo), if still valid for its triangles
 function levelPolys(L) {
@@ -957,6 +988,8 @@ function setMesh(p, ix, m, mir, pt) {
   geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
   geo.computeBoundsTree();              // may reorder the index; build adjacency afterwards
   pos = p; idx = geo.index.array;
+  indexBVH();
+  chunkMark = new Uint8Array((nV >> CHUNK) + 1); chunkList = []; gpuPart = false;
   mask = m || new Float32Array(nV);
   paint = pt && pt.length === p.length ? pt : null;
   pg = active && active.pg && active.pg.length === nV ? active.pg : null;
@@ -1046,6 +1079,7 @@ function setColor(v) {
   else { r = paint ? paint[i] : BASE_COL.r; g = paint ? paint[i+1] : BASE_COL.g; b = paint ? paint[i+2] : BASE_COL.b; }
   if (S.showOver && nrm[i+1] < -OVERHANG_COS) { r = r * 0.35 + 0.65 * 0.85; g *= 0.35; b *= 0.35; }
   col[i] = r * (1 - 0.72 * m); col[i+1] = g * (1 - 0.62 * m); col[i+2] = b * (1 - 0.42 * m);
+  markChunk(v);
 }
 function basePaint(n) { const a = new Float32Array(n * 3); for (let i = 0; i < a.length; i += 3) { a[i] = BASE_COL.r; a[i+1] = BASE_COL.g; a[i+2] = BASE_COL.b; } return a; }
 function ensurePaint() { if (!paint) { paint = active.paint = basePaint(nV); } return paint; }
@@ -1061,16 +1095,28 @@ function flushNormals() {
   }
   touchN = 0;
   for (const f of faceTmp) {
-    faceMark[f] = 0;
+    faceMark[f] = 0; markFaceBVH(f);
     for (let k = 0; k < 3; k++) { const u = idx[f * 3 + k]; if (!vMark[u]) { vMark[u] = 1; vertTmp.push(u); } }
   }
-  for (const u of vertTmp) { vMark[u] = 0; vertNormal(u); }
-  gpuDirty = bvhDirty = true;
+  for (const u of vertTmp) { vMark[u] = 0; vertNormal(u); markChunk(u); }
+  gpuPart = true;
 }
 // Refitting the BVH costs ~40 ms at 1M+ triangles, so during a stroke it is refreshed at most every 0.3 s
 // (picking and brush lookups use a stale-but-close tree in between; brush lookups add a margin for that)
 let lastRefit = 0;
-function ensureBVH(force = true) { if (bvhDirty && geo.boundsTree && (force || performance.now() - lastRefit > 300)) { geo.boundsTree.refit(); bvhDirty = false; lastRefit = performance.now(); } }
+function ensureBVH(force = true) {
+  if (!geo.boundsTree) return;
+  if (bvhDirty) {
+    if (!(force || performance.now() - lastRefit > 300)) return;
+    geo.boundsTree.refit(); bvhDirty = false; lastRefit = performance.now();
+    if (bvhMark) { for (const n of bvhNodes) bvhMark[n] = 0; bvhNodes.length = 0; }
+  } else if (bvhNodes.length) {   // only the tree nodes above the changed triangles (node32 index = 8 x node number)
+    const set = new Set();
+    for (const n of bvhNodes) { set.add(n * 8); bvhMark[n] = 0; }
+    bvhNodes.length = 0;
+    geo.boundsTree.refit(set);
+  }
+}
 
 // mirror pairs across the X=0 plane (by position, with tolerance)
 function computeMirror(p) {
@@ -1080,6 +1126,10 @@ function computeMirror(p) {
   const size = Math.max(mx[0]-mn[0], mx[1]-mn[1], mx[2]-mn[2]) || 1;
   const tol = size * 2e-4, cell = tol * 4, tol2 = tol * tol;
   const ox = -Math.max(Math.abs(mn[0]), Math.abs(mx[0])), oy = mn[1], oz = mn[2];
+  if (n > 20000) {   // desktop: C++ on all cores (same pairs); ~30x faster on millions of vertices
+    const r = tryAccel('mirrorPairs', [p instanceof Float32Array ? p : Float32Array.from(p), [ox, oy, oz], cell, tol2]);
+    if (r) return r;
+  }
   const M = 1 << 13;
   const key = (ix, iy, iz) => (ix * M + iy) * M + iz;
   const map = new Map(), next = new Int32Array(n).fill(-1);
@@ -1268,7 +1318,7 @@ function applyDab(P, N0, r, s, dir, brush, F) {
       setColor(v);
       if (rec) rec.push(v);
     }
-    colorDirty = gpuDirty = true;
+    colorDirty = gpuPart = true;
     return;
   }
   if (brush === 'mask') {
@@ -1278,7 +1328,7 @@ function applyDab(P, N0, r, s, dir, brush, F) {
       setColor(v);
       if (rec) rec.push(v);
     }
-    colorDirty = gpuDirty = true;
+    colorDirty = gpuPart = true;
     return;
   }
 
@@ -3461,12 +3511,15 @@ function meshArea(p, ix) {
   }
   return a;
 }
+let areaCache = { idx: null, a: 0 };
 function updateRemeshEstimate() {
   const el = $('rmEstimate'); if (!el || !pos) return;
   $('rmResOut').textContent = $('rmRes').value; $('rmSmoothOut').textContent = $('rmSmooth').value;
   const G = remeshGrid(pos, +$('rmRes').value);
   // Surface Nets makes ~1 quad (2 triangles) per grid edge crossing; a surface crosses ~1.5 edges per h² of area on average
-  const est = Math.round(meshArea(pos, idx) / (G.h * G.h) * 3 / 1000) * 1000;
+  // big meshes: the area hardly changes while sculpting, so it is only measured again for a new mesh
+  if (areaCache.idx !== idx || nF < 1_000_000) areaCache = { idx, a: meshArea(pos, idx) };
+  const est = Math.round(areaCache.a / (G.h * G.h) * 3 / 1000) * 1000;
   el.textContent = G.voxels > VOXEL_LIMIT ? '細かすぎます。「細かさ」を下げてください。' : `作り直し後: 約 ${est.toLocaleString()} ポリゴン（現在 ${nF.toLocaleString()}）`;
 }
 function runRemesh(src) {
@@ -3673,10 +3726,12 @@ function restoreLv(e) {
   setMesh(want.pos, want.idx, mask, want.mirror, paint);
   syncScene(); if (gizmoOn) attachGizmo();
 }
+// polygon limit for subdivision, by installed memory (desktop): 16 GB+ -> 24 million, 8 GB+ -> 6 million
+function maxPolys() { const gb = native && native.memoryGB || 0; return gb >= 15 ? 24_000_000 : gb >= 7 ? 6_000_000 : 2_400_000; }
 function addLevel() {
   if (stroke) return;
   if (active.lv < active.levels.length - 1) setLevel(active.levels.length - 1, true);
-  if (nF * 4 > 2_400_000) { toast('これ以上細かくすると重くなりすぎるため中止しました'); return; }
+  if (nF * 4 > maxPolys()) { const man = n => `${Math.round(n / 1e4).toLocaleString()}万`; toast(`これ以上細かくすると ${man(nF * 4)} ポリゴンになり、この PC のメモリでの上限（${man(maxPolys())} ポリゴン）を超えるため中止しました`); return; }
   flushNormals();
   pushEntry(lvSnap());
   const lo = active.levels[active.lv];
@@ -4179,22 +4234,61 @@ function idb() {
   return new Promise((res, rej) => { const r = indexedDB.open('board-painter', 1); r.onupgradeneeded = () => r.result.createObjectStore('s'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
 }
 let saveTimer = 0;
-function autosaveSoon() { clearTimeout(saveTimer); saveTimer = setTimeout(saveNow, 1200); }
+function autosaveSoon() { clearTimeout(saveTimer); saveTimer = setTimeout(() => stroke ? autosaveSoon() : saveNow(), nF > 2_000_000 ? 3000 : 1200); }
 // called after every change to the model
 let estT = 0;
 function scheduleSave() { setDirty(true); autosaveSoon(); clearTimeout(estT); estT = setTimeout(updateRemeshEstimate, 400); }
-async function saveNow() {
+// One save at a time; a request while saving queues exactly one more (with the newest state).
+let saveChain = Promise.resolve(), saveQueued = false, idbCleared = false;
+function saveNow() {
   clearTimeout(saveTimer);
-  try {
-    const data = {
-      version: 2, t: Date.now(), meta: projectMeta(), projectPath, projectName, dirty,
-      subtools: subtools.map(recData),
+  if (saveQueued) return saveChain;
+  saveQueued = true;
+  saveChain = saveChain.then(async () => { saveQueued = false; try { await writeAutosave(); } catch (e) { console.warn('autosave failed', e); } });
+  return saveChain;
+}
+async function writeAutosave() {
+  const data = { version: 2, t: Date.now(), meta: projectMeta(), projectPath, projectName, dirty, subtools: subtools.map(recData) };
+  if (native && native.autoBegin) {
+    // desktop: typed arrays go to a file in 8 MB pieces, so even huge models never freeze the page
+    const parts = []; let off = 0;
+    const walk = x => {
+      if (ArrayBuffer.isView(x)) { const d = { $a: x.constructor.name, o: off, n: x.length }; parts.push(new Uint8Array(x.buffer, x.byteOffset, x.byteLength)); off += x.byteLength; const pad = (4 - off % 4) % 4; if (pad) { parts.push(new Uint8Array(pad)); off += pad; } return d; }
+      if (Array.isArray(x)) return x.map(walk);
+      if (x && typeof x === 'object') { const o = {}; for (const k in x) if (x[k] !== undefined && k !== 'view') o[k] = walk(x[k]); return o; }
+      return x;
     };
-    const db = await idb();
-    await new Promise(res => { const tx = db.transaction('s', 'readwrite'); tx.objectStore('s').put(data, 'auto'); tx.oncomplete = tx.onerror = tx.onabort = res; });
-  } catch (e) { /* storage unavailable */ }
+    const header = JSON.stringify(walk(data)), id = await native.autoBegin(), CH = 8 << 20;
+    for (const b of parts) for (let i = 0; i < b.length; i += CH) {
+      while (stroke) await new Promise(r => setTimeout(r, 250));   // never compete with sculpting: pause until the stroke ends
+      if (!(await native.autoWrite(id, b.slice(i, i + CH)))) return;
+    }
+    if (await native.autoCommit(id, header) && !idbCleared) {   // older versions kept the autosave in IndexedDB
+      idbCleared = true;
+      try { const db = await idb(); db.transaction('s', 'readwrite').objectStore('s').delete('auto'); } catch { /* none */ }
+    }
+    return;
+  }
+  const db = await idb();
+  await new Promise(res => { const tx = db.transaction('s', 'readwrite'); tx.objectStore('s').put(data, 'auto'); tx.oncomplete = tx.onerror = tx.onabort = res; });
+}
+// desktop autosave file -> the same object writeAutosave started from
+async function readAutosaveFile() {
+  if (!native || !native.autoInfo) return null;
+  const info = await native.autoInfo(); if (!info) return null;
+  const buf = new Uint8Array(info.bytes), CH = 32 << 20;
+  for (let o = 0; o < info.bytes; o += CH) { const c = await native.autoRead(o, Math.min(CH, info.bytes - o)); if (!c || !c.length) return null; buf.set(c, o); }
+  const TYPES = { Float32Array, Uint32Array, Int32Array, Uint8Array, Uint16Array, Int16Array, Int8Array, Float64Array, Uint8ClampedArray };
+  const walk = x => {
+    if (x && typeof x === 'object' && !Array.isArray(x) && '$a' in x) { const T = TYPES[x.$a]; if (!T || x.o + x.n * T.BYTES_PER_ELEMENT > buf.length) throw new Error('bad autosave'); return new T(buf.buffer, x.o, x.n).slice(); }   // own buffer each (IPC would copy a shared one whole)
+    if (Array.isArray(x)) return x.map(walk);
+    if (x && typeof x === 'object') { const o = {}; for (const k in x) o[k] = walk(x[k]); return o; }
+    return x;
+  };
+  return walk(JSON.parse(info.header));
 }
 async function loadAuto() {
+  try { const f = await readAutosaveFile(); if (f && f.version === 2 && Array.isArray(f.subtools) && f.subtools.length) return f; } catch (e) { console.warn(e); }
   try {
     const db = await idb();
     const d = await new Promise(res => { const r = db.transaction('s').objectStore('s').get('auto'); r.onsuccess = () => res(r.result || null); r.onerror = () => res(null); });
@@ -4607,11 +4701,24 @@ fitView();   // right away too: the observer only fires on a rendered frame
 new ResizeObserver(fitView).observe(view);
 
 renderer.setAnimationLoop(() => {
-  if (gpuDirty && geo) {
-    geo.attributes.position.needsUpdate = true;
-    geo.attributes.normal.needsUpdate = true;
-    if (colorDirty) { geo.attributes.color.needsUpdate = true; colorDirty = false; }
-    gpuDirty = false;
+  if ((gpuDirty || gpuPart) && geo) {
+    const A = [geo.attributes.position, geo.attributes.normal]; if (colorDirty) A.push(geo.attributes.color);
+    // partial upload: runs of marked 4096-vertex chunks (full upload if the change is large or unknown)
+    const part = !gpuDirty && chunkList.length && chunkList.length * 4 < chunkMark.length;
+    const ranges = [];
+    if (part) {
+      chunkList.sort((a, b) => a - b);
+      for (let i = 0; i < chunkList.length;) { let j = i; while (j + 1 < chunkList.length && chunkList[j + 1] === chunkList[j] + 1) j++; ranges.push(chunkList[i], chunkList[j] - chunkList[i] + 1); i = j + 1; }
+    }
+    for (const a of A) {
+      a.clearUpdateRanges();
+      if (part) for (let k = 0; k < ranges.length; k += 2) { const st = (ranges[k] << CHUNK) * 3; a.addUpdateRange(st, Math.min(a.array.length - st, (ranges[k + 1] << CHUNK) * 3)); }
+      a.needsUpdate = true;
+    }
+    if (part) { gpuStats.part++; gpuStats.ranges += ranges.length / 2; gpuStats.chunks += chunkList.length; } else gpuStats.full++;
+    for (const c of chunkList) chunkMark[c] = 0;
+    chunkList.length = 0;
+    colorDirty = false; gpuDirty = gpuPart = false;
   }
   if (!stroke) ensureBVH();
   renderer.render(scene, camera);
@@ -4656,6 +4763,7 @@ renderer.setAnimationLoop(() => {
     centerOnScreen() { const v = sceneBounds([active]).getCenter(new V3()).project(camera), b = canvas.getBoundingClientRect(); return [b.left + (v.x + 1) / 2 * b.width, b.top + (1 - v.y) / 2 * b.height]; },
     get retopoStats() { return lastRetopoStats; },
     get accelTimes() { return { ...accelTimes }; },
+    get gpuStats() { return { ...gpuStats, nChunks: chunkMark.length }; },
     useNative(on) { setAccel(on && ACCEL ? window.bp.accel : null); return !!(on && ACCEL); },
     get gizmoState() { return { axis: gizmo.axis, dragging: gizmo.dragging, enabled: gizmo.enabled, attached: !!gizmo.object, mode: gizmo.mode }; },
     openEdges() { const em = new Map(); for (let f = 0; f < nF; f++) { const a = idx[f*3], b = idx[f*3+1], c = idx[f*3+2]; for (const [x, y] of [[a, b], [b, c], [c, a]]) { const k = x < y ? x * nV + y : y * nV + x; em.set(k, (em.get(k) || 0) + 1); } } const out = []; for (const [k, c] of em) if (c === 1) { const a = Math.floor(k / nV), b = k % nV; out.push([[pos[a*3], pos[a*3+1], pos[a*3+2]].map(x => +x.toFixed(3)), [pos[b*3], pos[b*3+1], pos[b*3+2]].map(x => +x.toFixed(3))]); } return out; },
