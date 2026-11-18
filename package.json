@@ -1,7 +1,7 @@
 {
   "name": "boardpainter",
   "productName": "BoardPainter",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "無料のデジタルスカルプト（3D造形）デスクトップツール",
   "main": "electron/main.js",
   "author": "BoardPainter",
