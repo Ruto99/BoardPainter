@@ -258,6 +258,33 @@ dl.keys dd{margin:0;color:var(--muted)}
       <p class="note">強さ・減衰カーブ・ストローク・アルファはブラシごとに記憶されます。ペンタブレットの筆圧で強さが変わります。</p>
     </section>
 
+    <section id="defSec">
+      <h2>変形・モーフ・抜き出し・クリップ</h2>
+      <div class="row"><label for="dfAxis">軸</label><select id="dfAxis"><option value="1">Y（縦）</option><option value="0">X（横）</option><option value="2">Z（奥）</option></select></div>
+      <div class="row"><label for="dfAmt">量</label><output id="dfAmtOut">0.30</output></div>
+      <input type="range" id="dfAmt" min="-1" max="1" step="0.01" value="0.3">
+      <div class="grid3">
+        <button class="btn" data-def="bend">曲げる</button>
+        <button class="btn" data-def="twist">ねじる</button>
+        <button class="btn" data-def="taper">先細り</button>
+        <button class="btn" data-def="stretch">伸ばす</button>
+        <button class="btn" data-def="inflate">膨らます</button>
+        <button class="btn" data-def="flatten">平らにする</button>
+      </div>
+      <div class="grid3" style="margin-top:8px">
+        <button class="btn" id="mfStore" title="今の形を覚えておきます">モーフを保存</button>
+        <button class="btn" id="mfRestore" title="全体を保存した形に戻します">モーフに戻す</button>
+        <button class="btn" id="mfDel">モーフを削除</button>
+      </div>
+      <div class="row" style="margin-top:8px"><label for="exThick">抜き出す厚さ</label><output id="exThickOut">0.020</output></div>
+      <input type="range" id="exThick" min="0.002" max="0.1" step="0.001" value="0.02">
+      <div class="grid2">
+        <button class="btn" id="exGo" title="マスクした所を、厚みのある別のパーツとして抜き出します（服・鎧・ベルト）">マスクから抜き出す</button>
+        <button class="btn" id="clipGo" title="画面に線を引いて、線の片側を平らに切り落とします">クリップ（線で切る）</button>
+      </div>
+      <p class="note">変形は選択中のパーツ全体にかかります（マスクした所は動きません）。「モーフ」ブラシで塗ると、塗った所だけ保存した形に戻ります。クリップは、ボタンを押してから画面上をドラッグして線を引くと、線から出ている短い印の側（Alt で反対側）が線の位置で平らになります。</p>
+    </section>
+
     <section id="curveSec">
       <h2>チューブ・並べる（線に沿って作る）</h2>
       <div class="row"><label for="cvThick">太さ（ブラシサイズに対する割合）</label><output id="cvThickOut">0.35</output></div>
@@ -542,6 +569,7 @@ const BRUSHES = [
   { id:'slash',     key:'',  short:'Sl', name:'切り込み',     desc:'刃物で切ったような細く深い線を彫る', alpha:false, def:{ falloff:'sharp', strength:0.5 } },
   { id:'pinch',     key:'',  short:'Pi', name:'つまむ',       desc:'エッジを鋭くする', alpha:false },
   { id:'magnify',   key:'',  short:'Mg', name:'押し広げる',   desc:'中心から外へ広げて膨らませる（Altで寄せる）', alpha:false },
+  { id:'morph',     key:'',  short:'Mo', name:'モーフ',       desc:'保存したモーフの形に戻す（塗った所だけ）', alpha:true, def:{ strength:0.6 } },
   { id:'nudge',     key:'',  short:'Nd', name:'ずらす',       desc:'表面をストロークの向きに滑らせる', alpha:false, def:{ strength:0.5 } },
   { id:'move',      key:'8', short:'Mv', name:'ムーブ',       desc:'つかんで大きく動かす', alpha:false, sep:true },
   { id:'snake',     key:'0', short:'Sh', name:'引き伸ばし',   desc:'ドラッグした方向へ伸ばす（角・触手）', alpha:false, def:{ strength:0.8 } },
@@ -688,6 +716,7 @@ function recData(r) {
   return {
     name: r.name, visible: r.visible, pos: r.pos, idx: r.idx, mask: r.mask, mirror: r.mirror, paint: r.paint || null, lv: r.lv,
     pg: r.pg && r.pg.length === r.pos.length / 3 ? r.pg : null,
+    morph: r.morph && r.morph.length === r.pos.length ? r.morph : null,
     layers: (r.layers || []).filter(l => l.delta.length === r.pos.length).map(l => ({ name: l.name, I: l.I, on: l.on, delta: l.delta })),
     levels: r.levels.map((L, k) => k === r.lv
       ? { current: true, ev: L.ev || null, quads: L.quads || null, ref0: L.ref0 || null, ...texData(L), ...polyData(L) }
@@ -708,6 +737,7 @@ function recFromData(s) {
   r.visible = s.visible !== false;
   r.paint = s.paint instanceof Float32Array && s.paint.length === s.pos.length ? s.paint : null;
   r.pg = s.pg instanceof Int32Array && s.pg.length === s.pos.length / 3 ? s.pg : null;
+  r.morph = s.morph instanceof Float32Array && s.morph.length === s.pos.length ? s.morph : null;
   r.layers = Array.isArray(s.layers) ? s.layers.filter(l => l && l.delta instanceof Float32Array && l.delta.length === s.pos.length)
     .map((l, k) => ({ name: String(l.name || `レイヤー ${k + 1}`), delta: l.delta, I: Number.isFinite(l.I) ? l.I : 1, on: l.on !== false, rec: false })) : [];
   const Ls = Array.isArray(s.levels) ? s.levels : null, lv = s.lv | 0;
@@ -1128,6 +1158,7 @@ function applyDab(P, N0, r, s, dir, brush, F) {
   }
 
   const L = stroke && stroke.layer, dynMark = stroke && stroke.dyn ? stroke.dyn.mark : null;
+  const MO = brush === 'morph' && active.morph && active.morph.length === pos.length ? active.morph : null;
   for (let k = 0; k < n; k++) {
     const v = selIds[k], i = v * 3;
     const w = selW[k] * (1 - mask[v]);
@@ -1191,6 +1222,11 @@ function applyDab(P, N0, r, s, dir, brush, F) {
         let tx = P.x - x, ty = P.y - y, tz = P.z - z;
         const d = tx*nx + ty*ny + tz*nz; tx -= nx*d; ty -= ny*d; tz -= nz*d;
         const b = w * s * 0.18; x += tx*b; y += ty*b; z += tz*b; break;
+      }
+      case 'morph': {
+        if (!MO) break;
+        const f = Math.min(1, w * s * 1.4) * (dir > 0 ? 1 : -0.5);
+        x += (MO[i] - x) * f; y += (MO[i+1] - y) * f; z += (MO[i+2] - z) * f; break;
       }
       case 'blob': {
         // dome-shaped bulge: push along the area normal and a little along each vertex normal (rounds the result)
@@ -1300,6 +1336,7 @@ function dabSym(P, N, r, ref, reps = 1) {
 
 function onDown(e) {
   if (zs) { zsDown(e); return; }
+  if (clipArmed && e.button === 0) { startClip(e); return; }
   if (e.button !== 0 || !mesh || gizmoOn) return;
   setNDC(e);
   const hit = pick();
@@ -1429,6 +1466,7 @@ function showLazy(L, e) {
 
 canvas.addEventListener('pointermove', e => {
   if (zs) { if (zs.drag) zsMove(e); return; }
+  if (clip) { if (e.pointerId === clip.id) clipMove(e); return; }
   if (lasso) { if (e.pointerId === lasso.id) lassoMove(e); return; }
   setNDC(e);
   if (stroke) {
@@ -1467,6 +1505,7 @@ canvas.addEventListener('dblclick', e => {
 });
 function endStroke() {
   if (zs) { zsUp(); return; }
+  if (clip) { finishClip(); return; }
   if (lasso) { finishLasso(); return; }
   controls.enabled = true;
   showLazy(null);
@@ -2328,6 +2367,141 @@ function zsMake() {
     insertAfterActive(rec); activate(rec); frame(); scheduleSave();
     toast(`ZSphere からメッシュを作りました（${nF.toLocaleString()} ポリゴン・${((performance.now() - t0) / 1000).toFixed(1)}秒）`);
   });
+}
+
+// ---------------- deformers (whole active subtool, mask-aware) ----------------
+function afterBulkEdit() {
+  computeAllNormals(); geo.computeBoundingBox(); geo.computeBoundingSphere();
+  mirror = active.mirror = active.levels[active.lv].mirror = computeMirror(pos);
+  gpuDirty = bvhDirty = true; scheduleSave();
+}
+function deform(kind) {
+  if (stroke) return;
+  flushNormals();
+  const a = +$('dfAxis').value, b = (a + 1) % 3, c = (a + 2) % 3, amt = +$('dfAmt').value;
+  if (!amt && kind !== 'flatten') { toast('「量」を 0 以外にしてください'); return; }
+  geo.computeBoundingBox();
+  const bb = geo.boundingBox, lo = [bb.min.x, bb.min.y, bb.min.z], hi = [bb.max.x, bb.max.y, bb.max.z];
+  const ctr = [0, 1, 2].map(k => (lo[k] + hi[k]) / 2), len = Math.max(1e-6, hi[a] - lo[a]), diag = Math.hypot(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]);
+  pushUndo();
+  const q = [0, 0, 0];
+  for (let v = 0; v < nV; v++) {
+    const i = v * 3, keep = 1 - mask[v]; if (keep <= 0) continue;
+    q[0] = pos[i]; q[1] = pos[i+1]; q[2] = pos[i+2];
+    const u = q[a] - ctr[a], t = u / (len / 2);   // -1..1 along the axis
+    const out = [q[0], q[1], q[2]];
+    if (kind === 'bend') {
+      // bend toward +b: the axis becomes an arc of total angle amt*PI
+      const k = amt * Math.PI / len;
+      if (Math.abs(k) > 1e-9) { const R = 1 / k, w = q[b] - ctr[b]; out[a] = ctr[a] + (R - w) * Math.sin(k * u); out[b] = ctr[b] + R - (R - w) * Math.cos(k * u); }
+    } else if (kind === 'twist') {
+      const ang = amt * Math.PI * t, cs = Math.cos(ang), sn = Math.sin(ang), wb = q[b] - ctr[b], wc = q[c] - ctr[c];
+      out[b] = ctr[b] + wb * cs - wc * sn; out[c] = ctr[c] + wb * sn + wc * cs;
+    } else if (kind === 'taper') {
+      const f = Math.max(0.02, 1 + amt * t);
+      out[b] = ctr[b] + (q[b] - ctr[b]) * f; out[c] = ctr[c] + (q[c] - ctr[c]) * f;
+    } else if (kind === 'stretch') {
+      out[a] = ctr[a] + u * Math.max(0.05, 1 + amt);
+    } else if (kind === 'inflate') {
+      const d = amt * diag * 0.03; out[0] += nrm[i] * d; out[1] += nrm[i+1] * d; out[2] += nrm[i+2] * d;
+    } else if (kind === 'flatten') {
+      // squash toward the middle plane across the axis (|amount| 1 = completely flat)
+      out[a] = ctr[a] + u * (1 - Math.min(1, Math.abs(amt || 1)));
+    }
+    pos[i] = q[0] + (out[0] - q[0]) * keep; pos[i+1] = q[1] + (out[1] - q[1]) * keep; pos[i+2] = q[2] + (out[2] - q[2]) * keep;
+  }
+  afterBulkEdit();
+  toast({ bend: '曲げました', twist: 'ねじりました', taper: '先細りにしました', stretch: '伸ばしました', inflate: '膨らませました', flatten: '平らにしました' }[kind]);
+}
+
+// ---------------- morph target ----------------
+function morphStore() { flushNormals(); active.morph = pos.slice(); toast('今の形をモーフとして保存しました（「モーフ」ブラシで塗ると戻せます）'); scheduleSave(); }
+function morphRestore() {
+  const M = active.morph; if (!M || M.length !== pos.length) { toast('モーフが保存されていません（またはポリゴン数が変わりました）'); return; }
+  pushUndo();
+  for (let v = 0; v < nV; v++) { const k = 1 - mask[v], i = v * 3; for (let j = 0; j < 3; j++) pos[i+j] += (M[i+j] - pos[i+j]) * k; }
+  afterBulkEdit(); toast('モーフの形に戻しました');
+}
+function morphDelete() { if (!active.morph) { toast('モーフはありません'); return; } active.morph = null; scheduleSave(); toast('モーフを削除しました'); }
+
+// ---------------- extract: a shell with thickness from the masked area (clothes, armour, straps) ----------------
+function extractShell() {
+  flushNormals();
+  const sel = new Uint8Array(nF); let n = 0;
+  for (let f = 0; f < nF; f++) if (mask[idx[f*3]] > 0.5 && mask[idx[f*3+1]] > 0.5 && mask[idx[f*3+2]] > 0.5 && !isHiddenFace(f)) { sel[f] = 1; n++; }
+  if (!n) { toast('抜き出したい所をマスクしてください（Ctrl+ドラッグ）'); return; }
+  return busy(() => {
+    geo.computeBoundingSphere();
+    const T = +$('exThick').value * geo.boundingSphere.radius * 2;
+    const map = new Int32Array(nV).fill(-1), verts = [];
+    for (let f = 0; f < nF; f++) if (sel[f]) for (let k = 0; k < 3; k++) { const v = idx[f*3+k]; if (map[v] < 0) { map[v] = verts.length; verts.push(v); } }
+    const m = verts.length, p = new Float32Array(m * 6);
+    for (let j = 0; j < m; j++) {
+      const i = verts[j] * 3;
+      for (let k = 0; k < 3; k++) { p[j*3+k] = pos[i+k] + nrm[i+k] * T * 0.05; p[(m + j)*3+k] = pos[i+k] + nrm[i+k] * T; }   // inner (just off the body), outer
+    }
+    const ix = [], edges = new Map();
+    for (let f = 0; f < nF; f++) {
+      if (!sel[f]) continue;
+      const a = map[idx[f*3]], b = map[idx[f*3+1]], c = map[idx[f*3+2]];
+      ix.push(m + a, m + b, m + c, a, c, b);   // outer keeps the winding, inner is reversed
+      for (const [u, w] of [[a, b], [b, c], [c, a]]) { const key = u < w ? u * m + w : w * m + u; const e = edges.get(key); if (e) e[2]++; else edges.set(key, [u, w, 1]); }
+    }
+    // side walls along the open border (edges used by one selected face)
+    for (const [u, w, cnt] of edges.values()) if (cnt === 1) ix.push(u, w, m + w, u, m + w, m + u);
+    const I = Uint32Array.from(ix);
+    let vol = 0; for (let f = 0; f < I.length; f += 3) { const A = I[f]*3, B = I[f+1]*3, C = I[f+2]*3; vol += p[A]*(p[B+1]*p[C+2]-p[B+2]*p[C+1]) - p[A+1]*(p[B]*p[C+2]-p[B+2]*p[C]) + p[A+2]*(p[B]*p[C+1]-p[B+1]*p[C]); }
+    if (vol < 0) for (let f = 0; f < I.length; f += 3) { const t = I[f+1]; I[f+1] = I[f+2]; I[f+2] = t; }
+    pushStruct();
+    const rec = newRec(uniqueName(active.name + ' 抜き出し'), p, I);
+    insertAfterActive(rec); syncScene(); scheduleSave();
+    toast(`マスクした所を厚み付きで抜き出しました（「${rec.name}」・${(I.length / 3).toLocaleString()} ポリゴン）`);
+  });
+}
+
+// ---------------- clip: draw a line; everything on its right (Alt: left) is flattened onto the line's plane ----------------
+let clipArmed = false, clip = null;
+function armClip() { clipArmed = true; $('clipGo').classList.add('primary'); toast('画面上をドラッグして切る線を引いてください（Esc でやめる）'); }
+function disarmClip() { clipArmed = false; $('clipGo').classList.remove('primary'); }
+function startClip(e) {
+  controls.enabled = false; e.preventDefault(); canvas.setPointerCapture(e.pointerId);
+  const b = canvas.getBoundingClientRect();
+  clip = { id: e.pointerId, a: [e.clientX - b.left, e.clientY - b.top], b: [e.clientX - b.left, e.clientY - b.top], flip: e.altKey };
+  lassoPoly.classList.remove('un');
+}
+function clipMove(e) {
+  const b = canvas.getBoundingClientRect(); clip.b = [e.clientX - b.left, e.clientY - b.top]; clip.flip = e.altKey;
+  // the line plus a short tick on the side that gets cut
+  const [ax, ay] = clip.a, [bx, by] = clip.b, dx = bx - ax, dy = by - ay, L = Math.hypot(dx, dy) || 1, s = clip.flip ? -1 : 1;
+  const mx = (ax + bx) / 2, my = (ay + by) / 2, tx = -dy / L * 14 * s, ty = dx / L * 14 * s;
+  lassoPoly.setAttribute('points', `${ax},${ay} ${bx},${by} ${mx},${my} ${mx - tx},${my - ty} ${mx},${my}`);
+  lassoPoly.setAttribute('visibility', 'visible');
+}
+function finishClip() {
+  const C = clip; clip = null; controls.enabled = true; disarmClip();
+  lassoPoly.setAttribute('visibility', 'hidden');
+  const [ax, ay] = C.a, [bx, by] = C.b; if (Math.hypot(bx - ax, by - ay) < 8) { toast('線が短すぎます'); return; }
+  // the cutting plane contains the view rays through both ends of the line
+  camera.updateMatrixWorld();
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  const ray = (x, y) => { raycaster.setFromCamera(new THREE.Vector2(x / w * 2 - 1, -(y / h) * 2 + 1), camera); return raycaster.ray.clone(); };
+  const r1 = ray(ax, ay), r2 = ray(bx, by);
+  geo.computeBoundingSphere();
+  const dist = camera.position.distanceTo(geo.boundingSphere.center);
+  const p1 = r1.at(dist, new V3()), p2 = r2.at(dist, new V3());
+  const nrmP = new V3().subVectors(p2, p1).cross(r1.direction).normalize();
+  if (C.flip) nrmP.negate();
+  const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(nrmP, p1);
+  pushUndo();
+  let n = 0;
+  for (let v = 0; v < nV; v++) {
+    const i = v * 3, d = plane.normal.x * pos[i] + plane.normal.y * pos[i+1] + plane.normal.z * pos[i+2] + plane.constant;
+    if (d <= 0 || (hid && hid[v])) continue;
+    const k = d * (1 - mask[v]); if (k <= 0) continue;
+    pos[i] -= plane.normal.x * k; pos[i+1] -= plane.normal.y * k; pos[i+2] -= plane.normal.z * k; n++;
+  }
+  afterBulkEdit();
+  toast(n ? `${n.toLocaleString()} 頂点を線の位置で平らにしました` : '線の片側に頂点がありません（Alt を押しながら引くと反対側）');
 }
 
 // ---------------- subtool operations ----------------
@@ -3530,6 +3704,11 @@ $('rdGo').onclick = () => busy(() => renderImage().catch(err => { console.error(
 $('rdSave').onclick = () => { if (lastRender) saveOne(async () => ({ name: `${fileBase()}_render.png`, blob: lastRender.blob })); };
 $('rdClose').onclick = () => { $('rdView').hidden = true; };
 for (const [id, d] of [['cvThick', 2], ['cvTaper', 2], ['insGap', 2], ['zsRes', 0], ['zsBlend', 2]]) $(id).addEventListener('input', e => { $(id + 'Out').textContent = (+e.target.value).toFixed(d); });
+document.querySelectorAll('[data-def]').forEach(b => b.onclick = () => busy(() => deform(b.dataset.def)));
+$('dfAmt').addEventListener('input', e => { $('dfAmtOut').textContent = (+e.target.value).toFixed(2); });
+$('exThick').addEventListener('input', e => { $('exThickOut').textContent = (+e.target.value).toFixed(3); });
+$('mfStore').onclick = morphStore; $('mfRestore').onclick = morphRestore; $('mfDel').onclick = morphDelete;
+$('exGo').onclick = extractShell; $('clipGo').onclick = () => clipArmed ? disarmClip() : armClip();
 $('zsStart').onclick = zsStart; $('zsMake').onclick = zsMake; $('zsUndo').onclick = zsUndo; $('zsCancel').onclick = zsEnd;
 
 view.addEventListener('dragover', e => e.preventDefault());
@@ -3545,6 +3724,7 @@ window.addEventListener('keydown', e => {
   if (t.tagName === 'INPUT' && (t.type === 'text' || t.type === 'number')) return;
   if (t.tagName === 'SELECT') return;
   if (e.key === 'Alt') e.preventDefault();
+  if (clipArmed && e.key === 'Escape') { disarmClip(); return; }
   if (zs) {
     if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) { e.preventDefault(); zsUndo(); return; }
     if (e.key === 'Escape') { zsEnd(); return; }
