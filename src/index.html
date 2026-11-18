@@ -354,6 +354,19 @@ dl.keys dd{margin:0;color:var(--muted)}
       <p class="note">文字やロゴ・シルエット画像を、厚みのある立体にして新しいサブツールにします（看板・ネームプレート・エンブレム）。画像は透明な所を除いた部分、透明がない画像は暗い部分が形になります。</p>
     </section>
 
+    <section id="rpSec">
+      <h2>修復・3Dプリントの確認</h2>
+      <div class="grid3">
+        <button class="btn" id="rpHoles" title="開いている穴をふさぎます">穴を埋める</button>
+        <button class="btn" id="rpFrags" title="本体から離れた小さな破片を消します">破片を削除</button>
+        <button class="btn" id="rpOrient" title="裏返った面を表向きにそろえます">面の向きを直す</button>
+      </div>
+      <div class="row"><label for="rpFrag">破片とみなす大きさ（最大部分に対する %）</label><input type="number" id="rpFrag" min="0.1" max="50" step="0.1" value="5"></div>
+      <div class="row"><input type="checkbox" id="rpOver"><label for="rpOver">オーバーハング（45° より下向き）を赤く表示</label></div>
+      <div class="row"><button class="btn" id="rpMeasure">2点の距離を測る</button><output id="rpMeasureOut"></output></div>
+      <p class="note">取り込んだスキャンデータや、3Dプリント前の確認に使います。オーバーハングは STL と同じく上方向に積み上げる場合で、赤い所にはサポートが必要です。距離は STL の高さ設定で書き出したときの mm です。</p>
+    </section>
+
     <section id="curveSec">
       <h2>チューブ・並べる（線に沿って作る）</h2>
       <div class="row"><label for="cvThick">太さ（ブラシサイズに対する割合）</label><output id="cvThickOut">0.35</output></div>
@@ -400,6 +413,7 @@ dl.keys dd{margin:0;color:var(--muted)}
         <button class="btn" id="mkSharpen">くっきり</button>
         <button class="btn" id="mkCavity" title="凹んだ所（溝・しわ）をマスクします">凹みをマスク</button>
         <button class="btn" id="mkInvert">反転</button>
+        <button class="btn" id="mkPeaks" title="尾根やこぶなど出っ張った所をマスクします">出っ張りをマスク</button>
       </div>
       <div class="row"><input type="checkbox" id="topoMask"><label for="topoMask">つながりに沿ってマスク（近くの別の指などに付かない）</label></div>
       <p class="note">背景で Ctrl+ドラッグ：囲んだ所をマスク（Ctrl+Alt で解除）。背景で Ctrl+クリック：マスク反転。モデル上の Ctrl+ドラッグはマスクブラシです。</p>
@@ -1003,6 +1017,7 @@ function setColor(v) {
   if (S.showPG) { const c = pgColor(pg ? pg[v] : 0); r = c[0]; g = c[1]; b = c[2]; }
   else if (matTint) { r = paint ? Math.min(1, paint[i] * matTint[0]) : 1; g = paint ? Math.min(1, paint[i+1] * matTint[1]) : 1; b = paint ? Math.min(1, paint[i+2] * matTint[2]) : 1; }
   else { r = paint ? paint[i] : BASE_COL.r; g = paint ? paint[i+1] : BASE_COL.g; b = paint ? paint[i+2] : BASE_COL.b; }
+  if (S.showOver && nrm[i+1] < -OVERHANG_COS) { r = r * 0.35 + 0.65 * 0.85; g *= 0.35; b *= 0.35; }
   col[i] = r * (1 - 0.72 * m); col[i+1] = g * (1 - 0.62 * m); col[i+2] = b * (1 - 0.42 * m);
 }
 function basePaint(n) { const a = new Float32Array(n * 3); for (let i = 0; i < a.length; i += 3) { a[i] = BASE_COL.r; a[i+1] = BASE_COL.g; a[i+2] = BASE_COL.b; } return a; }
@@ -1426,6 +1441,7 @@ function onDown(e) {
   const ctrlK = e.ctrlKey || e.metaKey;
   if (!hit) { if (ctrlK) startLasso(e); return; }   // background: Ctrl = lasso mask, otherwise let OrbitControls rotate
   if (pickArmed) { e.preventDefault(); pickColorAt(hit); return; }
+  if (measureArmed) { e.preventDefault(); measureClick(hit); return; }
   if (ctrlK && e.shiftKey) { e.preventDefault(); e.altKey ? hideGroup(hit) : showOnlyGroup(hit); return; }
   if (previewMesh) { $('texPreview').checked = false; setTexPreview(false); }   // sculpting needs the real mesh
   controls.enabled = false;
@@ -1621,6 +1637,7 @@ function endStroke() {
   }
   stroke = null;
   flushNormals(); geo.computeBoundingSphere();
+  if (S.showOver) recolorAll();
   scheduleSave();
 }
 canvas.addEventListener('pointerup', endStroke);
@@ -1723,14 +1740,14 @@ function maskOp(kind) {
 }
 // mask the concave areas (grooves, wrinkles): how far the neighbour average sits above the surface
 // 0..1 per vertex: how concave the surface is there (grooves, wrinkles), or null if nothing is concave
-function cavityField() {
+function cavityField(sign = 1) {
   let c = new Float32Array(nV);
   for (let v = 0; v < nV; v++) {
     const s0 = vvStart[v], s1 = vvStart[v + 1], i = v * 3; if (s1 === s0) continue;
     let ax = 0, ay = 0, az = 0, el = 0;
     for (let j = s0; j < s1; j++) { const u = vvList[j] * 3; ax += pos[u]; ay += pos[u+1]; az += pos[u+2]; el += Math.hypot(pos[u]-pos[i], pos[u+1]-pos[i+1], pos[u+2]-pos[i+2]); }
     const k = s1 - s0; ax = ax / k - pos[i]; ay = ay / k - pos[i+1]; az = az / k - pos[i+2];
-    c[v] = (ax * nrm[i] + ay * nrm[i+1] + az * nrm[i+2]) / (el / k || 1);
+    c[v] = sign * (ax * nrm[i] + ay * nrm[i+1] + az * nrm[i+2]) / (el / k || 1);
   }
   for (let it = 0; it < 2; it++) {
     const t = new Float32Array(nV);
@@ -3050,6 +3067,135 @@ function relaxTopology(iter = 6) {
   toast('ポリゴンの大きさをそろえました');
 }
 
+
+// ---------------- mesh repair (imported scans, 3D printing) ----------------
+// every directed edge a->b of a face; a boundary edge has no face with b->a
+function boundaryEdges() {
+  const has = new Set(), out = [];
+  for (let f = 0; f < nF; f++) for (let k = 0; k < 3; k++) { const a = idx[f*3+k], b = idx[f*3+(k+1)%3]; has.add(a * nV + b); }
+  for (let f = 0; f < nF; f++) for (let k = 0; k < 3; k++) { const a = idx[f*3+k], b = idx[f*3+(k+1)%3]; if (!has.has(b * nV + a)) out.push(a, b); }
+  return out;
+}
+function needsSingleLevel() { if (active.levels.length > 1) { toast('細分化レベルがあるパーツでは使えません（下か上のレベルを削除してください）'); return true; } return false; }
+function fillHoles() {
+  if (needsSingleLevel()) return;
+  flushNormals();
+  const be = boundaryEdges();
+  if (!be.length) { toast('穴はありません（閉じたメッシュです）'); return; }
+  return busy(() => {
+    // walk the open borders into loops (next[b] = vertex after b along the border, in the hole's own direction)
+    const next = new Map(); for (let i = 0; i < be.length; i += 2) next.set(be[i+1], be[i]);
+    const used = new Set(), loops = [];
+    for (const start of next.keys()) {
+      if (used.has(start)) continue;
+      const loop = []; let v = start, guard = 0;
+      while (!used.has(v) && next.has(v) && guard++ < 1e6) { used.add(v); loop.push(v); v = next.get(v); }
+      if (loop.length >= 3 && v === start) loops.push(loop);
+    }
+    if (!loops.length) { toast('穴の縁をたどれませんでした（縁が枝分かれしている可能性があります）'); return; }
+    pushUndo(true);
+    const P = Array.from(pos), F = Array.from(idx), M = Array.from(mask), C = paint ? Array.from(paint) : null, G = pg ? Array.from(pg) : null;
+    let n = nV;
+    for (const loop of loops) {
+      // fan from the centre of the hole (rings of the border's own shape for big holes)
+      let cx = 0, cy = 0, cz = 0; for (const v of loop) { cx += P[v*3]; cy += P[v*3+1]; cz += P[v*3+2]; }
+      cx /= loop.length; cy /= loop.length; cz /= loop.length;
+      const c = n++; P.push(cx, cy, cz); M.push(0); if (C) C.push(...BASE_COL.toArray()); if (G) G.push(G[loop[0]]);
+      for (let i = 0; i < loop.length; i++) F.push(loop[i], loop[(i + 1) % loop.length], c);
+    }
+    clearLevelExtras(active.levels[0]); active.pg = G ? Int32Array.from(G) : null; active.hid = null;
+    setMesh(Float32Array.from(P), Uint32Array.from(F), Float32Array.from(M), null, C ? Float32Array.from(C) : null);
+    syncScene(); scheduleSave();
+    toast(`${loops.length} 個の穴を埋めました（必要ならスムーズで整えてください）`);
+  });
+}
+function removeFragments() {
+  if (needsSingleLevel()) return;
+  flushNormals();
+  // connected pieces by shared vertices
+  const comp = new Int32Array(nV).fill(-1), q = new Int32Array(nV), sizes = [];
+  for (let s = 0; s < nV; s++) {
+    if (comp[s] >= 0) continue;
+    const id = sizes.length; let h = 0, t = 0; q[t++] = s; comp[s] = id;
+    while (h < t) { const v = q[h++]; for (let j = vvStart[v]; j < vvStart[v + 1]; j++) { const u = vvList[j]; if (comp[u] < 0) { comp[u] = id; q[t++] = u; } } }
+    sizes.push(t);
+  }
+  const big = Math.max(...sizes), keepComp = sizes.map(s => s >= big * (+$('rpFrag').value / 100));
+  const keep = new Uint8Array(nF); let kept = 0;
+  for (let f = 0; f < nF; f++) if (keepComp[comp[idx[f*3]]]) { keep[f] = 1; kept++; }
+  const removed = sizes.filter((s, i) => !keepComp[i]).length;
+  if (!removed) { toast(`小さな破片はありません（全部で ${sizes.length} 個の部分）`); return; }
+  return busy(() => {
+    pushUndo(true);
+    const x = extractFaces(keep, 1);
+    clearLevelExtras(active.levels[0]); active.pg = null; active.hid = null;
+    setMesh(x.p, x.ix, null, null, x.pt); syncScene(); scheduleSave();
+    toast(`小さな破片を ${removed} 個削除しました`);
+  });
+}
+function fixOrientation() {
+  if (needsSingleLevel()) return;
+  flushNormals();
+  return busy(() => {
+    // faces sharing an edge must use it in opposite directions; walk each piece and flip the faces that don't
+    const edgeFaces = new Map();
+    for (let f = 0; f < nF; f++) for (let k = 0; k < 3; k++) { const a = idx[f*3+k], b = idx[f*3+(k+1)%3], key = a < b ? a * nV + b : b * nV + a; const l = edgeFaces.get(key); if (l) l.push(f); else edgeFaces.set(key, [f]); }
+    const F = idx.slice(), seen = new Uint8Array(nF), flip = (f) => { const t = F[f*3+1]; F[f*3+1] = F[f*3+2]; F[f*3+2] = t; };
+    const dirOf = (f, a, b) => { for (let k = 0; k < 3; k++) if (F[f*3+k] === a && F[f*3+(k+1)%3] === b) return 1; return -1; };
+    let flipped = 0;
+    for (let s = 0; s < nF; s++) {
+      if (seen[s]) continue;
+      const piece = [s]; seen[s] = 1;
+      for (let h = 0; h < piece.length; h++) {
+        const f = piece[h];
+        for (let k = 0; k < 3; k++) {
+          const a = F[f*3+k], b = F[f*3+(k+1)%3], key = a < b ? a * nV + b : b * nV + a;
+          for (const g of edgeFaces.get(key)) { if (seen[g]) continue; if (dirOf(g, a, b) === 1) { flip(g); flipped++; } seen[g] = 1; piece.push(g); }
+        }
+      }
+      // whole piece inside out? (negative signed volume)
+      let vol = 0; for (const f of piece) { const A = F[f*3]*3, B = F[f*3+1]*3, C = F[f*3+2]*3, p = pos; vol += p[A]*(p[B+1]*p[C+2]-p[B+2]*p[C+1]) - p[A+1]*(p[B]*p[C+2]-p[B+2]*p[C]) + p[A+2]*(p[B]*p[C+1]-p[B+1]*p[C]); }
+      if (vol < 0) { for (const f of piece) flip(f); flipped += piece.length; }
+    }
+    if (!flipped) { toast('面の向きはそろっています'); return; }
+    pushUndo(true);
+    clearLevelExtras(active.levels[0]);
+    setMesh(pos, F, mask, mirror, paint); syncScene(); scheduleSave();
+    toast(`${flipped.toLocaleString()} 枚の面の向きを直しました`);
+  });
+}
+
+// ---------------- overhang display (build direction = up, as in the STL export) ----------------
+const OVERHANG_COS = Math.cos(45 * Math.PI / 180);
+function setOverhang(on) { S.showOver = on; $('rpOver').checked = on; recolorAll(); if (on) { let n = 0; for (let v = 0; v < nV; v++) if (nrm[v*3+1] < -OVERHANG_COS) n++; toast(n ? `赤い所（${n.toLocaleString()} 頂点）は 45° より下向きで、印刷にはサポートが必要です` : '45° より下向きの面はありません'); } }
+
+// ---------------- measure the distance between two clicked points ----------------
+let measureArmed = false, measurePts = [], measureLine = null;
+function armMeasure() {
+  measureArmed = !measureArmed; measurePts = []; $('rpMeasure').classList.toggle('primary', measureArmed);
+  if (measureLine) { scene.remove(measureLine); measureLine.geometry.dispose(); measureLine = null; }
+  if (measureArmed) toast('モデル上の2点をクリックしてください');
+}
+function measureClick(hit) {
+  measurePts.push(hit.point.clone());
+  if (measurePts.length < 2) { toast('もう1点クリックしてください'); return; }
+  const [a, b] = measurePts, d = a.distanceTo(b);
+  measureLine = new THREE.Line(new THREE.BufferGeometry().setFromPoints([a, b]), new THREE.LineBasicMaterial({ color: 0x7fd0ff, depthTest: false }));
+  measureLine.renderOrder = 999; measureLine.raycast = () => {}; scene.add(measureLine);
+  measureArmed = false; $('rpMeasure').classList.remove('primary');
+  const mm = d * mmPerUnit();
+  $('rpMeasureOut').textContent = `${mm.toFixed(1)} mm`;
+  toast(`2点の距離：${mm.toFixed(1)} mm（印刷サイズ換算・高さ ${$('stlH').value} mm のとき）`);
+}
+
+// mask the convex areas (ridges, bumps): the opposite of the cavity mask
+function maskPeaks() {
+  const c = cavityField(-1); if (!c) { toast('出っ張った所が見つかりませんでした'); return; }
+  pushUndo();
+  for (let v = 0; v < nV; v++) mask[v] = Math.max(mask[v], c[v]);
+  recolorAll(); scheduleSave(); toast('出っ張った所をマスクしました');
+}
+
 // ---------------- turntable video (WebM) ----------------
 let turning = false;
 async function recordTurntable() {
@@ -4310,6 +4456,9 @@ $('t3Depth').addEventListener('input', e => { $('t3DepthOut').textContent = (+e.
 $('hlGo').onclick = hollow; $('stlH').addEventListener('input', updateStats);
 $('paintPick').onclick = armPick; $('paintMask').onclick = maskByColor; $('opRelax').onclick = () => busy(() => relaxTopology());
 document.querySelectorAll('[data-view]').forEach(b => b.onclick = () => snapView(b.dataset.view));
+S.showOver = false;
+$('rpHoles').onclick = fillHoles; $('rpFrags').onclick = removeFragments; $('rpOrient').onclick = fixOrientation;
+$('rpOver').onchange = e => setOverhang(e.target.checked); $('rpMeasure').onclick = armMeasure; $('mkPeaks').onclick = () => busy(maskPeaks);
 $('zsStart').onclick = zsStart; $('zsMake').onclick = zsMake; $('zsUndo').onclick = zsUndo; $('zsCancel').onclick = zsEnd;
 
 view.addEventListener('dragover', e => e.preventDefault());
