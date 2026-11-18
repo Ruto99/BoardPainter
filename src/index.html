@@ -339,6 +339,17 @@ dl.keys dd{margin:0;color:var(--muted)}
       <p class="note">マスクした所から毛（髪・毛皮・草）を生やして、新しいサブツールにします。根元の色はポリペイントの色を引き継ぎます。</p>
     </section>
 
+    <section id="t3Sec">
+      <h2>文字・画像から立体</h2>
+      <div class="row"><label for="t3Text">文字</label><input type="text" id="t3Text" value="BOARD" style="width:150px"></div>
+      <div class="row"><label for="t3Font">書体</label><select id="t3Font"><option value="sans bold">ゴシック（太字）</option><option value="sans">ゴシック</option><option value="serif bold">明朝（太字）</option><option value="mono bold">等幅（太字）</option></select></div>
+      <div class="row"><label for="t3Depth">厚み（高さに対して）</label><output id="t3DepthOut">0.25</output></div>
+      <input type="range" id="t3Depth" min="0.05" max="1" step="0.01" value="0.25">
+      <div class="grid2"><button class="btn" id="t3Go">文字から作る</button><button class="btn" id="t3Img">画像の形から作る…</button></div>
+      <input type="file" id="t3File" accept="image/png,image/jpeg,image/webp,image/bmp,image/gif" hidden>
+      <p class="note">文字やロゴ・シルエット画像を、厚みのある立体にして新しいサブツールにします（看板・ネームプレート・エンブレム）。画像は透明な所を除いた部分、透明がない画像は暗い部分が形になります。</p>
+    </section>
+
     <section id="curveSec">
       <h2>チューブ・並べる（線に沿って作る）</h2>
       <div class="row"><label for="cvThick">太さ（ブラシサイズに対する割合）</label><output id="cvThickOut">0.35</output></div>
@@ -537,6 +548,8 @@ dl.keys dd{margin:0;color:var(--muted)}
 
     <section>
       <h2>書き出し</h2>
+      <div class="row"><label for="hlThick">中空にする壁の厚さ (mm)</label><input type="number" id="hlThick" min="0.5" max="20" step="0.1" value="2"></div>
+      <button class="btn full" id="hlGo" title="3Dプリントのレジンや材料を減らすため、中を空洞にします">中を空ける（3Dプリント用）</button>
       <div class="row"><label for="fname">ファイル名</label><input type="text" id="fname" value="sculpt" style="width:130px"></div>
       <div class="row"><label for="stlH">STLの高さ (mm)</label><input type="number" id="stlH" min="1" max="2000" value="80"></div>
       <button class="btn primary full" id="expAll">OBJ・GLB・STLをまとめて書き出し</button>
@@ -597,7 +610,7 @@ import { mergeVertices, mergeGeometries } from 'three/addons/utils/BufferGeometr
 import { computeBoundsTree, acceleratedRaycast, MeshBVH, INTERSECTED, NOT_INTERSECTED } from 'three-mesh-bvh';
 import { zsphereMesh } from './zspheres.js';
 import { encodeProject, decodeProject } from './project.js';
-import { remesh, remeshGrid, quadRemesh, booleanMesh } from './remesh.js';
+import { remesh, remeshGrid, quadRemesh, booleanMesh, voxelize, surfaceNets } from './remesh.js';
 import { unwrap, drawUV } from './uv.js';
 import { bakeMaps } from './bake.js';
 import { MeshoptSimplifier } from 'meshopt-simplifier';
@@ -630,6 +643,7 @@ const BRUSHES = [
   { id:'pinch',     key:'',  short:'Pi', name:'つまむ',       desc:'エッジを鋭くする', alpha:false },
   { id:'magnify',   key:'',  short:'Mg', name:'押し広げる',   desc:'中心から外へ広げて膨らませる（Altで寄せる）', alpha:false },
   { id:'morph',     key:'',  short:'Mo', name:'モーフ',       desc:'保存したモーフの形に戻す（塗った所だけ）', alpha:true, def:{ strength:0.6 } },
+  { id:'pose',      key:'',  short:'Ps', name:'ポーズ',       desc:'マスクしていない所を、クリックした関節を中心に回す（左右・上下にドラッグ）', alpha:false, pose:true },
   { id:'nudge',     key:'',  short:'Nd', name:'ずらす',       desc:'表面をストロークの向きに滑らせる', alpha:false, def:{ strength:0.5 } },
   { id:'move',      key:'8', short:'Mv', name:'ムーブ',       desc:'つかんで大きく動かす', alpha:false, sep:true },
   { id:'snake',     key:'0', short:'Sh', name:'引き伸ばし',   desc:'ドラッグした方向へ伸ばす（角・触手）', alpha:false, def:{ strength:0.8 } },
@@ -1409,6 +1423,13 @@ function onDown(e) {
   e.preventDefault();
   canvas.setPointerCapture(e.pointerId);
   const brush = effectiveBrush(e), cfg = BS[brush];
+  if (BRUSH[brush].pose) {   // pose: rotate everything unmasked around the clicked point
+    pushUndo();
+    const top = undoStack[undoStack.length - 1];
+    stroke = { brush, cfg, id: e.pointerId, pressure: 1, pose: { pivot: hit.point.clone(), x0: e.clientX, y0: e.clientY, start: top.pos, view: camera.getWorldDirection(new V3()), right: camAxis(0) } };
+    updateCursor(null);
+    return;
+  }
   if (BRUSH[brush].curve) {   // tube / insert: just record the path; the mesh is built on release
     stroke = { brush, cfg, id: e.pointerId, pressure: 1, curve: { pts: [hit.point.clone()], nrm: [hitNormal(hit)], r: worldRadius(hit.point) } };
     curvePreview(stroke.curve.pts); updateCursor(null);
@@ -1541,6 +1562,7 @@ canvas.addEventListener('pointermove', e => {
   setNDC(e);
   if (stroke) {
     if (e.pointerId !== stroke.id) return;
+    if (stroke.pose) { poseTo(e); flushNormals(); return; }
     if (stroke.curve) {
       const hit = pick(), c = stroke.curve;
       if (hit && hit.point.distanceTo(c.pts[c.pts.length - 1]) > c.r * 0.08) { c.pts.push(hit.point.clone()); c.nrm.push(hitNormal(hit)); curvePreview(c.pts); }
@@ -2821,6 +2843,143 @@ function growFibers() {
   });
 }
 
+
+// ---------------- pose (Transpose-like): rotate the unmasked part around the clicked joint ----------------
+function poseTo(e) {
+  const P = stroke.pose, st = P.start, c = P.pivot;
+  const a1 = (e.clientX - P.x0) * 0.01, a2 = (e.clientY - P.y0) * 0.01;
+  const q = new THREE.Quaternion(), q1 = new THREE.Quaternion(), q2 = new THREE.Quaternion(), v = new V3();
+  for (let i = 0, vi = 0; vi < nV; vi++, i += 3) {
+    const w = 1 - mask[vi];
+    if (w <= 0 || (hid && hid[vi])) continue;
+    q1.setFromAxisAngle(P.view, -a1 * w); q2.setFromAxisAngle(P.right, a2 * w); q.multiplyQuaternions(q1, q2);
+    v.set(st[i] - c.x, st[i+1] - c.y, st[i+2] - c.z).applyQuaternion(q);
+    pos[i] = c.x + v.x; pos[i+1] = c.y + v.y; pos[i+2] = c.z + v.z; touch(vi);
+  }
+}
+
+// small Laplacian smoothing for meshes built on a voxel grid (removes the stair steps)
+function relaxMesh(P, ix, passes) {
+  const n = P.length / 3, S0 = new Uint32Array(n + 1);
+  for (let f = 0; f < ix.length; f++) S0[ix[f] + 1] += 2;
+  for (let v = 0; v < n; v++) S0[v + 1] += S0[v];
+  const nb = new Uint32Array(S0[n]), fill = S0.slice(0, n);
+  for (let f = 0; f < ix.length; f += 3) for (let k = 0; k < 3; k++) { const a = ix[f+k]; nb[fill[a]++] = ix[f+(k+1)%3]; nb[fill[a]++] = ix[f+(k+2)%3]; }
+  const T = new Float32Array(P.length);
+  for (let it = 0; it < passes; it++) for (const lam of [0.5, -0.52]) {
+    for (let v = 0; v < n; v++) {
+      let x = 0, y = 0, z = 0; const c = S0[v + 1] - S0[v]; if (!c) continue;
+      for (let j = S0[v]; j < S0[v + 1]; j++) { const u = nb[j] * 3; x += P[u]; y += P[u+1]; z += P[u+2]; }
+      T[v*3] = x / c - P[v*3]; T[v*3+1] = y / c - P[v*3+1]; T[v*3+2] = z / c - P[v*3+2];
+    }
+    for (let i = 0; i < P.length; i++) P[i] += T[i] * lam;
+  }
+}
+
+// ---------------- 3D from text or an image silhouette (Text3D / Shadowbox style) ----------------
+function alphaFromCanvas(cv, useAlpha) {
+  const g = cv.getContext('2d'), d = g.getImageData(0, 0, cv.width, cv.height).data, a = new Float32Array(cv.width * cv.height);
+  let transparent = false; if (useAlpha) for (let i = 3; i < d.length; i += 4) if (d[i] < 250) { transparent = true; break; }
+  for (let i = 0; i < a.length; i++) {
+    const r = d[i*4], gg = d[i*4+1], b = d[i*4+2], al = d[i*4+3] / 255, luma = (r * 0.3 + gg * 0.59 + b * 0.11) / 255;
+    a[i] = useAlpha ? (transparent ? al : (1 - luma)) : luma;   // images: opaque areas, or dark areas if the image has no transparency
+  }
+  return { W: cv.width, H: cv.height, a };
+}
+function textAlpha(text, font) {
+  const px = 160, cv = document.createElement('canvas'), g = cv.getContext('2d');
+  const f = `${font.includes('bold') ? 'bold ' : ''}${px}px ${font.includes('serif') && !font.includes('sans') ? "'Noto Serif JP', serif" : font.includes('mono') ? "'JetBrains Mono', monospace" : "'Noto Sans JP', sans-serif"}`;
+  g.font = f; const w = Math.ceil(g.measureText(text).width);
+  cv.width = Math.min(4096, w + 40); cv.height = Math.round(px * 1.35) + 40;
+  g.fillStyle = '#000'; g.fillRect(0, 0, cv.width, cv.height); g.fillStyle = '#fff'; g.font = f; g.textBaseline = 'middle'; g.fillText(text, 20, cv.height / 2);
+  return alphaFromCanvas(cv, false);
+}
+function imageAlpha(img) {
+  const s = 320 / Math.max(img.naturalWidth, img.naturalHeight), cv = document.createElement('canvas');
+  cv.width = Math.max(8, Math.round(img.naturalWidth * s)) + 16; cv.height = Math.max(8, Math.round(img.naturalHeight * s)) + 16;
+  const g = cv.getContext('2d'); g.drawImage(img, 8, 8, cv.width - 16, cv.height - 16);
+  return alphaFromCanvas(cv, true);
+}
+function extrudeAlpha(A, name) {
+  const depth = +$('t3Depth').value, s = 1 / A.H, W = A.W * s, H = 1;
+  const G = remeshGrid(new Float32Array([0, 0, -depth / 2, W, H, depth / 2]), Math.min(280, Math.max(A.W, A.H)));
+  const [nx, ny, nz] = G.n, h = G.h, [ox, oy, oz] = G.o, inside = new Uint8Array(G.voxels);
+  const sample = (x, y) => {   // bilinear alpha at world (x, y); image y runs downward
+    const u = x / s - 0.5, v = (H - y) / s - 0.5, i = Math.floor(u), j = Math.floor(v), fu = u - i, fv = v - j;
+    const at = (a, b) => a < 0 || b < 0 || a >= A.W || b >= A.H ? 0 : A.a[b * A.W + a];
+    return (at(i, j) * (1 - fu) + at(i + 1, j) * fu) * (1 - fv) + (at(i, j + 1) * (1 - fu) + at(i + 1, j + 1) * fu) * fv;
+  };
+  for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+    if (sample(ox + i * h, oy + j * h) < 0.5) continue;
+    for (let k = 0; k < nz; k++) { const z = oz + k * h; if (Math.abs(z) <= depth / 2) inside[i + nx * (j + ny * k)] = 1; }
+  }
+  const out = surfaceNets(inside, G);
+  if (!out.idx.length) { toast('形になる部分がありませんでした（文字や画像の内容を確認してください）'); return; }
+  relaxMesh(out.pos, out.idx, 3);
+  // put it at the view centre, about as tall as the selected part
+  const P = out.pos, bb = new THREE.Box3(); for (let i = 0; i < P.length; i += 3) bb.expandByPoint(new V3(P[i], P[i+1], P[i+2]));
+  const c = bb.getCenter(new V3()), ar = sceneBounds([active]).getSize(new V3()).y || 1, k = ar * 0.6 / (bb.max.y - bb.min.y || 1), t = controls.target;
+  for (let i = 0; i < P.length; i += 3) { P[i] = (P[i] - c.x) * k + t.x; P[i+1] = (P[i+1] - c.y) * k + t.y; P[i+2] = (P[i+2] - c.z) * k + t.z; }
+  pushStruct();
+  const rec = newRec(uniqueName(name), P, dropDegenerate(out.idx));
+  insertAfterActive(rec); activate(rec); scheduleSave();
+  toast(`「${rec.name}」を作りました（${nF.toLocaleString()} ポリゴン）`);
+}
+function textTo3D() {
+  const t = $('t3Text').value.trim(); if (!t) { toast('文字を入力してください'); return; }
+  return busy(() => extrudeAlpha(textAlpha(t, $('t3Font').value), t.slice(0, 12)));
+}
+async function imageTo3D(file) {
+  const url = URL.createObjectURL(file), img = new Image();
+  try { await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = url; }); } catch { toast('画像を読み込めませんでした'); URL.revokeObjectURL(url); return; }
+  await busy(() => extrudeAlpha(imageAlpha(img), file.name.replace(/\.[^.]+$/, '')));
+  URL.revokeObjectURL(url);
+}
+
+// ---------------- hollow for 3D printing: inner wall at a fixed thickness (mm at the STL size) ----------------
+function mmPerUnit() {
+  const box = sceneBounds(shownRecs()), h = box.max.y - box.min.y;
+  return h > 0 ? (+$('stlH').value || 80) / h : 1;
+}
+function hollow() {
+  if (stroke) return;
+  const thickMm = +$('hlThick').value;
+  return busy(() => {
+    flushNormals(); geo.computeBoundingBox();
+    const T = thickMm / mmPerUnit(), size = geo.boundingBox.getSize(new V3()), longest = Math.max(size.x, size.y, size.z);
+    if (T * 2.5 >= Math.min(size.x, size.y, size.z)) { toast('壁が厚すぎて中を空けられません（壁の厚さを小さくしてください）'); return; }
+    let res = Math.min(360, Math.ceil(longest / (T / 3)));
+    let G = remeshGrid(pos, res); while (G.voxels > 30_000_000 && res > 64) { res = Math.floor(res * 0.85); G = remeshGrid(pos, res); }
+    const t0 = performance.now(), inside = voxelize(pos, idx, G), [nx, ny] = G.n, sy = nx, sz = nx * ny;
+    const steps = Math.max(1, Math.round(T / G.h));
+    let cur = inside;
+    for (let it = 0; it < steps; it++) {
+      // alternate face (6) and full (26) neighbourhoods: the eroded shape stays round instead of diamond/box shaped
+      const next = cur.slice(), full = it % 2 === 1;
+      for (let g = 0; g < cur.length; g++) {
+        if (!cur[g]) continue;
+        const i = g % nx, j = ((g / nx) | 0) % ny, k = (g / sz) | 0;
+        if (i === 0 || j === 0 || k === 0 || i === nx - 1 || j === ny - 1 || k === G.n[2] - 1) { next[g] = 0; continue; }
+        let out = !cur[g-1] || !cur[g+1] || !cur[g-sy] || !cur[g+sy] || !cur[g-sz] || !cur[g+sz];
+        if (!out && full) for (let dz = -1; dz <= 1 && !out; dz++) for (let dy = -1; dy <= 1 && !out; dy++) for (let dx = -1; dx <= 1; dx++) if (!cur[g + dx + dy * sy + dz * sz]) { out = true; break; }
+        if (out) next[g] = 0;
+      }
+      cur = next;
+    }
+    const inner = surfaceNets(cur, G);
+    if (!inner.idx.length) { toast('中を空けられる厚さがありません（壁の厚さを小さくしてください）'); return; }
+    relaxMesh(inner.pos, inner.idx, 2);
+    const ii = inner.idx; for (let f = 0; f < ii.length; f += 3) { const a = ii[f+1]; ii[f+1] = ii[f+2]; ii[f+2] = a; }   // inner wall faces the cavity
+    const n2 = inner.pos.length / 3, p = new Float32Array(pos.length + inner.pos.length), ix = new Uint32Array(idx.length + ii.length);
+    p.set(pos); p.set(inner.pos, pos.length); ix.set(idx); for (let f = 0; f < ii.length; f++) ix[idx.length + f] = ii[f] + nV;
+    pushStruct();
+    const old = active, rec = newRec(uniqueName(old.name + ' 中空'), p, ix);
+    if (paint) { rec.paint = new Float32Array(p.length); rec.paint.set(paint); rec.paint.set(basePaint(n2), paint.length); }
+    old.visible = false; insertAfterActive(rec); activate(rec); scheduleSave();
+    toast(`壁の厚さ ${thickMm} mm で中を空けました（${((performance.now() - t0) / 1000).toFixed(1)}秒・元のパーツは非表示）。レジンを抜く穴は必要に応じてブーリアンで開けてください`);
+  });
+}
+
 // ---------------- turntable video (WebM) ----------------
 let turning = false;
 async function recordTurntable() {
@@ -3769,7 +3928,10 @@ function updateStats() {
   let total = 0; for (const r of subtools) total += r.idx.length / 3;
   const many = subtools.length > 1;
   const lvTxt = active && active.levels.length > 1 ? ` · Lv <em>${active.lv + 1}/${active.levels.length}</em>` : '';
-  $('stats').innerHTML = `${many && active ? `<em>${active.name.replace(/[<&]/g, '')}</em>${lvTxt} · ` : lvTxt ? lvTxt.slice(3) + ' · ' : ''}頂点 <em>${nV.toLocaleString()}</em> · ポリゴン <em>${nF.toLocaleString()}</em>${many ? `（全体 ${total.toLocaleString()}）` : ''} · <em>${b.name}</em>${S.sym ? ' · 対称X' : ''}`;
+  // printed size of what is shown (STL height = the export setting)
+  let mmTxt = '';
+  if (active && total < 3_000_000) { const bx = sceneBounds(shownRecs()), sz = bx.getSize(new V3()), k = sz.y > 0 ? (+$('stlH').value || 80) / sz.y : 0; if (k) mmTxt = ` · 印刷 <em>${Math.round(sz.x * k)}×${Math.round(sz.z * k)}×${Math.round(sz.y * k)}</em> mm`; }
+  $('stats').innerHTML = `${many && active ? `<em>${active.name.replace(/[<&]/g, '')}</em>${lvTxt} · ` : lvTxt ? lvTxt.slice(3) + ' · ' : ''}頂点 <em>${nV.toLocaleString()}</em> · ポリゴン <em>${nF.toLocaleString()}</em>${many ? `（全体 ${total.toLocaleString()}）` : ''} · <em>${b.name}</em>${S.sym ? ' · 対称X' : ''}${mmTxt}`;
 }
 
 // ---------------- UI wiring ----------------
@@ -4071,6 +4233,10 @@ $('arGo').onclick = arrayMesh; $('mwGo').onclick = mirrorWeld; $('pgSplit').oncl
 S.topoMask = false; $('topoMask').onchange = e => { S.topoMask = e.target.checked; };
 $('pgColor').onclick = pgFromColor; $('fbGo').onclick = growFibers; $('ttGo').onclick = () => recordTurntable();
 for (const [id, d] of [['fbLen', 2], ['fbVary', 2], ['fbGrav', 2], ['fbSpread', 2], ['fbThick', 2], ['ttSecs', 0]]) $(id).addEventListener('input', e => { $(id + 'Out').textContent = (+e.target.value).toFixed(d); });
+$('t3Go').onclick = textTo3D; $('t3Img').onclick = () => $('t3File').click();
+$('t3File').onchange = e => { const f = e.target.files[0]; if (f) imageTo3D(f); e.target.value = ''; };
+$('t3Depth').addEventListener('input', e => { $('t3DepthOut').textContent = (+e.target.value).toFixed(2); });
+$('hlGo').onclick = hollow; $('stlH').addEventListener('input', updateStats);
 $('zsStart').onclick = zsStart; $('zsMake').onclick = zsMake; $('zsUndo').onclick = zsUndo; $('zsCancel').onclick = zsEnd;
 
 view.addEventListener('dragover', e => e.preventDefault());
