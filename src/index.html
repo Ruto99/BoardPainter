@@ -263,6 +263,12 @@ dl.keys dd{margin:0;color:var(--muted)}
       <div class="row"><label for="falloff">減衰カーブ</label><canvas id="falloffCv" width="88" height="30" aria-hidden="true"></canvas></div>
       <select id="falloff" class="wide" aria-label="減衰カーブ"></select>
       <div class="row"><label for="strokeType">ストローク</label><select id="strokeType"><option value="dots">連続で塗る</option><option value="drag">ドラッグで配置</option><option value="spray">スプレー（散らす）</option><option value="dragdot">1つを動かして置く（DragDot）</option><option value="line">直線（押した所から）</option></select></div>
+      <div id="immRow" hidden>
+        <div class="row"><label for="immSel">部品</label><select id="immSel" style="width:150px"></select></div>
+        <div class="row"><input type="checkbox" id="immMerge" checked><label for="immMerge">選択中のパーツに結合する（外すと別のパーツ）</label></div>
+        <div class="grid2"><button class="btn" id="immAdd" title="選択中のパーツを部品として登録します（+Y が上・底が置く面になります）">今のパーツを登録</button><button class="btn" id="immDel">この部品を削除</button></div>
+        <p class="note">モデルの上でクリックすると、表面の向きに合わせて部品を置きます。ドラッグすると大きさと回転を決められます。左右対称（X）がオンなら反対側にも置きます。</p>
+      </div>
       <div id="vdmRow" hidden>
         <div class="row"><label for="vdmSel">VDM の型</label><select id="vdmSel" style="width:150px"></select></div>
         <div class="row"><canvas id="vdmCv" width="64" height="64" style="width:64px;height:64px;border-radius:6px;border:1px solid var(--line)" aria-label="VDM の型のプレビュー"></canvas>
@@ -825,6 +831,7 @@ const BRUSHES = [
   { id:'tube',      key:'',  short:'Tb', name:'チューブ',     desc:'なぞった線に沿ってチューブ（ロープ・ホース・ツノ）を作る', alpha:false, curve:true, sep:true },
   { id:'insert',    key:'',  short:'Im', name:'並べる',       desc:'なぞった線に沿って形を並べる（鋲・数珠・チェーン）', alpha:false, curve:true },
   { id:'vdm',       key:'',  short:'VD', name:'VDM',          desc:'ベクターディスプレイスメントの型を押し付ける（張り出した形も1回で）。クリックしてドラッグで大きさと向き', alpha:false, def:{ stroke:'drag', strength:1 } },
+  { id:'imm',       key:'',  short:'IM', name:'部品を置く',   desc:'部品（ボルト・リベット・パイプなど）を表面に置く。クリックしてドラッグで大きさと向き（IMM）', alpha:false },
   { id:'guide',     key:'',  short:'Gd', name:'ガイド線',   desc:'自動リトポ（形に沿う）のループの向きを決める線を、表面をなぞって引く', alpha:false, curve:true },
   { id:'mask',      key:'9', short:'Mk', name:'マスク',       desc:'塗った所を保護する', alpha:true, sep:true },
   { id:'maskgrow',  key:'',  short:'MG', name:'マスク広げ',   desc:'マスクを周りへ広げる（Altで縮める）', alpha:false },
@@ -847,7 +854,7 @@ const BRUSH_CATS = [
   ['整える', ['smooth', 'smoothstrong', 'smoothsharp', 'smoothdir', 'smoothvalley', 'smoothpeak', 'relax', 'sharpen', 'polish', 'hpolish', 'flatten', 'planar', 'trim', 'trimdyn', 'morph']],
   ['彫る', ['dam', 'crease', 'mallet', 'crack', 'slash', 'pinch', 'magnify', 'twist', 'nudge']],
   ['動かす', ['move', 'moveinf', 'movetopo', 'elastic', 'snake', 'bend', 'scale', 'pose']],
-  ['作る', ['vdm', 'tube', 'insert', 'guide']],
+  ['作る', ['vdm', 'imm', 'tube', 'insert', 'guide']],
   ['マスク・色・グループ', ['mask', 'maskcavity', 'maskgrow', 'masksmooth', 'paint', 'paintcavity', 'paintnoise', 'smear', 'paintblur', 'pgpaint']],
 ];
 const canDrag = id => (BRUSH[id].alpha || id === 'vdm') && baseOf(id) !== 'layer' && baseOf(id) !== 'hpolish' && id !== 'zproject';
@@ -867,7 +874,7 @@ const FALLOFFS = [
 const FO = Object.fromEntries(FALLOFFS.map(x => [x.id, x.f]));
 
 const BASE_COL = new THREE.Color('#d8c0a2');   // clay color (linear) for unpainted vertices
-const S = { vdm:'v:mushroom', dynSub:0, paintHex:'#9c4a3c', paintLin:new THREE.Color('#9c4a3c'), brush:'standard', size:55, spacing:0.22, lazy:0, invert:false, backface:true, sym:true, wire:false, solo:false, sizePres:false, worldSize:false };
+const S = { imm:'i:bolt', immMerge:true, vdm:'v:mushroom', dynSub:0, paintHex:'#9c4a3c', paintLin:new THREE.Color('#9c4a3c'), brush:'standard', size:55, spacing:0.22, lazy:0, invert:false, backface:true, sym:true, wire:false, solo:false, sizePres:false, worldSize:false };
 // depth: -1..1 moves the working plane / height (imbed) · plane: sculpt direction (area / view / vertex / x / y / z)
 // groupMask: only the polygroup under the brush · cavity: off / cavity (only the hollows) / peak (only the bumps)
 const BASE_CFG = { strength:0.45, falloff:'smooth', stroke:'dots', alpha:'none', alphaInv:false, follow:false, depth:0, plane:'area', groupMask:false, cavity:'off', emode:'grab' };
@@ -876,7 +883,7 @@ try {
   const saved = JSON.parse(localStorage.getItem('bp-brushes') || 'null');
   if (saved) {
     for (const id in saved.bs || {}) if (BS[id]) Object.assign(BS[id], saved.bs[id]);
-    for (const k of ['size', 'spacing', 'lazy', 'brush', 'paintHex', 'sizePres', 'worldSize', 'vdm']) if (saved[k] !== undefined) S[k] = saved[k];
+    for (const k of ['size', 'spacing', 'lazy', 'brush', 'paintHex', 'sizePres', 'worldSize', 'vdm', 'imm', 'immMerge']) if (saved[k] !== undefined) S[k] = saved[k];
     if (/^#[0-9a-f]{6}$/i.test(S.paintHex)) S.paintLin.set(S.paintHex); else S.paintHex = '#9c4a3c';
   }
 } catch { /* ignore broken prefs */ }
@@ -884,7 +891,7 @@ if (!BRUSH[S.brush]) S.brush = 'standard';
 let prefsT = 0;
 function saveBrushPrefs() {
   clearTimeout(prefsT);
-  prefsT = setTimeout(() => { try { localStorage.setItem('bp-brushes', JSON.stringify({ bs:BS, size:S.size, spacing:S.spacing, lazy:S.lazy, brush:S.brush, paintHex:S.paintHex, sizePres:S.sizePres, worldSize:S.worldSize, vdm:S.vdm })); } catch {} }, 300);
+  prefsT = setTimeout(() => { try { localStorage.setItem('bp-brushes', JSON.stringify({ bs:BS, size:S.size, spacing:S.spacing, lazy:S.lazy, brush:S.brush, paintHex:S.paintHex, sizePres:S.sizePres, worldSize:S.worldSize, vdm:S.vdm, imm:S.imm, immMerge:S.immMerge })); } catch {} }, 300);
 }
 
 // VDM stamps: built-in ('v:...') or added by the user ('u:...', kept in IndexedDB)
@@ -1989,6 +1996,12 @@ function onDown(e) {
     updateCursor(null);
     return;
   }
+  if (brush === 'imm') {   // place a part: the drag sets its size and turn, it is built on release
+    const part = getIMM(S.imm); if (!part) { toast('部品を選んでください'); return; }
+    stroke = { brush, cfg, id: e.pointerId, pressure: 1, imm: { P: hit.point.clone(), N: hitNormal(hit), x0: e.clientX, y0: e.clientY, part, dx: 0, dy: 0 } };
+    immPreview(stroke.imm); updateCursor(null);
+    return;
+  }
   if (BRUSH[brush].curve) {   // tube / insert: just record the path; the mesh is built on release
     stroke = { brush, cfg, id: e.pointerId, pressure: 1, curve: { pts: [hit.point.clone()], nrm: [hitNormal(hit)], r: worldRadius(hit.point) } };
     curvePreview(stroke.curve.pts); updateCursor(null);
@@ -2239,6 +2252,7 @@ canvas.addEventListener('pointermove', e => {
   if (stroke) {
     if (e.pointerId !== stroke.id) return;
     if (stroke.pose) { poseTo(e); flushNormals(); return; }
+    if (stroke.imm) { stroke.imm.dx = e.clientX - stroke.imm.x0; stroke.imm.dy = e.clientY - stroke.imm.y0; immPreview(stroke.imm); return; }
     if (stroke.curve) {
       const hit = pick(), c = stroke.curve;
       if (hit && hit.point.distanceTo(c.pts[c.pts.length - 1]) > c.r * 0.08) { c.pts.push(hit.point.clone()); c.nrm.push(hitNormal(hit)); curvePreview(c.pts); }
@@ -2280,6 +2294,7 @@ function endStroke() {
   showLazy(null);
   if (!stroke) return;
   if (stroke.curve) { const st = stroke; stroke = null; busy(() => finishCurve(st)); return; }
+  if (stroke.imm) { const st = stroke; stroke = null; immPreview(null); busy(() => immCommit(st.imm)); return; }
   if (stroke.dyn) { dynRefine(); if (stroke.dyn.changed) syncScene(); }
   const lr = stroke.layRec;
   if (lr && layersOf().includes(lr.L) && lr.L.delta.length === pos.length) {
@@ -3938,6 +3953,125 @@ function presetLoad() {
   for (const id of ['spacing', 'lazy']) { const el = $(id); el.value = S[id]; el.dispatchEvent(new Event('input')); }
   toast(`ブラシ設定「${p.name}」を呼び出しました`);
 }
+// ---------------- IMM: parts placed on the surface ----------------
+// A part is { p, ix } in its own frame: standing on y = 0 (the face that goes on the surface), +Y up, its
+// footprint about 1 in radius. Built-ins are made here; the user can add any part (kept in IndexedDB).
+const BUILTIN_IMM = [
+  { id: 'i:bolt', name: 'ボルト（六角頭）' }, { id: 'i:rivet', name: 'リベット（丸頭）' }, { id: 'i:pipe', name: 'パイプ（短い筒）' },
+  { id: 'i:cube', name: '立方体' }, { id: 'i:cylinder', name: '円柱' }, { id: 'i:cone', name: '円すい（トゲ）' },
+  { id: 'i:ring', name: '輪' }, { id: 'i:panel', name: '板（パネル）' },
+];
+const immCache = new Map(), customIMMs = [];
+function geoToPart(g) {
+  g.deleteAttribute('normal'); g.deleteAttribute('uv'); g = mergeVertices(g, 1e-5);
+  return { p: new Float32Array(g.attributes.position.array), ix: dropDegenerate(Uint32Array.from(g.index.array)) };
+}
+// closed lathe around +Y from a profile [[r, y], ...] that starts and ends on the axis
+const lathePart = (prof, seg) => geoToPart(new THREE.LatheGeometry(prof.map(([r, y]) => new THREE.Vector2(r, y)), seg));
+function builtinIMM(id) {
+  if (immCache.has(id)) return immCache.get(id);
+  let part = null;
+  if (id === 'i:bolt') part = lathePart([[0, 0], [1, 0], [1, 0.45], [0.92, 0.55], [0, 0.55]], 6);
+  else if (id === 'i:rivet') { const pr = [[0, 0]]; for (let i = 0; i <= 12; i++) { const a = i / 12 * Math.PI / 2; pr.push([Math.cos(a), 0.12 + Math.sin(a) * 0.55]); } pr.splice(1, 0, [1, 0]); pr.push([0, 0.67]); part = lathePart(pr, 32); }
+  else if (id === 'i:pipe') part = lathePart([[0.55, 0], [1, 0], [1, 1.4], [0.55, 1.4], [0.55, 0]], 32);
+  else if (id === 'i:cube') { const g = new THREE.BoxGeometry(1.6, 1.6, 1.6); g.translate(0, 0.8, 0); part = geoToPart(g); }
+  else if (id === 'i:cylinder') part = lathePart([[0, 0], [1, 0], [1, 1.2], [0, 1.2]], 40);
+  else if (id === 'i:cone') part = lathePart([[0, 0], [1, 0], [0, 2.2]], 40);
+  else if (id === 'i:ring') { const g = new THREE.TorusGeometry(0.75, 0.25, 16, 48); g.rotateX(Math.PI / 2); g.translate(0, 0.25, 0); part = geoToPart(g); }
+  else if (id === 'i:panel') { const g = new THREE.BoxGeometry(2, 0.18, 1.4); g.translate(0, 0.09, 0); part = geoToPart(g); }
+  if (part) immCache.set(id, part);
+  return part;
+}
+function getIMM(id) { if (id && id.startsWith('m:')) return customIMMs.find(a => a.id === id) || null; return id ? builtinIMM(id) : null; }
+function renderIMMs() {
+  const sel = $('immSel'), items = [...BUILTIN_IMM, ...customIMMs.map(a => ({ id: a.id, name: a.name }))];
+  if (!items.some(x => x.id === S.imm)) S.imm = items[0].id;
+  sel.innerHTML = items.map(x => `<option value="${x.id}">${x.name.replace(/[<&"]/g, '')}</option>`).join('');
+  sel.value = S.imm; $('immDel').disabled = !S.imm.startsWith('m:'); $('immMerge').checked = S.immMerge;
+}
+async function saveIMMs() {
+  try { const db = await idb(); await new Promise(res => { const tx = db.transaction('s', 'readwrite'); tx.objectStore('s').put(customIMMs.map(a => ({ id: a.id, name: a.name, p: a.p, ix: a.ix })), 'imms'); tx.oncomplete = tx.onerror = tx.onabort = res; }); } catch { /* storage unavailable */ }
+}
+async function loadIMMs() {
+  try {
+    const db = await idb();
+    const list = await new Promise(res => { const r = db.transaction('s').objectStore('s').get('imms'); r.onsuccess = () => res(r.result || []); r.onerror = () => res([]); });
+    for (const a of list) if (a && a.id && a.p instanceof Float32Array && a.ix instanceof Uint32Array) customIMMs.push(a);
+  } catch { /* none */ }
+}
+// the selected part as a new IMM part: centred on its footprint, standing on y = 0, footprint radius 1
+function registerIMM() {
+  if (nF > 200000) { toast('ポリゴンが多すぎます（20万まで）。ポリゴン削減してから登録してください'); return; }
+  flushNormals();
+  const P = pos, n = nV; let minY = Infinity, cx = 0, cz = 0;
+  for (let v = 0; v < n; v++) { minY = Math.min(minY, P[v*3+1]); cx += P[v*3]; cz += P[v*3+2]; }
+  cx /= n; cz /= n;
+  let R = 1e-9; for (let v = 0; v < n; v++) R = Math.max(R, Math.hypot(P[v*3] - cx, P[v*3+2] - cz));
+  const p = new Float32Array(n * 3); for (let v = 0; v < n; v++) { p[v*3] = (P[v*3] - cx) / R; p[v*3+1] = (P[v*3+1] - minY) / R; p[v*3+2] = (P[v*3+2] - cz) / R; }
+  const id = 'm:' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  customIMMs.push({ id, name: active.name, p, ix: idx.slice() }); S.imm = id;
+  renderIMMs(); saveIMMs(); saveBrushPrefs();
+  toast(`「${active.name}」を部品に登録しました（${nF.toLocaleString()} ポリゴン）`);
+}
+// where the part goes: up = surface normal, its x = the drag direction (or the screen's right), size from the drag
+function immFrame(m) {
+  const px = Math.hypot(m.dx, m.dy), N = m.N.clone().normalize();
+  let ref = px >= 4 ? camAxis(0).multiplyScalar(m.dx).addScaledVector(camAxis(1), -m.dy) : camAxis(0);
+  ref.addScaledVector(N, -ref.dot(N)); if (ref.lengthSq() < 1e-10) ref = new V3(1, 0, 0).addScaledVector(N, -N.x); ref.normalize();
+  const W = new V3().crossVectors(ref, N), size = (px >= 4 ? px : S.size) * worldPerPx(m.P);
+  return { U: ref, N, W, size, P: m.P };
+}
+// part -> world positions (and the mirrored copy with its faces turned back the right way)
+function immPlace(part, f, mirror = false) {
+  const n = part.p.length / 3, out = new Float32Array(n * 3), sink = f.size * 0.05;
+  for (let v = 0; v < n; v++) {
+    const x = part.p[v*3], y = part.p[v*3+1], z = part.p[v*3+2];
+    for (let k = 0; k < 3; k++) { const a = ['x', 'y', 'z'][k]; out[v*3+k] = f.P[a] + (f.U[a] * x + f.N[a] * y + f.W[a] * z) * f.size - f.N[a] * sink; }
+    if (mirror) out[v*3] = -out[v*3];
+  }
+  let ix = part.ix;
+  if (mirror) { ix = ix.slice(); for (let i = 0; i < ix.length; i += 3) { const t = ix[i+1]; ix[i+1] = ix[i+2]; ix[i+2] = t; } }
+  return { p: out, ix };
+}
+let immMesh = null;
+const immMat = new THREE.MeshStandardMaterial({ color: 0xd9a35b, roughness: 0.5, transparent: true, opacity: 0.7 });
+function immPreview(m) {
+  if (immMesh) { scene.remove(immMesh); immMesh.geometry.dispose(); immMesh = null; }
+  if (!m) return;
+  const f = immFrame(m), parts = [immPlace(m.part, f)];
+  if (S.sym && Math.abs(m.P.x) > f.size * 0.5) parts.push(immPlace(m.part, f, true));
+  const g = mergeGeometries(parts.map(q => { const gg = new THREE.BufferGeometry(); gg.setAttribute('position', new THREE.BufferAttribute(q.p, 3)); gg.setIndex(new THREE.BufferAttribute(q.ix, 1)); return gg; }));
+  g.computeVertexNormals();
+  immMesh = new THREE.Mesh(g, immMat); immMesh.raycast = () => {}; immMesh.frustumCulled = false; scene.add(immMesh);
+}
+function immCommit(m) {
+  const f = immFrame(m), parts = [immPlace(m.part, f)];
+  if (S.sym && Math.abs(m.P.x) > f.size * 0.5) parts.push(immPlace(m.part, f, true));
+  let nv = 0, ni = 0; for (const q of parts) { nv += q.p.length / 3; ni += q.ix.length; }
+  const p = new Float32Array(nv * 3), ix = new Uint32Array(ni); let ov = 0, oi = 0;
+  for (const q of parts) { p.set(q.p, ov * 3); for (let k = 0; k < q.ix.length; k++) ix[oi + k] = q.ix[k] + ov; ov += q.p.length / 3; oi += q.ix.length; }
+  if (S.immMerge && active.levels.length === 1) {
+    // append to the selected part (one undo step with the old topology); the part gets its own polygroup
+    flushNormals(); pushUndo(true);
+    const n0 = nV, NP = new Float32Array(pos.length + p.length), NI = new Uint32Array(idx.length + ix.length), NM = new Float32Array(n0 + nv);
+    NP.set(pos); NP.set(p, pos.length); NI.set(idx); for (let k = 0; k < ix.length; k++) NI[idx.length + k] = ix[k] + n0; NM.set(mask);
+    const NC = paint ? (() => { const c = new Float32Array(NP.length); c.set(paint); c.set(basePaint(nv), paint.length); return c; })() : null;
+    let mx = 0; if (pg) for (let v = 0; v < n0; v++) mx = Math.max(mx, pg[v]);
+    const g = new Int32Array(NM.length); if (pg) g.set(pg); g.fill(mx + 1, n0); active.pg = g;
+    clearLevelExtras(active.levels[0]); active.hid = null;
+    setMesh(NP, NI, NM, null, NC); syncScene(); scheduleSave();
+    return;
+  }
+  if (S.immMerge) toast('細分化レベルがあるパーツには結合できないので、別のパーツとして置きました');
+  pushStruct();
+  const rec = newRec(uniqueName((BUILTIN_IMM.find(b => b.id === S.imm) || customIMMs.find(b => b.id === S.imm) || { name: '部品' }).name.replace(/（.*$/, '')), p, ix);
+  insertAfterActive(rec); syncScene(); scheduleSave();
+}
+$('immSel').onchange = e => { S.imm = e.target.value; renderIMMs(); saveBrushPrefs(); };
+$('immMerge').onchange = e => { S.immMerge = e.target.checked; saveBrushPrefs(); };
+$('immAdd').onclick = () => registerIMM();
+$('immDel').onclick = () => { const i = customIMMs.findIndex(a => a.id === S.imm); if (i < 0) return; const n = customIMMs[i].name; customIMMs.splice(i, 1); S.imm = BUILTIN_IMM[0].id; renderIMMs(); saveIMMs(); toast(`部品「${n}」を削除しました`); };
+
 // ---------------- VDM stamp library (UI) ----------------
 function renderVDMs() {
   const sel = $('vdmSel'), items = [...BUILTIN_VDM, ...customVDMs.map(a => ({ id: a.id, name: a.name }))];
@@ -5721,6 +5855,7 @@ function refreshBrushUI() {
   $('bPlane').value = c.plane || 'area'; $('bGroup').checked = !!c.groupMask; $('bCavity').value = c.cavity || 'off';
   $('emodeRow').hidden = S.brush !== 'elastic'; $('emode').value = c.emode || 'grab';
   $('vdmRow').hidden = S.brush !== 'vdm'; if (S.brush === 'vdm') renderVDMs();
+  $('immRow').hidden = S.brush !== 'imm'; if (S.brush === 'imm') renderIMMs();
   $('alphaSec').classList.toggle('off', !b.alpha);
   $('alphaNote').textContent = b.alpha
     ? '白い所ほど強く効きます。画像はビューにドラッグ＆ドロップでも追加できます。細かい模様は「細分化」でポリゴンを増やすときれいに出ます。'
@@ -6155,7 +6290,7 @@ renderer.setAnimationLoop(() => {
   subtools = [newRec('球', b.p, b.ix)];
   activate(subtools[0], true);
   { let m = 'std'; try { m = localStorage.getItem('bp-mat') || 'std'; } catch {} applyMaterial(m, true); }
-  await loadAlphas(); await loadVDMs();
+  await loadAlphas(); await loadVDMs(); await loadIMMs();
   renderAlphaGrid(); refreshBrushUI(); updateUndoButtons(); frame(); updateTitle();
   const saved = await loadAuto();
   if (saved) {
@@ -6216,6 +6351,13 @@ renderer.setAnimationLoop(() => {
     changedScreenX(before) { const out = []; for (let v = 0; v < nV; v++) { const i = v * 3; if (Math.abs(pos[i] - before[i]) + Math.abs(pos[i+1] - before[i+1]) + Math.abs(pos[i+2] - before[i+2]) > 1e-7) { const q = new V3(pos[i], pos[i+1], pos[i+2]).project(camera), b = canvas.getBoundingClientRect(); out.push(b.left + (q.x + 1) / 2 * b.width); } } out.sort((a, b) => a - b); return out.length ? [out.length, Math.round(out[0]), Math.round(out[out.length >> 1]), Math.round(out[out.length - 1])] : [0]; },
     vdmInfo() { const st = getVDM(S.vdm); let mx = 0; if (st) for (let k = 0; k < st.vec.length; k++) mx = Math.max(mx, Math.abs(st.vec[k])); return { sel: S.vdm, custom: customVDMs.length, S: st && st.S, max: mx }; },
     importVDMBytes(name, bytes) { return importVDM({ name, arrayBuffer: async () => new Uint8Array(bytes).buffer }); },
+    immCheck() {
+      return BUILTIN_IMM.map(b => { const q = builtinIMM(b.id), p = q.p, ix = q.ix, em = new Map(); let vol = 0;
+        for (let f = 0; f < ix.length; f += 3) { const a = ix[f]*3, c = ix[f+1]*3, d = ix[f+2]*3; vol += (p[a]*(p[c+1]*p[d+2]-p[c+2]*p[d+1]) - p[a+1]*(p[c]*p[d+2]-p[c+2]*p[d]) + p[a+2]*(p[c]*p[d+1]-p[c+1]*p[d])) / 6;
+          for (const [x, y] of [[ix[f], ix[f+1]], [ix[f+1], ix[f+2]], [ix[f+2], ix[f]]]) em.set(x + ',' + y, 1); }
+        let open = 0; for (const k of em.keys()) { const [x, y] = k.split(','); if (!em.has(y + ',' + x)) open++; }
+        return [b.id, +vol.toFixed(3), open]; });
+    },
     get brushIds() { return BRUSHES.map(b => b.id); },
     addShrunkCopy() {   // a slightly smaller copy inside the active part, for the projection brush
       const p = pos.slice(); for (let i = 0; i < p.length; i++) p[i] *= 0.92;
