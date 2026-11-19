@@ -244,6 +244,7 @@ dl.keys dd{margin:0;color:var(--muted)}
         <button class="btn" id="lvUp" title="D">↑ 上げる <small>D</small></button>
       </div>
       <button class="btn full" id="lvAdd" style="margin-top:6px">細分化してレベルを追加 <small>Ctrl+D</small></button>
+      <div class="row" style="margin-top:6px"><label for="subdivMode" title="自動：四角ポリゴンのパーツは四角形の細分化（Catmull-Clark、ZBrush・Blender と同じ形）、三角形だけのパーツは三角形の細分化（Loop）">細分化の方式</label><select id="subdivMode" style="width:150px"><option value="auto">自動</option><option value="cc">四角形（Catmull-Clark）</option><option value="loop">三角形（Loop）</option></select></div>
       <div class="grid2" style="margin-top:6px">
         <button class="btn" id="lvDelLow">下のレベルを削除</button>
         <button class="btn" id="lvDelHigh">上のレベルを削除</button>
@@ -742,7 +743,8 @@ import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { encodeFBX } from './fbx.js';
 import { encodeEXR } from './exr.js';
-import { levelDisplacement } from './vdm.js';
+import { levelDisplacement, levelDisplacementCC } from './vdm.js';
+import { ccTopology, ccPositions, ccAttr, ccMirror, ccGroups } from './subdiv.js';
 import { slicePlane, panelLoops } from './hardsurface.js';
 import { BUILTIN_VDM, builtinVDM, sampleVDM, vdmPreview, stampFromEXR, captureStamp } from './vdmstamp.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
@@ -874,7 +876,7 @@ const FALLOFFS = [
 const FO = Object.fromEntries(FALLOFFS.map(x => [x.id, x.f]));
 
 const BASE_COL = new THREE.Color('#d8c0a2');   // clay color (linear) for unpainted vertices
-const S = { imm:'i:bolt', immMerge:true, vdm:'v:mushroom', dynSub:0, paintHex:'#9c4a3c', paintLin:new THREE.Color('#9c4a3c'), brush:'standard', size:55, spacing:0.22, lazy:0, invert:false, backface:true, sym:true, wire:false, solo:false, sizePres:false, worldSize:false };
+const S = { subdivMode:'auto', imm:'i:bolt', immMerge:true, vdm:'v:mushroom', dynSub:0, paintHex:'#9c4a3c', paintLin:new THREE.Color('#9c4a3c'), brush:'standard', size:55, spacing:0.22, lazy:0, invert:false, backface:true, sym:true, wire:false, solo:false, sizePres:false, worldSize:false };
 // depth: -1..1 moves the working plane / height (imbed) · plane: sculpt direction (area / view / vertex / x / y / z)
 // groupMask: only the polygroup under the brush · cavity: off / cavity (only the hollows) / peak (only the bumps)
 const BASE_CFG = { strength:0.45, falloff:'smooth', stroke:'dots', alpha:'none', alphaInv:false, follow:false, depth:0, plane:'area', groupMask:false, cavity:'off', emode:'grab' };
@@ -883,7 +885,8 @@ try {
   const saved = JSON.parse(localStorage.getItem('bp-brushes') || 'null');
   if (saved) {
     for (const id in saved.bs || {}) if (BS[id]) Object.assign(BS[id], saved.bs[id]);
-    for (const k of ['size', 'spacing', 'lazy', 'brush', 'paintHex', 'sizePres', 'worldSize', 'vdm', 'imm', 'immMerge']) if (saved[k] !== undefined) S[k] = saved[k];
+    for (const k of ['size', 'spacing', 'lazy', 'brush', 'paintHex', 'sizePres', 'worldSize', 'vdm', 'imm', 'immMerge', 'subdivMode']) if (saved[k] !== undefined) S[k] = saved[k];
+    if (!['auto', 'cc', 'loop'].includes(S.subdivMode)) S.subdivMode = 'auto';
     if (/^#[0-9a-f]{6}$/i.test(S.paintHex)) S.paintLin.set(S.paintHex); else S.paintHex = '#9c4a3c';
   }
 } catch { /* ignore broken prefs */ }
@@ -891,7 +894,7 @@ if (!BRUSH[S.brush]) S.brush = 'standard';
 let prefsT = 0;
 function saveBrushPrefs() {
   clearTimeout(prefsT);
-  prefsT = setTimeout(() => { try { localStorage.setItem('bp-brushes', JSON.stringify({ bs:BS, size:S.size, spacing:S.spacing, lazy:S.lazy, brush:S.brush, paintHex:S.paintHex, sizePres:S.sizePres, worldSize:S.worldSize, vdm:S.vdm, imm:S.imm, immMerge:S.immMerge })); } catch {} }, 300);
+  prefsT = setTimeout(() => { try { localStorage.setItem('bp-brushes', JSON.stringify({ bs:BS, size:S.size, spacing:S.spacing, lazy:S.lazy, brush:S.brush, paintHex:S.paintHex, sizePres:S.sizePres, worldSize:S.worldSize, vdm:S.vdm, imm:S.imm, immMerge:S.immMerge, subdivMode:S.subdivMode })); } catch {} }, 300);
 }
 
 // VDM stamps: built-in ('v:...') or added by the user ('u:...', kept in IndexedDB)
@@ -1039,8 +1042,8 @@ function recData(r) {
     vdmPlate: r.vdmPlate || null,
     layers: (r.layers || []).filter(l => l.delta.length === r.pos.length).map(l => ({ name: l.name, I: l.I, on: l.on, delta: l.delta })),
     levels: r.levels.map((L, k) => k === r.lv
-      ? { current: true, ev: L.ev || null, quads: L.quads || null, ref0: L.ref0 || null, ...texData(L), ...polyData(L) }
-      : { idx: L.idx, ev: L.ev || null, pos: k < r.lv ? L.pos : null, det: k > r.lv ? L.det : null, quads: L.quads || null, ref0: k < r.lv ? L.ref0 || null : null, ...texData(L), ...polyData(L) }),
+      ? { current: true, ev: L.ev || null, quads: L.quads || null, ref0: L.ref0 || null, ...texData(L), ...polyData(L), ...(L.cc !== undefined ? { cc: L.cc } : {}) }
+      : { idx: L.idx, ev: L.ev || null, pos: k < r.lv ? L.pos : null, det: k > r.lv ? L.det : null, quads: L.quads || null, ref0: k < r.lv ? L.ref0 || null : null, ...texData(L), ...polyData(L), ...(L.cc !== undefined ? { cc: L.cc } : {}) }),
   };
 }
 // uv + baked textures (PNG bytes) stored on a level
@@ -1073,12 +1076,16 @@ function recFromData(s) {
       if (o.idx) texFromData(o, L, o.idx);
       if (L.polys && L.polys.start instanceof Uint32Array && L.polys.idx instanceof Uint32Array) o.polys = L.polys;
       if (L.crease instanceof Uint32Array && !(L.crease.length % 2)) o.crease = L.crease;
+      if (k > 0 && Number.isInteger(L.cc)) o.cc = L.cc;
       return o;
     });
     // sanity: each level's vertex count = lower count + its edge count; positions/details where expected
     for (let k = 0; k < levels.length && ok; k++) {
-      const L = levels[k], cnt = k === 0 ? (L.pos ? L.pos.length / 3 : -1) : n + (L.ev ? L.ev.length / 4 : -1);
+      const L = levels[k], cnt = k === 0 ? (L.pos ? L.pos.length / 3 : -1) : n + (L.ev ? L.ev.length / 4 : -1) + (L.cc || 0);
       if (k > 0 && (!L.ev || L.ev.length % 4)) ok = false;
+      if (k > 0 && (L.cc !== undefined) !== (levels[1].cc !== undefined)) ok = false;
+      // Catmull-Clark: the lower level's polygons must be the ones it was subdivided from
+      if (ok && k > 0 && L.cc !== undefined) { const F = facesOf(levels[k - 1]); if (F.start.length - 1 !== L.cc || !L.quads) ok = false; else L.fp = F; }
       if (k <= lv && (!L.pos || L.pos.length !== cnt * 3)) ok = false;
       if (k > lv && (!L.det || L.det.length !== cnt * 3)) ok = false;
       if (!L.idx) ok = false;
@@ -2551,6 +2558,7 @@ function pgOne() { if (!pg) { toast('グループは1つだけです'); return; 
 function pgToLevel(g, n, hi) {
   if (!g) return null;
   if (!hi) return g.slice(0, n);
+  if (hi.cc !== undefined) return ccGroups(g, hi.fp, hi.ev);
   const ev = hi.ev, nE = ev.length / 4, out = new Int32Array(g.length + nE); out.set(g);
   for (let e = 0; e < nE; e++) out[g.length + e] = g[ev[e * 4]];
   return out;
@@ -4485,6 +4493,34 @@ function loopTopology(ix, n) {
   const edgeOf = (a, b) => { const lo = a < b ? a : b, hi = a < b ? b : a; for (let s = start[lo]; s < start[lo + 1]; s++) if (other[s] === hi) return slotE[s]; return -1; };
   return { idx: ni, ev, edgeOf };
 }
+// Catmull-Clark levels (hi.cc = the lower level's polygon count): the lower level's polygons (its quads when it is a
+// Catmull-Clark level itself, else its polygon faces, else its triangles), kept on the level as hi.fp
+const triFaces = ix => { const n = ix.length / 3, start = new Uint32Array(n + 1); for (let f = 0; f <= n; f++) start[f] = f * 3; return { start, idx: ix }; };
+const facesOf = L => levelPolys(L) || triFaces(L.idx);
+function ccFaces(lo, hi) { if (!hi.fp) hi.fp = facesOf(lo); return hi.fp; }
+// which scheme subdivides the active part: the one its levels already use, else the setting
+// (auto: Catmull-Clark when the part has polygon faces with quads or n-gons, Loop for plain triangles)
+function useCC(rec = active, L0 = rec.levels[0]) {
+  if (rec.levels.length > 1) return rec.levels[1].cc !== undefined;
+  if (S.subdivMode === 'cc') return true;
+  if (S.subdivMode === 'loop') return false;
+  const lp = levelPolys(L0); if (!lp) return false;
+  for (let f = 0; f + 1 < lp.start.length; f++) if (lp.start[f + 1] - lp.start[f] > 3) return true;
+  return false;
+}
+// one subdivision step of level lo (positions P, n vertices): the new level (idx, ev, quads / cc, crease) and its
+// positions; edgeOf for carrying mirror pairs
+function subdivStep(lo, P, cc) {
+  const n = P.length / 3;
+  if (cc) {
+    const F = facesOf(lo), t = ccTopology(F, n), hi = { idx: t.idx, ev: t.ev, quads: t.quads, cc: t.nf, fp: F };
+    hi.crease = creaseUp(lo, hi, n);
+    return { hi, P: subdivPositions(P, lo, hi), edgeOf: t.edgeOf };
+  }
+  const t = loopTopology(lo.idx, n), hi = { idx: t.idx, ev: t.ev };
+  hi.crease = creaseUp(lo, hi, n);
+  return { hi, P: subdivPositions(P, lo, hi), edgeOf: t.edgeOf };
+}
 // Loop-subdivided positions of the lower level P on the upper level's vertex numbering
 // crease edges (pairs of vertex ids on a level): kept sharp by the subdivision, and carried to the next level
 function creaseSet(L, n) {
@@ -4499,6 +4535,7 @@ function creaseUp(lo, hi, n) {
   return out.length ? Uint32Array.from(out) : undefined;
 }
 function subdivPositions(P, lo, hi) {
+  if (hi.cc !== undefined) return ccPositions(P, ccFaces(lo, hi), hi.ev, creaseSet(lo, P.length / 3));
   const n = P.length / 3, ev = hi.ev, nE = ev.length / 4, out = new Float32Array((n + nE) * 3);
   if (!lo.vv) lo.vv = vvOf(lo.idx, n);
   const { start, list } = lo.vv, bnd = new Uint8Array(n);
@@ -4568,6 +4605,7 @@ function decodeDetails(S, det, L) {
 // per-vertex attribute (c components) onto the next level: edge vertices take the average of their edge
 function upAttr(a, hi, c) {
   if (!a) return null;
+  if (hi.cc !== undefined) return ccAttr(a, hi.fp, hi.ev, c);
   const n = a.length / c, ev = hi.ev, nE = ev.length / 4, out = new Float32Array((n + nE) * c);
   out.set(a);
   for (let e = 0; e < nE; e++) { const x = ev[e*4] * c, y = ev[e*4+1] * c, o = (n + e) * c; for (let k = 0; k < c; k++) out[o + k] = (a[x + k] + a[y + k]) / 2; }
@@ -4663,17 +4701,16 @@ function addLevel() {
   if (nF * 4 > maxPolys()) { const man = n => `${Math.round(n / 1e4).toLocaleString()}万`; toast(`これ以上細かくすると ${man(nF * 4)} ポリゴンになり、この PC のメモリでの上限（${man(maxPolys())} ポリゴン）を超えるため中止しました`); return; }
   flushNormals();
   pushEntry(lvSnap());
-  const lo = active.levels[active.lv];
-  const topo = loopTopology(idx, nV), hi = { idx: topo.idx, ev: topo.ev };
-  hi.crease = creaseUp(lo, hi, nV);
-  hi.pos = subdivPositions(pos, lo, hi); hi.ref0 = hi.pos.slice();
+  const lo = active.levels[active.lv], cc = useCC();
+  const step = subdivStep({ ...lo, idx }, pos, cc), hi = step.hi;
+  hi.pos = step.P; hi.ref0 = hi.pos.slice();
   const m = upMask(mask, hi), pt = upAttr(paint, hi, 3);
   active.pg = pgToLevel(pg, 0, hi);
-  const mir = mirrorUp(mirror, hi, nV, topo.edgeOf);
+  const mir = cc ? ccMirror(mirror, hi.fp, hi.ev, nV, step.edgeOf) : mirrorUp(mirror, hi, nV, step.edgeOf);
   active.levels.push(hi); active.lv++;
   setMesh(hi.pos, hi.idx, m, mir, pt);
   syncScene(); if (gizmoOn) attachGizmo(); scheduleSave();
-  toast(`細分化しました（レベル ${active.lv + 1} / ${active.levels.length}・${nF.toLocaleString()} ポリゴン）`);
+  toast(`細分化しました（${cc ? '四角形の細分化' : '三角形の細分化'}・レベル ${active.lv + 1} / ${active.levels.length}・${nF.toLocaleString()} ポリゴン）`);
 }
 function deleteHigher() {
   if (active.lv >= active.levels.length - 1) { toast('上のレベルはありません'); return; }
@@ -4876,11 +4913,9 @@ function dsUpdate() {
   $('dsApply').disabled = !(k > 0 && active && active.levels.length === 1);
   if (!k || !active || active.levels.length !== 1 || !mesh) { dsClear(); return; }
   let n = Math.min(k, Math.max(0, Math.floor(Math.log(2_000_000 / Math.max(1, nF)) / Math.log(4))));
-  let L = { idx, crease: active.levels[0].crease }, P = pos, C = col;
-  for (let i = 0; i < n; i++) {
-    const nv = P.length / 3, t = loopTopology(L.idx, nv), hi = { idx: t.idx, ev: t.ev };
-    hi.crease = creaseUp(L, hi, nv); P = subdivPositions(P, L, hi); C = upAttr(C, hi, 3); L = hi;
-  }
+  const L0 = active.levels[0], cc = useCC(active, L0);
+  let L = { idx, crease: L0.crease, polys: L0.polys, quads: L0.quads }, P = pos, C = col;
+  for (let i = 0; i < n; i++) { const st = subdivStep(L, P, cc); P = st.P; C = upAttr(C, st.hi, 3); L = st.hi; }
   if (!dsMesh || dsMesh.geometry.index.count !== L.idx.length) {
     dsClear();
     const g = new THREE.BufferGeometry();
@@ -5353,7 +5388,9 @@ function computeDisplacement(S, smooth) {
   // smooth reference: the levels' subdivision of the current level with no details
   let ref = null;
   if (smooth) { ref = pos; for (let j = active.lv + 1; j <= top; j++) ref = subdivPositions(ref, active.levels[j - 1], active.levels[j]); }
-  const chain = active.levels.slice(active.lv + 1, top + 1).map(x => ({ idx: x.idx, ev: x.ev }));
+  const chain = active.levels.slice(active.lv + 1, top + 1).map(x => ({ idx: x.idx, ev: x.ev, quads: x.quads }));
+  if (chain[0].cc !== undefined || active.levels[active.lv + 1].cc !== undefined)
+    return levelDisplacementCC({ pos, idx: L.uvIdx, uv: L.uv, faces: facesOf({ ...L, idx: L.uvIdx }) }, chain, high, ref, S);
   return levelDisplacement({ pos, idx: L.uvIdx, uv: L.uv }, chain, high, ref, S);
 }
 async function saveTextures() {
@@ -5954,6 +5991,8 @@ $('peOn').onchange = e => peSet(e.target.checked);
 $('peCreaseAngle').onclick = () => creaseByAngle(30);
 $('peCreaseClear').onclick = () => { if (!active.levels[0].crease) { toast('クリースはありません'); return; } if (active.levels.length !== 1) { toast('細分化レベルがないパーツで使えます'); return; } pushCrease(); setCrease(null); toast('クリースを全部外しました'); };
 $('dsLevel').onchange = e => dsSet(+e.target.value);
+$('subdivMode').value = S.subdivMode;
+$('subdivMode').onchange = e => { S.subdivMode = e.target.value; dsDirty = true; saveBrushPrefs(); if (active && active.levels.length > 1) toast('細分化済みのパーツは、今までと同じ方式で細分化します（変えるには上のレベルを削除してください）'); };
 $('dsApply').onclick = () => busy(dsApply);
 for (const b of $('peActs').querySelectorAll('[data-pe]')) b.onclick = () => {
   pe.action = b.dataset.pe; pe.bridgeA = null;
