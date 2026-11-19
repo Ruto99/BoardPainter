@@ -287,9 +287,18 @@ dl.keys dd{margin:0;color:var(--muted)}
         <button class="btn" data-pe="delete" title="面をクリック：面を消して穴にする">面を消す</button>
         <button class="btn" data-pe="close" title="穴のふちの辺をクリック：穴を1枚の面でふさぐ">穴を閉じる</button>
         <button class="btn" data-pe="move" title="面をクリックしてドラッグ：面を法線の方向に動かす（形はそのまま）">面を動かす</button>
+        <button class="btn" data-pe="bevel" title="辺をクリックしてドラッグ：辺の輪を斜めに面取りする（上へドラッグで幅が広がる）">面取り</button>
+        <button class="btn" data-pe="bridge" title="穴のふちの辺を2つ順にクリック：2つの穴を四角の帯でつなぐ">穴をつなぐ</button>
+        <button class="btn" data-pe="crease" title="辺をクリック：辺の輪にクリースを付ける／外す（細分化しても角が丸くならない）">クリース</button>
       </div>
+      <div class="grid2" style="margin-top:6px">
+        <button class="btn" id="peCreaseAngle" title="面と面の角度が30°以上の辺すべてにクリースを付けます">角の辺をクリース</button>
+        <button class="btn" id="peCreaseClear">クリースを全部外す</button>
+      </div>
+      <div class="row" style="margin-top:6px"><label for="dsLevel">なめらか表示</label><select id="dsLevel" style="width:150px"><option value="0">オフ</option><option value="1">細分化 1 回分</option><option value="2">細分化 2 回分</option><option value="3">細分化 3 回分</option></select></div>
+      <button class="btn full" id="dsApply" disabled title="表示している なめらかな形を、細分化レベルとして確定します">なめらか表示を細分化レベルにする</button>
       <div class="row" style="margin-top:6px"><label for="peTarget">対象</label><select id="peTarget"><option value="poly">ポリゴン1枚</option><option value="flat">つながった平らな面</option></select></div>
-      <p class="note">低ポリゴンのパーツを、面と辺の単位で直接作り変えます。カーソルの下の対象が光り、クリック（押し出す・はめ込む・面を動かすはドラッグ）で実行します。背景のドラッグで視点は回せます。細分化レベルがないパーツで使えます（三角形のパーツは自動で四角にまとめます）。</p>
+      <p class="note">低ポリゴンのパーツを、面と辺の単位で直接作り変えます。カーソルの下の対象が光り、クリック（押し出す・はめ込む・面を動かすはドラッグ）で実行します。背景のドラッグで視点は回せます。細分化レベルがないパーツで使えます（三角形のパーツは自動で四角にまとめます）。「なめらか表示」は細分化した仕上がりを低ポリゴンのまま見せます（ダイナミック細分化）。クリースした辺（水色）は細分化しても丸くなりません。</p>
     </section>
 
     <section id="defSec">
@@ -769,7 +778,7 @@ const FALLOFFS = [
 const FO = Object.fromEntries(FALLOFFS.map(x => [x.id, x.f]));
 
 const BASE_COL = new THREE.Color('#d8c0a2');   // clay color (linear) for unpainted vertices
-const S = { paintHex:'#9c4a3c', paintLin:new THREE.Color('#9c4a3c'), brush:'standard', size:55, spacing:0.22, lazy:0, invert:false, backface:true, sym:true, wire:false, solo:false, sizePres:false, worldSize:false };
+const S = { dynSub:0, paintHex:'#9c4a3c', paintLin:new THREE.Color('#9c4a3c'), brush:'standard', size:55, spacing:0.22, lazy:0, invert:false, backface:true, sym:true, wire:false, solo:false, sizePres:false, worldSize:false };
 // depth: -1..1 moves the working plane / height (imbed) · plane: sculpt direction (area / view / vertex / x / y / z)
 // groupMask: only the polygroup under the brush · cavity: off / cavity (only the hollows) / peak (only the bumps)
 const BASE_CFG = { strength:0.45, falloff:'smooth', stroke:'dots', alpha:'none', alphaInv:false, follow:false, depth:0, plane:'area', groupMask:false, cavity:'off', emode:'grab' };
@@ -933,7 +942,7 @@ function recData(r) {
   };
 }
 // uv + baked textures (PNG bytes) stored on a level
-const polyData = L => L.polys ? { polys: { start: L.polys.start, idx: L.polys.idx } } : {};
+const polyData = L => ({ ...(L.polys ? { polys: { start: L.polys.start, idx: L.polys.idx } } : {}), ...(L.crease ? { crease: L.crease } : {}) });
 const texData = L => L.uv ? { uvIdx: L.uvIdx, uv: L.uv, bake: L.bake ? { size: L.bake.size, normalPng: L.bake.normalPng, colorPng: L.bake.colorPng || null, heightPng: L.bake.heightPng || null, heightRange: L.bake.heightRange || 0 } : null } : {};
 function texFromData(L, d, ix) {
   if (!(d.uv instanceof Float32Array) || !(d.uvIdx instanceof Uint32Array) || d.uvIdx.length !== ix.length || d.uv.length !== ix.length * 2) return;
@@ -959,6 +968,7 @@ function recFromData(s) {
                          : { idx: L.idx, ev: L.ev || undefined, pos: L.pos || null, det: L.det || null, quads: L.quads ? okQuads(L.quads, L.idx) : undefined, ref0 };
       if (o.idx) texFromData(o, L, o.idx);
       if (L.polys && L.polys.start instanceof Uint32Array && L.polys.idx instanceof Uint32Array) o.polys = L.polys;
+      if (L.crease instanceof Uint32Array && !(L.crease.length % 2)) o.crease = L.crease;
       return o;
     });
     // sanity: each level's vertex count = lower count + its edge count; positions/details where expected
@@ -974,6 +984,7 @@ function recFromData(s) {
   } else if (Ls && Ls[0]) {
     if (Ls[0].quads) r.levels[0].quads = okQuads(Ls[0].quads, s.idx);
     if (Ls[0].polys && Ls[0].polys.start instanceof Uint32Array && Ls[0].polys.idx instanceof Uint32Array) r.levels[0].polys = Ls[0].polys;
+    if (Ls[0].crease instanceof Uint32Array && !(Ls[0].crease.length % 2)) r.levels[0].crease = Ls[0].crease;
     texFromData(r.levels[0], Ls[0], s.idx);
   }
   return r;
@@ -1070,9 +1081,11 @@ function setMesh(p, ix, m, mir, pt) {
     const lg = new THREE.BufferGeometry(); lg.setAttribute('position', geo.attributes.position); lg.setIndex(e);
     wireMesh = new THREE.LineSegments(lg, quadWireMat);
   } else wireMesh = new THREE.Mesh(geo, wireMat);
-  wireMesh.frustumCulled = false; wireMesh.visible = S.wire; wireMesh.raycast = () => {};
+  wireMesh.frustumCulled = false; wireMesh.visible = S.wire || S.dynSub > 0; wireMesh.raycast = () => {};
   mesh.matrixAutoUpdate = wireMesh.matrixAutoUpdate = false;
   scene.add(mesh, wireMesh);
+  buildCreaseLines();
+  dsDirty = true;
   if (active) active.hid = hid;
   applyHidden();
   if (active) {
@@ -1283,6 +1296,7 @@ function stepHistory(from, to) {
     if (!subtools.includes(e.rec)) continue;   // that subtool was deleted since; nothing to restore
     if (e.rec !== active) activate(e.rec);
     if (e.kind === 'lv') { to.push(lvSnap()); restoreLv(e); break; }
+    if (e.kind === 'crease') { if (active.lv !== 0) continue; to.push({ kind: 'crease', rec: active, crease: active.levels[0].crease ? active.levels[0].crease.slice() : null }); active.levels[0].crease = e.crease || undefined; buildCreaseLines(); dsDirty = true; break; }
     if (e.lvl !== active.lv) { if (e.lvl >= active.levels.length) continue; setLevel(e.lvl, true); }
     if (!e.idx && e.pos.length !== pos.length) continue;   // full snapshots (with topology) restore any vertex count
     to.push(snapshot(!!e.idx, e.lay ? e.lay.deltas.map(d => d[0]) : undefined)); restore(e); break;
@@ -2364,7 +2378,7 @@ function deleteHidden() {
   });
 }
 // per-level data that depends on the exact triangles (quad outlines, UVs, baked textures)
-function clearLevelExtras(L) { L.quads = undefined; L.polys = undefined; L.uv = undefined; L.uvIdx = undefined; L.bake = undefined; }
+function clearLevelExtras(L) { L.quads = undefined; L.polys = undefined; L.crease = undefined; L.uv = undefined; L.uvIdx = undefined; L.bake = undefined; }
 
 // ---------------- dynamic topology (Sculptris Pro style): split long edges where the brush has been ----------------
 const DYN_BRUSHES = new Set(['standard', 'clay', 'claybuild', 'inflate', 'blob', 'noise', 'crease', 'dam', 'slash', 'pinch', 'magnify', 'nudge', 'smooth', 'polish', 'flatten', 'trim']);
@@ -3822,14 +3836,39 @@ function loopTopology(ix, n) {
   return { idx: ni, ev: ev.slice(0, eN * 4) };
 }
 // Loop-subdivided positions of the lower level P on the upper level's vertex numbering
+// crease edges (pairs of vertex ids on a level): kept sharp by the subdivision, and carried to the next level
+function creaseSet(L, n) {
+  const c = L.crease; if (!c || !c.length) return null;
+  const set = new Set(); for (let i = 0; i + 1 < c.length; i += 2) { const a = c[i], b = c[i + 1]; if (a >= n || b >= n) return null; set.add(a < b ? a * n + b : b * n + a); }
+  return set;
+}
+function creaseUp(lo, hi, n) {
+  const set = creaseSet(lo, n); if (!set) return undefined;
+  const ev = hi.ev, out = [];
+  for (let e = 0; e < ev.length / 4; e++) { const a = ev[e*4], b = ev[e*4+1]; if (set.has(a < b ? a * n + b : b * n + a)) out.push(a, n + e, n + e, b); }
+  return out.length ? Uint32Array.from(out) : undefined;
+}
 function subdivPositions(P, lo, hi) {
   const n = P.length / 3, ev = hi.ev, nE = ev.length / 4, out = new Float32Array((n + nE) * 3);
   if (!lo.vv) lo.vv = vvOf(lo.idx, n);
   const { start, list } = lo.vv, bnd = new Uint8Array(n);
   for (let e = 0; e < nE; e++) if (ev[e*4+3] < 0) bnd[ev[e*4]] = bnd[ev[e*4+1]] = 1;
+  // creases: an edge on a crease subdivides like a border; a vertex on exactly 2 crease edges follows its crease
+  // curve, a vertex on 3 or more stays a corner
+  const cs = creaseSet(lo, n), isC = cs ? new Uint8Array(nE) : null, cc = cs ? new Uint8Array(n) : null, cn = cs ? new Int32Array(n * 2).fill(-1) : null;
+  if (cs) for (let e = 0; e < nE; e++) {
+    const a = ev[e*4], b = ev[e*4+1]; if (!cs.has(a < b ? a * n + b : b * n + a)) continue;
+    isC[e] = 1;
+    for (const [x, y] of [[a, b], [b, a]]) { if (cc[x] < 2) cn[x * 2 + cc[x]] = y; if (cc[x] < 255) cc[x]++; }
+  }
   for (let v = 0; v < n; v++) {
     const i = v * 3, s0 = start[v], s1 = start[v + 1], c = s1 - s0;
-    if (bnd[v] || c < 3) { out[i] = P[i]; out[i+1] = P[i+1]; out[i+2] = P[i+2]; continue; }
+    if (bnd[v] || c < 3 || (cc && cc[v] >= 3)) { out[i] = P[i]; out[i+1] = P[i+1]; out[i+2] = P[i+2]; continue; }
+    if (cc && cc[v] === 2) {
+      const a = cn[v * 2] * 3, b = cn[v * 2 + 1] * 3;
+      out[i] = P[i] * 0.75 + (P[a] + P[b]) * 0.125; out[i+1] = P[i+1] * 0.75 + (P[a+1] + P[b+1]) * 0.125; out[i+2] = P[i+2] * 0.75 + (P[a+2] + P[b+2]) * 0.125;
+      continue;
+    }
     const beta = c === 3 ? 3 / 16 : 3 / (8 * c), k = 1 - c * beta;
     let ax = 0, ay = 0, az = 0;
     for (let j = s0; j < s1; j++) { const u = list[j] * 3; ax += P[u]; ay += P[u+1]; az += P[u+2]; }
@@ -3837,7 +3876,7 @@ function subdivPositions(P, lo, hi) {
   }
   for (let e = 0; e < nE; e++) {
     const a = ev[e*4]*3, b = ev[e*4+1]*3, o = (n + e) * 3;
-    if (ev[e*4+3] < 0) { out[o] = (P[a]+P[b])/2; out[o+1] = (P[a+1]+P[b+1])/2; out[o+2] = (P[a+2]+P[b+2])/2; }
+    if (ev[e*4+3] < 0 || (isC && isC[e])) { out[o] = (P[a]+P[b])/2; out[o+1] = (P[a+1]+P[b+1])/2; out[o+2] = (P[a+2]+P[b+2])/2; }
     else {
       const c = ev[e*4+2]*3, d = ev[e*4+3]*3;
       out[o]   = 0.375*(P[a]+P[b])     + 0.125*(P[c]+P[d]);
@@ -3943,6 +3982,7 @@ function addLevel() {
   pushEntry(lvSnap());
   const lo = active.levels[active.lv];
   const topo = loopTopology(idx, nV), hi = { idx: topo.idx, ev: topo.ev };
+  hi.crease = creaseUp(lo, hi, nV);
   hi.pos = subdivPositions(pos, lo, hi); hi.ref0 = hi.pos.slice();
   const m = upMask(mask, hi), pt = upAttr(paint, hi, 3);
   active.pg = pgToLevel(pg, 0, hi);
@@ -3961,7 +4001,7 @@ function deleteLower() {
   if (active.lv === 0) { toast('下のレベルはありません'); return; }
   pushEntry(lvSnap());
   const cur = active.levels[active.lv];
-  active.levels = [{ idx: cur.idx, pos: cur.pos, mirror: cur.mirror, quads: cur.quads, polys: cur.polys, uvIdx: cur.uvIdx, uv: cur.uv, bake: cur.bake }, ...active.levels.slice(active.lv + 1)];
+  active.levels = [{ idx: cur.idx, pos: cur.pos, mirror: cur.mirror, quads: cur.quads, polys: cur.polys, crease: cur.crease, uvIdx: cur.uvIdx, uv: cur.uv, bake: cur.bake }, ...active.levels.slice(active.lv + 1)];
   active.lv = 0;
   syncScene(); scheduleSave(); toast('下のレベルを削除しました（今のレベルが一番下になりました）');
 }
@@ -4093,6 +4133,86 @@ function runBoolean(op) {
   });
 }
 
+// ---------------- creases + dynamic subdivision preview ----------------
+let creaseLines = null;
+const creaseMat = new THREE.LineBasicMaterial({ color: 0x5ad1e6, depthTest: true, transparent: true, opacity: 0.95 });
+function buildCreaseLines() {
+  if (creaseLines) { scene.remove(creaseLines); creaseLines.geometry.dispose(); creaseLines = null; }
+  const L = active && active.levels[active.lv], c = L && L.crease && creaseSet(L, nV) ? L.crease : null;
+  if (!c) return;
+  const g = new THREE.BufferGeometry(); g.setAttribute('position', geo.attributes.position); g.setIndex(Array.from(c));
+  creaseLines = new THREE.LineSegments(g, creaseMat); creaseLines.frustumCulled = false; creaseLines.raycast = () => {}; creaseLines.renderOrder = 5;
+  creaseLines.visible = pe.on || S.wire || S.dynSub > 0;
+  scene.add(creaseLines);
+}
+function setCrease(arr) {
+  const L = active.levels[0];
+  L.crease = arr && arr.length ? Uint32Array.from(arr) : undefined;
+  buildCreaseLines(); dsDirty = true; scheduleSave();
+}
+const creaseKeys = () => { const c = active.levels[0].crease, set = new Set(); if (c) for (let i = 0; i < c.length; i += 2) set.add(PE.edgeKey(c[i], c[i + 1])); return set; };
+const keysToPairs = set => { const out = []; for (const k of set) out.push(Math.floor(k / 0x200000), k % 0x200000); return out; };
+function creaseToggleLoop(a, b) {
+  const M = peMeshOf(), loop = PE.edgeLoop(M.polys, nV, a, b, M.vf), set = creaseKeys();
+  pushCrease();
+  const on = !set.has(PE.edgeKey(a, b));
+  for (const [u, w] of loop.edges) { const k = PE.edgeKey(u, w); if (on) set.add(k); else set.delete(k); }
+  setCrease(keysToPairs(set));
+  toast(on ? `${loop.edges.length} 本の辺にクリースを付けました` : `${loop.edges.length} 本の辺のクリースを外しました`);
+}
+function creaseByAngle(deg = 30) {
+  if (peAvailable()) { toast(peAvailable()); return; }
+  const M = peMeshOf(), by = PE.adjacency(M.polys), c = Math.cos(deg * Math.PI / 180), set = new Set();
+  const fn = M.polys.map(f => PE.polyNormal(pos, f));
+  for (const [k, fs] of by) if (fs.length === 2) { const a = fn[fs[0]], b = fn[fs[1]]; if (a[0]*b[0] + a[1]*b[1] + a[2]*b[2] < c) set.add(k); }
+  pushCrease(); setCrease(keysToPairs(set));
+  toast(set.size ? `${set.size} 本の角の辺にクリースを付けました` : '30°以上の角はありませんでした');
+}
+// crease edits are undoable: the whole crease list is one snapshot
+function pushCrease() { pushEntry({ kind: 'crease', rec: active, crease: active.levels[0].crease ? active.levels[0].crease.slice() : null }); }
+
+// Dynamic subdivision (preview only): the smooth, crease-aware Loop surface of the low-poly part is drawn in place
+// of the part while you model; "apply" turns it into real subdivision levels.
+let dsMesh = null, dsDirty = true;
+function dsClear() { if (dsMesh) { scene.remove(dsMesh); dsMesh.geometry.dispose(); dsMesh = null; } }
+function dsUpdate() {
+  dsDirty = false;
+  const k = S.dynSub | 0;
+  $('dsApply').disabled = !(k > 0 && active && active.levels.length === 1);
+  if (!k || !active || active.levels.length !== 1 || !mesh) { dsClear(); return; }
+  let n = Math.min(k, Math.max(0, Math.floor(Math.log(2_000_000 / Math.max(1, nF)) / Math.log(4))));
+  let L = { idx, crease: active.levels[0].crease }, P = pos, C = col;
+  for (let i = 0; i < n; i++) {
+    const nv = P.length / 3, t = loopTopology(L.idx, nv), hi = { idx: t.idx, ev: t.ev };
+    hi.crease = creaseUp(L, hi, nv); P = subdivPositions(P, L, hi); C = upAttr(C, hi, 3); L = hi;
+  }
+  if (!dsMesh || dsMesh.geometry.index.count !== L.idx.length) {
+    dsClear();
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(P, 3)); g.setAttribute('color', new THREE.BufferAttribute(C, 3)); g.setIndex(new THREE.BufferAttribute(L.idx, 1));
+    g.setAttribute('normal', new THREE.BufferAttribute(computeNormals(P, L.idx), 3));
+    dsMesh = new THREE.Mesh(g, material); dsMesh.frustumCulled = false; dsMesh.raycast = () => {}; dsMesh.matrixAutoUpdate = false;
+    scene.add(dsMesh);
+  } else {
+    const g = dsMesh.geometry;
+    g.attributes.position.array.set(P); g.attributes.position.needsUpdate = true;
+    g.attributes.color.array.set(C); g.attributes.color.needsUpdate = true;
+    g.attributes.normal.array.set(computeNormals(P, L.idx)); g.attributes.normal.needsUpdate = true;
+    dsMesh.material = material;
+  }
+}
+function dsSet(k) {
+  if (k > 0 && active.levels.length !== 1) { toast('なめらか表示は細分化レベルがないパーツで使えます'); k = 0; }
+  S.dynSub = k; $('dsLevel').value = String(k); dsDirty = true;
+  if (creaseLines) creaseLines.visible = pe.on || S.wire || k > 0;
+  if (k > 0 && wireMesh) wireMesh.visible = true; else if (wireMesh) wireMesh.visible = S.wire;
+}
+function dsApply() {
+  const k = S.dynSub | 0; if (!k || active.levels.length !== 1) return;
+  dsSet(0); dsClear(); if (pe.on) peSet(false);
+  for (let i = 0; i < k; i++) addLevel();
+}
+
 // ---------------- polygon editing (ZModeler-like) ----------------
 // Works on the polygon faces of a single-level part (flow / grid retopo keep theirs; triangle parts are paired
 // into quads first). Every operation rebuilds the part (one undo step); extrude / inset / move then follow the drag.
@@ -4149,7 +4269,14 @@ function peHover(e) {
   const M = peMeshOf(), segs = [];
   const outline = f => { const g = M.polys[f]; for (let k = 0; k < g.length; k++) segs.push(...pePt(pos, g[k]), ...pePt(pos, g[(k + 1) % g.length])); };
   const a = pe.action;
-  if (a === 'loop') {
+  if (a === 'bevel' || a === 'crease') {
+    for (const [u, w] of PE.edgeLoop(M.polys, nV, h.edge[0], h.edge[1], M.vf).edges) segs.push(...pePt(pos, u), ...pePt(pos, w));
+  } else if (a === 'bridge') {
+    const fs = M.vf[h.edge[0]].filter(i => M.polys[i].includes(h.edge[1]));
+    const show = l => { if (l) for (let i = 0; i < l.length; i++) segs.push(...pePt(pos, l[i]), ...pePt(pos, l[(i + 1) % l.length])); };
+    if (pe.bridgeA) show(PE.holeLoop(M.polys, pe.bridgeA[0], pe.bridgeA[1]));
+    if (fs.length === 1) show(PE.holeLoop(M.polys, h.edge[0], h.edge[1]));
+  } else if (a === 'loop') {
     const r = PE.insertLoop(pos, M.polys, h.edge[0], h.edge[1], 0.5);
     if (r) for (let i = 0; i < r.segs.length; i += 2) segs.push(...pePt(r.pos, r.segs[i]), ...pePt(r.pos, r.segs[i + 1]));
   } else if (a === 'close') {
@@ -4167,6 +4294,8 @@ function peReplace(res) {
   const rec = newRec(old.name, res.pos, tri, m);
   rec.paint = pt; rec.pg = g; rec.visible = old.visible;
   rec.levels[0].polys = PE.fromPolys(res.polys);
+  const cr = PE.carryCreases(pos, res.polys, res.pos, src, old.levels[0].crease);
+  if (cr) rec.levels[0].crease = cr;
   subtools.splice(subtools.indexOf(old), 1, rec);
   activate(rec, true); scheduleSave();
   return rec;
@@ -4184,6 +4313,31 @@ function peDown(e) {
     const sel = peSelection(h.f);
     if (sel.length >= M.polys.length) { toast('すべての面は消せません'); return true; }
     peReplace(PE.deleteFaces(pos, M.polys, sel)); toast(`${sel.length} 枚の面を消しました`);
+  } else if (a === 'crease') {
+    creaseToggleLoop(h.edge[0], h.edge[1]);
+  } else if (a === 'bridge') {
+    const fs = M.vf[h.edge[0]].filter(i => M.polys[i].includes(h.edge[1]));
+    if (fs.length !== 1) { toast('穴のふちの辺をクリックしてください'); return true; }
+    if (!pe.bridgeA) { pe.bridgeA = [h.edge[0], h.edge[1]]; toast('つなぐ もう1つの穴のふちをクリックしてください'); peHover(e); return true; }
+    const [a1, b1] = pe.bridgeA; pe.bridgeA = null;
+    const r = PE.bridge(pos, M.polys, a1, b1, h.edge[0], h.edge[1]);
+    if (r.error === 'same') toast('同じ穴です。別の穴のふちをクリックしてください');
+    else if (r.error === 'count') toast(`2つの穴の辺の数が違うのでつなげません（${r.a} と ${r.b}）。ループを入れて数を揃えてください`);
+    else if (r.error) toast('穴のふちの辺をクリックしてください');
+    else { peReplace(r); toast(`2つの穴をつなぎました（${r.size} 枚の四角）`); }
+  } else if (a === 'bevel') {
+    const loop = PE.edgeLoop(M.polys, nV, h.edge[0], h.edge[1], M.vf);
+    const base = pos.slice(), polys = M.polys, t0 = 0.12;
+    const r = PE.bevel(base, polys, loop.edges, t0);
+    if (!r) { toast('この辺は面取りできません（穴のふちや、3枚以上の面が集まる辺）'); return true; }
+    const was = creaseKeys(), rec = peReplace(r);
+    if (loop.edges.some(([u, w]) => was.has(PE.edgeKey(u, w)))) {   // a creased edge stays sharp: crease the new rails
+      const set = creaseKeys(); for (let i = 0; i < r.rails.length; i += 2) set.add(PE.edgeKey(r.rails[i], r.rails[i + 1]));
+      active.levels[0].crease = Uint32Array.from(keysToPairs(set)); buildCreaseLines();
+    }
+    pe.drag = { id: e.pointerId, y0: e.clientY, kind: 'bevel', base, polys, edges: loop.edges, t: t0, rec, amt: t0, nOut: r.pos.length };
+    controls.enabled = false; canvas.setPointerCapture(e.pointerId); peShow(null);
+    toast(`${loop.edges.length} 本の辺を面取りします（上下にドラッグで幅）`);
   } else if (a === 'close') {
     const r = PE.closeHole(pos, M.polys, h.edge[0], h.edge[1]);
     if (!r) { toast('穴のふちの辺をクリックしてください'); return true; }
@@ -4214,6 +4368,12 @@ function peDragTo(e) {
   const d = pe.drag; if (!d || active !== d.rec) return;
   const dy = (d.y0 - e.clientY) / Math.max(200, view.clientHeight);   // fraction of the view height
   const B = d.base;
+  if (d.kind === 'bevel') {
+    const t = Math.max(0.02, Math.min(0.48, d.t + dy * 1.2)); d.amt = t;
+    const r = PE.bevel(B, d.polys, d.edges, t);
+    if (r && r.pos.length === pos.length) pos.set(r.pos);
+    computeAllNormals(); geo.computeBoundingSphere(); dsDirty = true; return;
+  }
   if (d.kind === 'inset') {
     const t = Math.max(0, Math.min(0.95, dy * 2)); d.amt = t;
     for (const [c, v] of d.moved) for (let k = 0; k < 3; k++) pos[c*3+k] = B[v*3+k] + (d.center[k] - B[v*3+k]) * t;
@@ -4221,19 +4381,20 @@ function peDragTo(e) {
     const off = dy * d.size * 0.6; d.amt = off;
     for (const [c, v, n] of d.moved) for (let k = 0; k < 3; k++) pos[c*3+k] = B[v*3+k] + n[k] * off;
   }
-  computeAllNormals(); geo.computeBoundingSphere();
+  computeAllNormals(); geo.computeBoundingSphere(); dsDirty = true;
 }
 function peUp() {
   const d = pe.drag; pe.drag = null; controls.enabled = true;
   if (!d) return;
   geo.computeBoundingBox(); mirror = active.mirror = active.levels[0].mirror = computeMirror(pos);
   scheduleSave();
-  const what = { extrude: '押し出しました', inset: 'はめ込みました', move: '面を動かしました' }[d.kind];
+  const what = { extrude: '押し出しました', inset: 'はめ込みました', move: '面を動かしました', bevel: '面取りしました' }[d.kind];
   toast(Math.abs(d.amt) < 1e-6 ? `${what}（ドラッグで量を決めます。元に戻すで取り消せます）` : what);
 }
 function peSet(on) {
   if (on) { const why = peAvailable(); if (why) { toast(why); $('peOn').checked = false; return; } if (gizmoOn) setGizmo(false); }
-  pe.on = on; $('peOn').checked = on; pe.cache = null; pe.hover = null; peShow(null);
+  pe.on = on; $('peOn').checked = on; pe.cache = null; pe.hover = null; pe.bridgeA = null; peShow(null);
+  if (creaseLines) creaseLines.visible = on || S.wire || S.dynSub > 0;
   ring.visible = ring2.visible = quad.visible = quad2.visible = false;
   if (on) { const L = active.levels[0]; if (!levelPolys(L)) { L.polys = PE.fromPolys(peMeshOf().polys); setMesh(pos, idx, mask, mirror, paint); } toast('ポリゴン編集モード：面や辺にカーソルを合わせてクリック'); }
 }
@@ -4961,7 +5122,7 @@ $('alphaDel').onclick = () => {
 $('invert').onchange = e => S.invert = e.target.checked;
 $('backface').onchange = e => S.backface = e.target.checked;
 function setSym(v) { S.sym = v; $('chipSym').classList.toggle('on', v); updateStats(); }
-function setWire(v) { S.wire = v; $('chipWire').classList.toggle('on', v); if (wireMesh) wireMesh.visible = v; }
+function setWire(v) { S.wire = v; $('chipWire').classList.toggle('on', v); if (wireMesh) wireMesh.visible = v || S.dynSub > 0; if (creaseLines) creaseLines.visible = pe.on || v || S.dynSub > 0; }
 $('chipSym').onclick = () => setSym(!S.sym);
 $('chipWire').onclick = () => setWire(!S.wire);
 $('chipFrame').onclick = frame;
@@ -4983,8 +5144,12 @@ $('nzPreview').onclick = () => noisePreview();
 $('nzApply').onclick = () => noiseApply();
 $('nzCancel').onclick = () => noiseCancel();
 $('peOn').onchange = e => peSet(e.target.checked);
+$('peCreaseAngle').onclick = () => creaseByAngle(30);
+$('peCreaseClear').onclick = () => { if (!active.levels[0].crease) { toast('クリースはありません'); return; } if (active.levels.length !== 1) { toast('細分化レベルがないパーツで使えます'); return; } pushCrease(); setCrease(null); toast('クリースを全部外しました'); };
+$('dsLevel').onchange = e => dsSet(+e.target.value);
+$('dsApply').onclick = () => busy(dsApply);
 for (const b of $('peActs').querySelectorAll('[data-pe]')) b.onclick = () => {
-  pe.action = b.dataset.pe;
+  pe.action = b.dataset.pe; pe.bridgeA = null;
   for (const x of $('peActs').children) x.classList.toggle('on', x === b);
   if (!pe.on) peSet(true);
 };
@@ -5236,6 +5401,9 @@ function fitView() {
 fitView();   // right away too: the observer only fires on a rendered frame
 new ResizeObserver(fitView).observe(view);
 
+// the preview follows sculpting too: compare a cheap checksum of the cage every half second
+let dsAge = 0, dsSum = 0;
+function dsCheck() { dsAge = 0; let s = 0; for (let i = 0; i < pos.length; i += 7) s += pos[i] * (i % 13 + 1); if (s !== dsSum) { dsSum = s; return true; } return false; }
 renderer.setAnimationLoop(() => {
   if ((gpuDirty || gpuPart) && geo) {
     const A = [geo.attributes.position, geo.attributes.normal]; if (colorDirty) A.push(geo.attributes.color);
@@ -5257,7 +5425,11 @@ renderer.setAnimationLoop(() => {
     colorDirty = false; gpuDirty = gpuPart = false;
   }
   if (!stroke) ensureBVH();
+  if (S.dynSub && (dsDirty || (!stroke && !pe.drag && dsAge++ > 30))) { if (dsDirty || dsCheck()) dsUpdate(); }
+  const hideCage = !!(dsMesh && mesh && S.dynSub);
+  if (hideCage) mesh.visible = false;
   renderer.render(scene, camera);
+  if (hideCage) mesh.visible = true;
 });
 
 // ---------------- boot ----------------
@@ -5294,6 +5466,18 @@ renderer.setAnimationLoop(() => {
     if (first) importFile(first);
   }
   window.__boardPainter = {
+    lowCube(n = 1) {   // a box of n x n x n quads per side as the only part (tests)
+      let P = new Float32Array([-0.8,-0.8,-0.8, 0.8,-0.8,-0.8, 0.8,0.8,-0.8, -0.8,0.8,-0.8, -0.8,-0.8,0.8, 0.8,-0.8,0.8, 0.8,0.8,0.8, -0.8,0.8,0.8]);
+      let polys = [[0,3,2,1],[4,5,6,7],[0,1,5,4],[2,3,7,6],[1,2,6,5],[0,4,7,3]];
+      const rec = newRec('箱', P, PE.triangulate(P, polys), null); rec.levels[0].polys = PE.fromPolys(polys);
+      subtools = [rec]; activate(rec, true); frame(); return nV;
+    },
+    get crease() { const c = active.levels[0].crease; return c ? Array.from(c) : null; },
+    pePolys() { const M = peMeshOf(); return { polys: M.polys, pos: Array.from(pos) }; },
+    peSetAction(a) { document.querySelector(`[data-pe="${a}"]`).click(); return pe.action; },
+    get dsInfo() { return dsMesh ? { nF: dsMesh.geometry.index.count / 3, visible: dsMesh.visible, cageHidden: true } : null; },
+    dsPos() { return dsMesh ? Array.from(dsMesh.geometry.attributes.position.array) : null; },
+    levelCount() { return active.levels.length; },
     setBrush(id, cfg = {}, st = {}) { S.brush = id; Object.assign(BS[id], cfg); Object.assign(S, st); refreshBrushUI(); return { ...BS[id] }; },
     posCopy() { return Array.from(pos.subarray(0, nV * 3)); },
     get pgInfo() { return pg ? Array.from(new Set(pg)).length : 0; },

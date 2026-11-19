@@ -214,3 +214,176 @@ export function borderEdges(polys) {
   return out;
 }
 export { ek as edgeKey };
+
+// ---------------- Phase 17: edge loops, crease carry-over, bevel, bridge ----------------
+export function vertFaces(polys, nV) {
+  const vf = Array.from({ length: nV }, () => []);
+  polys.forEach((f, i) => { for (const v of f) vf[v].push(i); });
+  return vf;
+}
+// faces around v in winding order; between[i] = the vertex x of edge (v, x) shared by faces[i] and faces[i + 1].
+// null at a border (or a non-manifold) vertex
+function ringAt(polys, vfv, v) {
+  if (!vfv.length) return null;
+  const faces = [], between = [];
+  let f = vfv[0];
+  for (let guard = 0; guard <= vfv.length; guard++) {
+    const g = polys[f], k = g.indexOf(v), prev = g[(k + g.length - 1) % g.length];
+    faces.push(f); between.push(prev);
+    // the next face around v holds the directed edge v -> prev
+    const nf = vfv.find(h => { const q = polys[h], j = q.indexOf(v); return h !== f && q[(j + 1) % q.length] === prev; });
+    if (nf === undefined) return null;
+    if (nf === faces[0]) return faces.length === vfv.length ? { faces, between } : null;
+    f = nf;
+  }
+  return null;
+}
+// the loop of edges through (a, b): continues straight through vertices with 4 quads around them
+export function edgeLoop(polys, nV, a, b, vf = vertFaces(polys, nV)) {
+  const edges = [[a, b]], seen = new Set([ek(a, b)]);
+  let closed = false;
+  const follow = (u, w, push) => {
+    for (let guard = 0; guard < 100000; guard++) {
+      const fs = vf[w]; if (fs.length !== 4 || fs.some(f => polys[f].length !== 4)) return;
+      const r = ringAt(polys, fs, w); if (!r) return;
+      const i = r.between.indexOf(u); if (i < 0) return;
+      const x = r.between[(i + 2) % 4], k = ek(w, x);
+      if (seen.has(k)) { if (x === a || x === b) closed = true; return; }
+      seen.add(k); push([w, x]); u = w; w = x;
+    }
+  };
+  follow(a, b, e => edges.push(e));
+  if (!closed) { const back = []; follow(b, a, e => back.push(e)); edges.unshift(...back.reverse().map(([x, y]) => [y, x])); }
+  return { edges, closed };
+}
+
+// keep crease edges through an operation: an output edge is creased when the input edge it was copied from was,
+// and both of its ends are still where they were
+export function carryCreases(Pold, polysOut, Pnew, src, crease) {
+  if (!crease || !crease.length) return null;
+  const set = new Set(); for (let i = 0; i < crease.length; i += 2) set.add(ek(crease[i], crease[i + 1]));
+  // a vertex still lies on the old edge (a, b) (unmoved, or slid along it by a bevel)
+  const onOld = (v, a, b) => {
+    const ax = Pold[a*3], ay = Pold[a*3+1], az = Pold[a*3+2], dx = Pold[b*3] - ax, dy = Pold[b*3+1] - ay, dz = Pold[b*3+2] - az;
+    const L2 = dx*dx + dy*dy + dz*dz; if (L2 < 1e-20) return false;
+    const px = Pnew[v*3] - ax, py = Pnew[v*3+1] - ay, pz = Pnew[v*3+2] - az, t = (px*dx + py*dy + pz*dz) / L2;
+    if (t < -1e-6 || t > 1 + 1e-6) return false;
+    const ex = px - dx * t, ey = py - dy * t, ez = pz - dz * t;
+    return ex*ex + ey*ey + ez*ez <= L2 * 1e-10;
+  };
+  const out = [], done = new Set();
+  for (const f of polysOut) for (let k = 0; k < f.length; k++) {
+    const x = f[k], y = f[(k + 1) % f.length], key = ek(x, y);
+    if (done.has(key)) continue; done.add(key);
+    if (src[x] !== src[y] && set.has(ek(src[x], src[y])) && onOld(x, src[x], src[y]) && onOld(y, src[x], src[y])) out.push(x, y);
+  }
+  return out.length ? Uint32Array.from(out) : null;
+}
+
+// Chamfer the edges (an edge loop or any chain): every edge becomes a strip of quads `t` wide (fraction of the
+// neighbouring edges). Chain ends get a small corner face (or, at a 3-face corner, the third face takes both new
+// vertices). Needs closed (manifold) surroundings. Returns { pos, polys, src, strip: [new strip face indices] } or null.
+export function bevel(P, polys, edges, t = 0.2) {
+  const nV = P.length / 3, vf = vertFaces(polys, nV), byEdge = adjacency(polys);
+  const E = new Set(); for (const [u, w] of edges) { const k = ek(u, w); if ((byEdge.get(k) || []).length !== 2) return null; E.add(k); }
+  if (!E.size) return null;
+  const cnt = new Map(); for (const k of E) for (const v of [Math.floor(k / 0x200000), k % 0x200000]) cnt.set(v, (cnt.get(v) || 0) + 1);
+  const extra = [], srcX = [];
+  const addV = (v, x, y, z) => { extra.push(x, y, z); srcX.push(v); return nV + srcX.length - 1; };
+  const rep = new Map();        // face * 2^21 + v -> replacement vertex
+  const ins = new Map();        // undirected edge key -> { v, nv }: insert nv next to v on that edge (faces that keep v)
+  const corner3 = new Set();    // end vertices with 3 faces: dissolved into the third face
+  const T = Math.max(0.01, Math.min(0.49, t));
+  const at = (v, x, s) => [P[v*3] + (P[x*3] - P[v*3]) * s, P[v*3+1] + (P[x*3+1] - P[v*3+1]) * s, P[v*3+2] + (P[x*3+2] - P[v*3+2]) * s];
+  for (const [v, c] of cnt) {
+    const r = ringAt(polys, vf[v], v); if (!r) return null;
+    const n = r.faces.length, sel = []; for (let i = 0; i < n; i++) if (E.has(ek(v, r.between[i]))) sel.push(i);
+    if (c === 1) {
+      const i = sel[0], A = r.faces[i], B = r.faces[(i + 1) % n];
+      const xa = r.between[(i + n - 1) % n], xb = r.between[(i + 1) % n];   // A's other edge, B's other edge
+      const v1 = addV(v, ...at(v, xa, T)), v2 = addV(v, ...at(v, xb, T));
+      rep.set(A * 0x200000 + v, v1); rep.set(B * 0x200000 + v, v2);
+      ins.set(ek(v, xa), { v, nv: v1 }); ins.set(ek(v, xb), { v, nv: v2 });
+      if (n === 3) corner3.add(v);
+      continue;
+    }
+    // sectors between consecutive selected edges: one new vertex each, slid along the sector's inner edges
+    for (let s = 0; s < sel.length; s++) {
+      const i0 = sel[s], i1 = sel[(s + 1) % sel.length], fs = [], inner = [];
+      for (let j = (i0 + 1) % n; ; j = (j + 1) % n) { fs.push(r.faces[j]); if (j === i1) break; inner.push(r.between[j]); }
+      let x = 0, y = 0, z = 0;
+      if (inner.length) { for (const u of inner) { const q = at(v, u, T); x += q[0]; y += q[1]; z += q[2]; } x /= inner.length; y /= inner.length; z /= inner.length; }
+      else {   // no edge to slide along: move into the face(s) of the sector
+        let cx = 0, cy = 0, cz = 0, m = 0; for (const f of fs) for (const u of polys[f]) { cx += P[u*3]; cy += P[u*3+1]; cz += P[u*3+2]; m++; }
+        cx /= m; cy /= m; cz /= m; x = P[v*3] + (cx - P[v*3]) * T * 2; y = P[v*3+1] + (cy - P[v*3+1]) * T * 2; z = P[v*3+2] + (cz - P[v*3+2]) * T * 2;
+      }
+      const nvx = addV(v, x, y, z); for (const f of fs) rep.set(f * 0x200000 + v, nvx);
+    }
+  }
+  // rebuild every face: replaced corners, dropped 3-face corners, new end vertices inserted on their edges
+  const out = polys.map((g, fi) => {
+    const ng = [];
+    for (let k = 0; k < g.length; k++) {
+      const v = g[k], w = g[(k + 1) % g.length], rv = rep.get(fi * 0x200000 + v);
+      if (rv !== undefined) ng.push(rv); else if (!corner3.has(v)) ng.push(v);
+      const e = ins.get(ek(v, w));   // between v and w, in faces that still hold the old end vertex
+      if (e && (e.v === v || e.v === w) && rep.get(fi * 0x200000 + e.v) === undefined) ng.push(e.nv);
+    }
+    return ng;
+  });
+  const strip = [];
+  for (const k of E) {
+    const [A, B] = byEdge.get(k), g = polys[A], u0 = Math.floor(k / 0x200000), w0 = k % 0x200000;
+    const j = g.indexOf(u0), dirUW = g[(j + 1) % g.length] === w0;
+    const u = dirUW ? u0 : w0, w = dirUW ? w0 : u0;   // A holds u -> w, B holds w -> u
+    const R = (f, v) => rep.get(f * 0x200000 + v);
+    strip.push(out.length); out.push([R(A, w), R(A, u), R(B, u), R(B, w)]);
+  }
+  // close the little holes left at chain ends (corners with more than 3 faces)
+  const pos = new Float32Array(P.length + extra.length); pos.set(P); pos.set(extra, P.length);
+  const src = new Int32Array(pos.length / 3); for (let v = 0; v < nV; v++) src[v] = v; srcX.forEach((s, i) => { src[nV + i] = s; });
+  const cleaned = out.map(f => f.filter((v, i) => v !== f[(i + 1) % f.length]));
+  const be = adjacency(cleaned), nxt = new Map();
+  for (const [key, fs] of be) if (fs.length === 1) {
+    const g = cleaned[fs[0]]; for (let i = 0; i < g.length; i++) { const x = g[i], y = g[(i + 1) % g.length]; if (ek(x, y) === key) { nxt.set(y, x); break; } }
+  }
+  const used = new Set();
+  for (const [s0] of nxt) {
+    const c0 = cnt.get(src[s0]); if (used.has(s0) || c0 === undefined || c0 === 2) continue;   // holes only at chain ends and at corners of 3+ edges
+    const loop = [s0]; let v = nxt.get(s0);
+    while (v !== undefined && v !== s0 && loop.length < 16) { loop.push(v); v = nxt.get(v); }
+    if (v === s0 && loop.length >= 3) { loop.forEach(x => used.add(x)); cleaned.push(loop); }
+  }
+  const c = compact(pos, cleaned, src);
+  // the two long edges of every strip face (to keep a crease on the bevelled edge sharp)
+  const rails = []; for (const f of strip) { const q = c.polys[f]; rails.push(q[0], q[1], q[2], q[3]); }
+  return { ...c, strip: strip.length, rails };
+}
+
+// Bridge two holes with a band of quads (same number of border edges). (a1, b1) and (a2, b2): one border edge of each.
+export function holeLoop(polys, a, b) {
+  const byEdge = adjacency(polys), l = byEdge.get(ek(a, b)); if (!l || l.length !== 1) return null;
+  const out = new Map();
+  for (const [k, fs] of byEdge) {
+    if (fs.length !== 1) continue;
+    const g = polys[fs[0]];
+    for (let i = 0; i < g.length; i++) { const x = g[i], y = g[(i + 1) % g.length]; if (ek(x, y) === k) { out.set(y, x); break; } }
+  }
+  const st = out.has(a) ? a : b, loop = [st]; let v = out.get(st);
+  while (v !== undefined && v !== st && loop.length < 100000) { loop.push(v); v = out.get(v); }
+  return v === st && loop.length >= 3 ? loop : null;
+}
+export function bridge(P, polys, a1, b1, a2, b2) {
+  const A = holeLoop(polys, a1, b1), B = holeLoop(polys, a2, b2);
+  if (!A || !B) return { error: 'border' };
+  if (A.includes(B[0])) return { error: 'same' };
+  if (A.length !== B.length) return { error: 'count', a: A.length, b: B.length };
+  const n = A.length, d2 = (x, y) => { const dx = P[x*3] - P[y*3], dy = P[x*3+1] - P[y*3+1], dz = P[x*3+2] - P[y*3+2]; return dx*dx + dy*dy + dz*dz; };
+  let best = 0, bd = Infinity;
+  for (let s = 0; s < n; s++) { let d = 0; for (let i = 0; i < n; i++) d += d2(A[i], B[((s - i) % n + n) % n]); if (d < bd) { bd = d; best = s; } }
+  const bi = i => B[((best - i) % n + n) % n];
+  const out = polys.slice();
+  for (let i = 0; i < n; i++) out.push([A[i], A[(i + 1) % n], bi(i + 1), bi(i)]);
+  const pos = new Float32Array(P), src = new Int32Array(P.length / 3).map((_, i) => i);
+  return { pos, polys: out, src, size: n };
+}
