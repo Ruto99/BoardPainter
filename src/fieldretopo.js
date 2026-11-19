@@ -236,8 +236,11 @@ function compatPos(p0, n0, q0, o0, p1, n1, q1, o1, s) {
   }
   return [r0, r1];
 }
+// SC: per-vertex spacing multiplier (density painting) or null; a pair of vertices uses the mean of their spacings
 function smoothPositions(L, Q, O, s, iters, shuffle) {
-  const nat = tryAccel('smoothPos', [f32(L.V), f32(L.N), Q, O, L.adj.start, L.adj.list, L.con.fo, L.con.fx, s, iters, !!shuffle, PARALLEL.on]);
+  const SC = L.SC || null;
+  const nat = SC ? tryAccel('smoothPosScaled', [f32(L.V), f32(L.N), Q, O, L.adj.start, L.adj.list, L.con.fo, L.con.fx, s, iters, !!shuffle, PARALLEL.on, SC])
+                 : tryAccel('smoothPos', [f32(L.V), f32(L.N), Q, O, L.adj.start, L.adj.list, L.con.fo, L.con.fx, s, iters, !!shuffle, PARALLEL.on]);
   if (nat) { O.set(nat); return; }
   const n = L.V.length / 3, ord = shuffle ? order(n, 13) : null;
   for (let it = 0; it < iters; it++) for (let ii = 0; ii < n; ii++) {
@@ -247,13 +250,13 @@ function smoothPositions(L, Q, O, s, iters, shuffle) {
     let o = get(O, i), ws = 0;
     for (let j = L.adj.start[i]; j < L.adj.start[i + 1]; j++) {
       const u = L.adj.list[j], w = L.con.fo[u] ? 4 : 1;
-      const [a, b] = compatPos(vi, ni, qi, o, get(L.V, u), get(L.N, u), get(Q, u), get(O, u), s);
+      const [a, b] = compatPos(vi, ni, qi, o, get(L.V, u), get(L.N, u), get(Q, u), get(O, u), SC ? s * (SC[i] + SC[u]) / 2 : s);
       o = [(a[0]*ws + b[0]*w) / (ws + w), (a[1]*ws + b[1]*w) / (ws + w), (a[2]*ws + b[2]*w) / (ws + w)];
       ws += w;
       const d = (o[0]-vi[0])*ni[0] + (o[1]-vi[1])*ni[1] + (o[2]-vi[2])*ni[2];
       o = [o[0] - ni[0]*d, o[1] - ni[1]*d, o[2] - ni[2]*d];
     }
-    o = lattice(o, qi, ni, vi, s, true);
+    o = lattice(o, qi, ni, vi, SC ? s * SC[i] : s, true);
     if (L.con.fx[i]) o = onPlane(o, qi, cross(ni, qi));
     set3(O, i, o);
   }
@@ -374,10 +377,15 @@ function fanSplit(loop, use) {
 export function fieldRetopo(src, opt) {
   const sp = src.pos, si = src.idx;
   let area = 0, mn = [Infinity, Infinity, Infinity], mx = [-Infinity, -Infinity, -Infinity];
+  // density painting (opt.density: per source vertex, -1..1 = half .. double the edge density): the spacing at a
+  // point is s * 2^-d, and s is chosen so the painted surface still gets about `target` faces
+  const D = opt.density && opt.density.length === sp.length / 3 && opt.density.some(x => Math.abs(x) > 0.01) ? opt.density : null;
+  let fmin = 1;
   for (let f = 0; f < si.length; f += 3) {
     const a = si[f]*3, b = si[f+1]*3, c = si[f+2]*3;
     const ux = sp[b]-sp[a], uy = sp[b+1]-sp[a+1], uz = sp[b+2]-sp[a+2], wx = sp[c]-sp[a], wy = sp[c+1]-sp[a+1], wz = sp[c+2]-sp[a+2];
-    area += Math.hypot(uy*wz - uz*wy, uz*wx - ux*wz, ux*wy - uy*wx) / 2;
+    const A = Math.hypot(uy*wz - uz*wy, uz*wx - ux*wz, ux*wy - uy*wx) / 2;
+    if (D) { const fs = 2 ** -((D[si[f]] + D[si[f+1]] + D[si[f+2]]) / 3); area += A / (fs * fs); fmin = Math.min(fmin, fs); } else area += A;
   }
   for (let i = 0; i < sp.length; i += 3) for (let k = 0; k < 3; k++) { mn[k] = Math.min(mn[k], sp[i+k]); mx[k] = Math.max(mx[k], sp[i+k]); }
   const pure = opt.pureQuad !== false;
@@ -387,7 +395,7 @@ export function fieldRetopo(src, opt) {
 
   // ---- working mesh
   // desktop (native kernels): allow a finer working mesh, so high targets keep ~2.5 working vertices per quad edge
-  const res = Math.min(accelInfo() ? 512 : 320, Math.max(24, Math.round(ext / (s / (opt.density ?? 2.5)))));
+  const res = Math.min(accelInfo() ? 512 : 320, Math.max(24, Math.round(ext / (s * fmin / (opt.workDensity ?? 2.5)))));
   const W = remesh({ pos: sp, idx: si }, { res, project: true, smooth: 2, symX: sym });
   if (!W) return null;
   let V = W.pos, WI = W.idx;
@@ -407,6 +415,28 @@ export function fieldRetopo(src, opt) {
     if (!isSeam.some(x => x)) sym = false; else { V = V2; WI = new Uint32Array(I2); seam = isSeam; }
   }
   const n = V.length / 3, N = vertexNormals(V, WI), adj = buildNeighbors(n, WI);
+  let SC = null;
+  if (D) {   // the painted density on the working mesh (nearest source point, then smoothed so it changes gradually)
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(sp, 3)); g.setIndex(new THREE.BufferAttribute(si.slice(), 1));
+    const bvh = new MeshBVH(g), q = new THREE.Vector3(), hit = { point: new THREE.Vector3(), distance: 0, faceIndex: 0 }, tri = new THREE.Triangle(), bc = new THREE.Vector3();
+    const gi = g.index.array, A = new THREE.Vector3(), B = new THREE.Vector3(), C = new THREE.Vector3();
+    let d = new Float32Array(n);
+    for (let v = 0; v < n; v++) {
+      q.set(V[v*3], V[v*3+1], V[v*3+2]);
+      if (!bvh.closestPointToPoint(q, hit)) continue;
+      const f = hit.faceIndex * 3, a = gi[f], b = gi[f+1], c = gi[f+2];
+      A.fromArray(sp, a * 3); B.fromArray(sp, b * 3); C.fromArray(sp, c * 3); tri.set(A, B, C); tri.getBarycoord(hit.point, bc);
+      d[v] = D[a] * bc.x + D[b] * bc.y + D[c] * bc.z;
+    }
+    for (let it = 0; it < 6; it++) {
+      const e = new Float32Array(n);
+      for (let v = 0; v < n; v++) { let t = d[v], k = 1; for (let j = adj.start[v]; j < adj.start[v + 1]; j++) { t += d[adj.list[j]]; k++; } e[v] = t / k; }
+      d = e;
+    }
+    SC = new Float32Array(n); for (let v = 0; v < n; v++) SC[v] = 2 ** -Math.max(-1, Math.min(1, d[v]));
+  }
+  const scAt = v => SC ? SC[v] : 1;
 
   // ---- constraints: symmetry seam, sharp edges and corners
   const con = { fq: new Uint8Array(n), fo: new Uint8Array(n), fx: new Uint8Array(n), q: new Float32Array(n * 3), o: new Float32Array(n * 3) };
@@ -441,19 +471,19 @@ export function fieldRetopo(src, opt) {
         con.fq[v] = 1; set3(con.q, v, q);
         con.fx[v] = 1;
         // a seam vertex can also sit on a crease crossing / corner: pin its lattice point there
-        const c = FI && FI.closestCorner(p, s * 0.6);
+        const c = FI && FI.closestCorner(p, s * scAt(v) * 0.6);
         if (c) { con.fo[v] = 1; set3(con.o, v, c.point); }
         continue;
       }
     }
     if (GI) {
-      const g = GI.closestSeg(p, s * 1.2);
+      const g = GI.closestSeg(p, s * scAt(v) * 1.2);
       if (g) { const q = tangentOf(g.dir, nn), l = Math.hypot(q[0], q[1], q[2]); if (l > 0.3) { con.fq[v] = 1; set3(con.q, v, [q[0]/l, q[1]/l, q[2]/l]); } }
     }
     if (!FI) continue;
-    const c = FI.closestCorner(p, s * 0.6);
+    const c = FI.closestCorner(p, s * scAt(v) * 0.6);
     if (c) { con.fo[v] = 1; set3(con.o, v, c.point); vertexKind[v] = 3; continue; }
-    const e = FI.closestSeg(p, s * 0.45);
+    const e = FI.closestSeg(p, s * scAt(v) * 0.45);
     if (e) {
       const q = tangentOf(e.dir, nn), l = Math.hypot(q[0], q[1], q[2]);
       if (l > 0.3) { con.fq[v] = 1; set3(con.q, v, [q[0]/l, q[1]/l, q[2]/l]); }
@@ -462,6 +492,15 @@ export function fieldRetopo(src, opt) {
     }
   }
   const levels = buildHierarchy(V, N, adj, con);
+  if (SC) {   // spacing on the coarse levels: mean of the vertices each one stands for
+    levels[0].SC = SC;
+    for (let l = 1; l < levels.length; l++) {
+      const lo = levels[l - 1], m2 = levels[l].V.length / 3, sum = new Float32Array(m2), cnt = new Float32Array(m2);
+      for (let v = 0; v < lo.SC.length; v++) { sum[lo.parent[v]] += lo.SC[v]; cnt[lo.parent[v]]++; }
+      for (let p = 0; p < m2; p++) sum[p] = cnt[p] ? sum[p] / cnt[p] : 1;
+      levels[l].SC = sum;
+    }
+  }
 
   // ---- orientation field (coarse to fine)
   let rnd = 12345; const rand = () => ((rnd = (rnd * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff) - 0.5;
@@ -486,9 +525,10 @@ export function fieldRetopo(src, opt) {
     for (let i = 0; i < m; i++) {
       if (L.con.fo[i]) { set3(o, i, get(L.con.o, i)); continue; }
       const vi = get(L.V, i), ni = get(L.N, i), qi = get(Qs[l], i);
-      let p0 = O ? get(O, L.parent[i]) : [vi[0] + rand() * s, vi[1] + rand() * s, vi[2] + rand() * s];
+      const si2 = L.SC ? s * L.SC[i] : s;
+      let p0 = O ? get(O, L.parent[i]) : [vi[0] + rand() * si2, vi[1] + rand() * si2, vi[2] + rand() * si2];
       const d = (p0[0]-vi[0])*ni[0] + (p0[1]-vi[1])*ni[1] + (p0[2]-vi[2])*ni[2];
-      let li = lattice([p0[0] - ni[0]*d, p0[1] - ni[1]*d, p0[2] - ni[2]*d], qi, ni, vi, s, true);
+      let li = lattice([p0[0] - ni[0]*d, p0[1] - ni[1]*d, p0[2] - ni[2]*d], qi, ni, vi, si2, true);
       if (L.con.fx[i]) li = onPlane(li, qi, cross(ni, qi));
       set3(o, i, li);
     }
@@ -502,14 +542,14 @@ export function fieldRetopo(src, opt) {
   const cand = [];
   for (let i = 0; i < n; i++) for (let j = adj.start[i]; j < adj.start[i + 1]; j++) {
     const u = adj.list[j]; if (u < i) continue;
-    const vi = get(V, i), ni = get(N, i), qi = get(Q, i), oi = get(O, i);
-    const [a, b] = compatPos(vi, ni, qi, oi, get(V, u), get(N, u), get(Q, u), get(O, u), s);
+    const vi = get(V, i), ni = get(N, i), qi = get(Q, i), oi = get(O, i), sij = SC ? s * (SC[i] + SC[u]) / 2 : s;
+    const [a, b] = compatPos(vi, ni, qi, oi, get(V, u), get(N, u), get(Q, u), get(O, u), sij);
     const D = [(a[0]-oi[0]) - (b[0]-O[u*3]), (a[1]-oi[1]) - (b[1]-O[u*3+1]), (a[2]-oi[2]) - (b[2]-O[u*3+2])];
     const ti = cross(ni, qi);
-    const du = Math.round((D[0]*qi[0] + D[1]*qi[1] + D[2]*qi[2]) / s), dv = Math.round((D[0]*ti[0] + D[1]*ti[1] + D[2]*ti[2]) / s);
+    const du = Math.round((D[0]*qi[0] + D[1]*qi[1] + D[2]*qi[2]) / sij), dv = Math.round((D[0]*ti[0] + D[1]*ti[1] + D[2]*ti[2]) / sij);
     if (du === 0 && dv === 0) {
       const gap = Math.hypot(O[i*3] - O[u*3], O[i*3+1] - O[u*3+1], O[i*3+2] - O[u*3+2]);
-      if (gap < s * (opt.mergeGap ?? 9)) { const x = find(i), y = find(u); if (x !== y) uf[x] = y; }
+      if (gap < sij * (opt.mergeGap ?? 9)) { const x = find(i), y = find(u); if (x !== y) uf[x] = y; }
     }
     else if (Math.abs(du) + Math.abs(dv) === 1) cand.push(i, u);
   }
