@@ -263,6 +263,16 @@ dl.keys dd{margin:0;color:var(--muted)}
       <div class="row"><label for="falloff">減衰カーブ</label><canvas id="falloffCv" width="88" height="30" aria-hidden="true"></canvas></div>
       <select id="falloff" class="wide" aria-label="減衰カーブ"></select>
       <div class="row"><label for="strokeType">ストローク</label><select id="strokeType"><option value="dots">連続で塗る</option><option value="drag">ドラッグで配置</option><option value="spray">スプレー（散らす）</option><option value="dragdot">1つを動かして置く（DragDot）</option><option value="line">直線（押した所から）</option></select></div>
+      <div id="vdmRow" hidden>
+        <div class="row"><label for="vdmSel">VDM の型</label><select id="vdmSel" style="width:150px"></select></div>
+        <div class="row"><canvas id="vdmCv" width="64" height="64" style="width:64px;height:64px;border-radius:6px;border:1px solid var(--line)" aria-label="VDM の型のプレビュー"></canvas>
+          <div style="display:grid;gap:4px;flex:1"><button class="btn" id="vdmLoad" title="ベクターディスプレイスメントの EXR（Blender の VDM ブラシなど：R=右・G=上・B=法線、1 = ブラシの半径）">EXR を読み込む…</button>
+          <button class="btn" id="vdmPlate" title="型を彫るための平らな板を追加します（ほかのパーツは非表示にします）">型を彫る板を追加</button>
+          <button class="btn" id="vdmCapture" title="「型を彫る板」で彫った形を VDM の型にします">板から型を作る</button>
+          <button class="btn" id="vdmDel">この型を削除</button></div></div>
+        <input type="file" id="vdmFile" accept=".exr" hidden>
+        <p class="note">モデルの上でクリックし、ドラッグで大きさと向きを決めて押し付けます。ポリゴンが細かいほどきれいに出ます（細分化してから使ってください）。</p>
+      </div>
       <div class="row" id="emodeRow" hidden><label for="emode">動かし方</label><select id="emode" style="width:150px"><option value="grab">つかむ</option><option value="twist">ねじる（左右にドラッグ）</option><option value="scale">拡大縮小（上下にドラッグ）</option></select></div>
       <div class="row"><label for="bDepth">深さ（埋め込み）</label><output id="bDepthOut">0.00</output></div>
       <input type="range" id="bDepth" min="-1" max="1" step="0.05" value="0" title="盛る・彫るブラシは強さの倍率、平面を使うブラシ（クレイ・平らにする・トリムなど）は平面の高さが変わります">
@@ -728,6 +738,7 @@ import { encodeFBX } from './fbx.js';
 import { encodeEXR } from './exr.js';
 import { levelDisplacement } from './vdm.js';
 import { slicePlane, panelLoops } from './hardsurface.js';
+import { BUILTIN_VDM, builtinVDM, sampleVDM, vdmPreview, stampFromEXR, captureStamp } from './vdmstamp.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { mergeVertices, mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { computeBoundsTree, acceleratedRaycast, MeshBVH, INTERSECTED, NOT_INTERSECTED } from 'three-mesh-bvh';
@@ -813,6 +824,7 @@ const BRUSHES = [
   { id:'snake',     key:'0', short:'Sh', name:'引き伸ばし',   desc:'ドラッグした方向へ伸ばす（角・触手）', alpha:false, def:{ strength:0.8 } },
   { id:'tube',      key:'',  short:'Tb', name:'チューブ',     desc:'なぞった線に沿ってチューブ（ロープ・ホース・ツノ）を作る', alpha:false, curve:true, sep:true },
   { id:'insert',    key:'',  short:'Im', name:'並べる',       desc:'なぞった線に沿って形を並べる（鋲・数珠・チェーン）', alpha:false, curve:true },
+  { id:'vdm',       key:'',  short:'VD', name:'VDM',          desc:'ベクターディスプレイスメントの型を押し付ける（張り出した形も1回で）。クリックしてドラッグで大きさと向き', alpha:false, def:{ stroke:'drag', strength:1 } },
   { id:'guide',     key:'',  short:'Gd', name:'ガイド線',   desc:'自動リトポ（形に沿う）のループの向きを決める線を、表面をなぞって引く', alpha:false, curve:true },
   { id:'mask',      key:'9', short:'Mk', name:'マスク',       desc:'塗った所を保護する', alpha:true, sep:true },
   { id:'maskgrow',  key:'',  short:'MG', name:'マスク広げ',   desc:'マスクを周りへ広げる（Altで縮める）', alpha:false },
@@ -835,10 +847,10 @@ const BRUSH_CATS = [
   ['整える', ['smooth', 'smoothstrong', 'smoothsharp', 'smoothdir', 'smoothvalley', 'smoothpeak', 'relax', 'sharpen', 'polish', 'hpolish', 'flatten', 'planar', 'trim', 'trimdyn', 'morph']],
   ['彫る', ['dam', 'crease', 'mallet', 'crack', 'slash', 'pinch', 'magnify', 'twist', 'nudge']],
   ['動かす', ['move', 'moveinf', 'movetopo', 'elastic', 'snake', 'bend', 'scale', 'pose']],
-  ['作る', ['tube', 'insert', 'guide']],
+  ['作る', ['vdm', 'tube', 'insert', 'guide']],
   ['マスク・色・グループ', ['mask', 'maskcavity', 'maskgrow', 'masksmooth', 'paint', 'paintcavity', 'paintnoise', 'smear', 'paintblur', 'pgpaint']],
 ];
-const canDrag = id => BRUSH[id].alpha && baseOf(id) !== 'layer' && baseOf(id) !== 'hpolish' && id !== 'zproject';
+const canDrag = id => (BRUSH[id].alpha || id === 'vdm') && baseOf(id) !== 'layer' && baseOf(id) !== 'hpolish' && id !== 'zproject';
 // brushes that work against a plane (depth / imbed shifts that plane)
 const PLANE_BRUSHES = new Set(['clay', 'claybuild', 'claytubes', 'flatten', 'trim', 'hpolish']);
 const isMoveBrush = id => id === 'move' || id === 'movetopo' || id === 'elastic' || id === 'moveinf';
@@ -855,7 +867,7 @@ const FALLOFFS = [
 const FO = Object.fromEntries(FALLOFFS.map(x => [x.id, x.f]));
 
 const BASE_COL = new THREE.Color('#d8c0a2');   // clay color (linear) for unpainted vertices
-const S = { dynSub:0, paintHex:'#9c4a3c', paintLin:new THREE.Color('#9c4a3c'), brush:'standard', size:55, spacing:0.22, lazy:0, invert:false, backface:true, sym:true, wire:false, solo:false, sizePres:false, worldSize:false };
+const S = { vdm:'v:mushroom', dynSub:0, paintHex:'#9c4a3c', paintLin:new THREE.Color('#9c4a3c'), brush:'standard', size:55, spacing:0.22, lazy:0, invert:false, backface:true, sym:true, wire:false, solo:false, sizePres:false, worldSize:false };
 // depth: -1..1 moves the working plane / height (imbed) · plane: sculpt direction (area / view / vertex / x / y / z)
 // groupMask: only the polygroup under the brush · cavity: off / cavity (only the hollows) / peak (only the bumps)
 const BASE_CFG = { strength:0.45, falloff:'smooth', stroke:'dots', alpha:'none', alphaInv:false, follow:false, depth:0, plane:'area', groupMask:false, cavity:'off', emode:'grab' };
@@ -864,7 +876,7 @@ try {
   const saved = JSON.parse(localStorage.getItem('bp-brushes') || 'null');
   if (saved) {
     for (const id in saved.bs || {}) if (BS[id]) Object.assign(BS[id], saved.bs[id]);
-    for (const k of ['size', 'spacing', 'lazy', 'brush', 'paintHex', 'sizePres', 'worldSize']) if (saved[k] !== undefined) S[k] = saved[k];
+    for (const k of ['size', 'spacing', 'lazy', 'brush', 'paintHex', 'sizePres', 'worldSize', 'vdm']) if (saved[k] !== undefined) S[k] = saved[k];
     if (/^#[0-9a-f]{6}$/i.test(S.paintHex)) S.paintLin.set(S.paintHex); else S.paintHex = '#9c4a3c';
   }
 } catch { /* ignore broken prefs */ }
@@ -872,8 +884,12 @@ if (!BRUSH[S.brush]) S.brush = 'standard';
 let prefsT = 0;
 function saveBrushPrefs() {
   clearTimeout(prefsT);
-  prefsT = setTimeout(() => { try { localStorage.setItem('bp-brushes', JSON.stringify({ bs:BS, size:S.size, spacing:S.spacing, lazy:S.lazy, brush:S.brush, paintHex:S.paintHex, sizePres:S.sizePres, worldSize:S.worldSize })); } catch {} }, 300);
+  prefsT = setTimeout(() => { try { localStorage.setItem('bp-brushes', JSON.stringify({ bs:BS, size:S.size, spacing:S.spacing, lazy:S.lazy, brush:S.brush, paintHex:S.paintHex, sizePres:S.sizePres, worldSize:S.worldSize, vdm:S.vdm })); } catch {} }, 300);
 }
+
+// VDM stamps: built-in ('v:...') or added by the user ('u:...', kept in IndexedDB)
+const customVDMs = [];
+function getVDM(id) { if (id && id.startsWith('u:')) { const c = customVDMs.find(a => a.id === id); return c ? c : null; } return id ? builtinVDM(id) : null; }
 
 // alphas: built-in ids, or 'c:<n>' for images the user added
 const customAlphas = [];
@@ -1013,6 +1029,7 @@ function recData(r) {
     pg: r.pg && r.pg.length === r.pos.length / 3 ? r.pg : null,
     morph: r.morph && r.morph.length === r.pos.length ? r.morph : null,
     guides: r.guides && r.guides.length ? r.guides : null,
+    vdmPlate: r.vdmPlate || null,
     layers: (r.layers || []).filter(l => l.delta.length === r.pos.length).map(l => ({ name: l.name, I: l.I, on: l.on, delta: l.delta })),
     levels: r.levels.map((L, k) => k === r.lv
       ? { current: true, ev: L.ev || null, quads: L.quads || null, ref0: L.ref0 || null, ...texData(L), ...polyData(L) }
@@ -1035,6 +1052,7 @@ function recFromData(s) {
   r.pg = s.pg instanceof Int32Array && s.pg.length === s.pos.length / 3 ? s.pg : null;
   r.morph = s.morph instanceof Float32Array && s.morph.length === s.pos.length ? s.morph : null;
   r.guides = s.guides instanceof Float32Array && s.guides.length % 6 === 0 ? s.guides : null;
+  r.vdmPlate = s.vdmPlate && s.vdmPlate.ref instanceof Float32Array ? { ref: s.vdmPlate.ref, h: +s.vdmPlate.h || 1 } : null;
   r.layers = Array.isArray(s.layers) ? s.layers.filter(l => l && l.delta instanceof Float32Array && l.delta.length === s.pos.length)
     .map((l, k) => ({ name: String(l.name || `レイヤー ${k + 1}`), delta: l.delta, I: Number.isFinite(l.I) ? l.I : 1, on: l.on !== false, rec: false })) : [];
   const Ls = Array.isArray(s.levels) ? s.levels : null, lv = s.lv | 0;
@@ -1534,6 +1552,7 @@ function gather(P, N0, r, F) {
   return n;
 }
 
+const vdmS = [0, 0, 0];
 const zpRay = new THREE.Raycaster(); zpRay.firstHitOnly = true;
 function applyDab(P, N0, r, s, dir, brushId, F) {
   const brush = baseOf(brushId); if (BRUSH[brushId].inv) dir = -dir;
@@ -1672,6 +1691,16 @@ function applyDab(P, N0, r, s, dir, brushId, F) {
         const a = delta * w * ((dir > 0 ? delta > 0 : delta < 0) ? 0.5 : 0.15); x += nx*a; y += ny*a; z += nz*a; break;
       }
       case 'gravity': { y -= r * 0.04 * s * dir * w * amp; break; }
+      case 'vdm': {
+        // the stamp's displacement at this vertex's place in the brush square, in the brush frame (u, v, hit normal)
+        const st = stroke && stroke.vdm; if (!st || !F) break;
+        const dx = x - P.x, dy = y - P.y, dz = z - P.z, u = (dx*F.ux + dy*F.uy + dz*F.uz) / r, vv = (dx*F.vx + dy*F.vy + dz*F.vz) / r;
+        if (u <= -1 || u >= 1 || vv <= -1 || vv >= 1) break;
+        sampleVDM(st, u, vv, vdmS);
+        const k = r * s * dir * amp;
+        x += (F.ux*vdmS[0] + F.vx*vdmS[1] + N0.x*vdmS[2]) * k; y += (F.uy*vdmS[0] + F.vy*vdmS[1] + N0.y*vdmS[2]) * k; z += (F.uz*vdmS[0] + F.vz*vdmS[1] + N0.z*vdmS[2]) * k;
+        break;
+      }
       case 'balloon': {
         // push out along the vertex normal, and even out sideways so the bulge stays round
         const a = r * 0.03 * s * dir * w * amp; x += nrm[i]*a; y += nrm[i+1]*a; z += nrm[i+2]*a;
@@ -1915,7 +1944,7 @@ function makeFrame(N, ref, cfg, brush) {
   return {
     ux:u.x, uy:u.y, uz:u.z, vx:v.x, vy:v.y, vz:v.z,
     A: BRUSH[brush].alpha ? getAlpha(cfg.alpha) : null, inv: cfg.alphaInv,
-    fo: FO[cfg.falloff] || FO.smooth, bf: S.backface, sdx:0, sdy:0, sdz:0,
+    fo: brush === 'vdm' ? () => 1 : FO[cfg.falloff] || FO.smooth, bf: S.backface, sdx:0, sdy:0, sdz:0,
     plane: cfg.plane || 'area', depth: +cfg.depth || 0, mir: false,
     gm: cfg.groupMask && stroke && stroke.gm !== undefined ? stroke.gm : -1, gmM: cfg.groupMask && stroke && stroke.gmM !== undefined ? stroke.gmM : -1, cav: cfg.cavity === 'cavity' ? 1 : cfg.cavity === 'peak' ? -1 : 0,
   };
@@ -1978,6 +2007,7 @@ function onDown(e) {
   if (recL && Math.abs(layEff(recL)) > 0.05) stroke.layRec = { L: recL, base: top.pos };
   if (useDyn) stroke.dyn = { mark: new Uint8Array(nV), t: performance.now(), Lt: S.dynDetail * worldPerPx(hit.point), changed: false };
   const P = hit.point.clone(), N = hitNormal(hit), r = worldRadius(P);
+  if (brush === 'vdm') { stroke.vdm = getVDM(S.vdm); if (!stroke.vdm) toast('VDM の型を選んでください'); }
   if (brush === 'pgpaint') {   // Alt: grow the group the stroke starts on; otherwise paint a new group
     let mx = 0; for (let v = 0; v < nV; v++) if (pg[v] > mx) mx = pg[v];
     stroke.pgTarget = dir < 0 ? pg[idx[hit.faceIndex * 3]] : mx + 1;
@@ -2063,7 +2093,7 @@ function dragStamp(e) {
   const r = px * worldPerPx(D.P);
   // screen drag direction -> world (screen y grows downward)
   const ref = camAxis(0).multiplyScalar(dx).addScaledVector(camAxis(1), -dy).normalize();
-  const F = dabSym(D.P, D.N, r, ref, 4);
+  const F = dabSym(D.P, D.N, r, ref, baseOf(stroke.brush) === 'vdm' ? 1 : 4);
   if (F.A && syncAlphaTex(stroke.cfg.alpha, stroke.cfg.alphaInv)) {
     placeQuad(quad, D.P, D.N, F, r);
     if (S.sym) placeQuad(quad2, new V3(-D.P.x, D.P.y, D.P.z), new V3(-D.N.x, D.N.y, D.N.z), mirrorFrame(F), r);
@@ -3908,6 +3938,66 @@ function presetLoad() {
   for (const id of ['spacing', 'lazy']) { const el = $(id); el.value = S[id]; el.dispatchEvent(new Event('input')); }
   toast(`ブラシ設定「${p.name}」を呼び出しました`);
 }
+// ---------------- VDM stamp library (UI) ----------------
+function renderVDMs() {
+  const sel = $('vdmSel'), items = [...BUILTIN_VDM, ...customVDMs.map(a => ({ id: a.id, name: a.name }))];
+  if (!items.some(x => x.id === S.vdm)) S.vdm = items[0].id;
+  sel.innerHTML = items.map(x => `<option value="${x.id}">${x.name.replace(/[<&"]/g, '')}</option>`).join('');
+  sel.value = S.vdm; $('vdmDel').disabled = !S.vdm.startsWith('u:');
+  const st = getVDM(S.vdm), cv = $('vdmCv');
+  if (st) cv.getContext('2d').putImageData(new ImageData(vdmPreview(st, 64), 64, 64), 0, 0);
+}
+async function saveVDMs() {
+  try { const db = await idb(); await new Promise(res => { const tx = db.transaction('s', 'readwrite'); tx.objectStore('s').put(customVDMs.map(a => ({ id: a.id, name: a.name, S: a.S, vec: a.vec })), 'vdms'); tx.oncomplete = tx.onerror = tx.onabort = res; }); } catch { /* storage unavailable */ }
+}
+async function loadVDMs() {
+  try {
+    const db = await idb();
+    const list = await new Promise(res => { const r = db.transaction('s').objectStore('s').get('vdms'); r.onsuccess = () => res(r.result || []); r.onerror = () => res([]); });
+    for (const a of list) if (a && a.id && a.vec && a.vec.length === a.S * a.S * 3) customVDMs.push(a);
+  } catch { /* none */ }
+}
+function addVDM(name, st) {
+  const id = 'u:' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  customVDMs.push({ id, name, S: st.S, vec: st.vec }); S.vdm = id; renderVDMs(); saveVDMs(); saveBrushPrefs();
+}
+async function importVDM(file) {
+  try { const st = stampFromEXR(await file.arrayBuffer()); addVDM(file.name.replace(/\.[^.]+$/, ''), st); toast(`VDM の型「${file.name}」を追加しました（${st.S}px）`); }
+  catch (err) { console.error(err); toast('読み込めませんでした: ' + err.message); }
+}
+// a flat plate (XY plane, facing the default view) to sculpt a stamp on; it remembers where it started
+function addVDMPlate() {
+  return busy(() => {
+    let g = new THREE.PlaneGeometry(2, 2, 160, 160); g.deleteAttribute('normal'); g.deleteAttribute('uv'); g = mergeVertices(g, 1e-6);
+    const p = new Float32Array(g.attributes.position.array), ix = Uint32Array.from(g.index.array);
+    pushStruct();
+    const rec = newRec(uniqueName('VDM の板'), p, ix, null);
+    rec.vdmPlate = { ref: p.slice(), h: 1 };
+    for (const r of subtools) r.visible = false;
+    subtools.push(rec); activate(rec, true); frame(); scheduleSave();
+    toast('板を追加しました（ほかのパーツは非表示）。真ん中に盛って・張り出させて彫り、「板から型を作る」で VDM の型にします。細分化しても大丈夫です');
+  });
+}
+function captureVDM() {
+  const pl = active.vdmPlate;
+  if (!pl || !(pl.ref instanceof Float32Array) || pl.ref.length !== levelVerts(active.levels[0]) * 3) { toast('「型を彫る板を追加」で作った板を選んでから使ってください'); return; }
+  return busy(() => {
+    flushNormals();
+    // the plate's original (flat) positions at the current level: subdivided the same way as the levels
+    let ref = pl.ref; for (let j = 1; j <= active.lv; j++) ref = subdivPositions(ref, active.levels[j - 1], active.levels[j]);
+    if (ref.length !== pos.length) { toast('板の形が変わっていて型にできません（リメッシュやポリゴン編集をしていない板で作ってください）'); return; }
+    const st = captureStamp(pos, ref, idx, 0, 0, pl.h, 256);
+    addVDM(`彫った型 ${customVDMs.length + 1}`, st);
+    toast('彫った形を VDM の型にしました。VDM ブラシで押し付けられます');
+  });
+}
+$('vdmSel').onchange = e => { S.vdm = e.target.value; renderVDMs(); saveBrushPrefs(); };
+$('vdmLoad').onclick = () => $('vdmFile').click();
+$('vdmFile').onchange = e => { const f = e.target.files[0]; e.target.value = ''; if (f) importVDM(f); };
+$('vdmPlate').onclick = () => addVDMPlate();
+$('vdmCapture').onclick = () => captureVDM();
+$('vdmDel').onclick = () => { const i = customVDMs.findIndex(a => a.id === S.vdm); if (i < 0) return; const n = customVDMs[i].name; customVDMs.splice(i, 1); S.vdm = BUILTIN_VDM[0].id; renderVDMs(); saveVDMs(); toast(`VDM の型「${n}」を削除しました`); };
+
 // brush library file (.bpbrush): every brush's settings + the saved presets (custom alphas stay in this app)
 function brushFile() { return { format: 'boardpainter-brushes', version: 1, bs: BS, presets, size: S.size, spacing: S.spacing, lazy: S.lazy }; }
 function applyBrushFile(o) {
@@ -5630,6 +5720,7 @@ function refreshBrushUI() {
   $('bDepth').value = c.depth || 0; $('bDepthOut').textContent = (+c.depth || 0).toFixed(2);
   $('bPlane').value = c.plane || 'area'; $('bGroup').checked = !!c.groupMask; $('bCavity').value = c.cavity || 'off';
   $('emodeRow').hidden = S.brush !== 'elastic'; $('emode').value = c.emode || 'grab';
+  $('vdmRow').hidden = S.brush !== 'vdm'; if (S.brush === 'vdm') renderVDMs();
   $('alphaSec').classList.toggle('off', !b.alpha);
   $('alphaNote').textContent = b.alpha
     ? '白い所ほど強く効きます。画像はビューにドラッグ＆ドロップでも追加できます。細かい模様は「細分化」でポリゴンを増やすときれいに出ます。'
@@ -6064,7 +6155,7 @@ renderer.setAnimationLoop(() => {
   subtools = [newRec('球', b.p, b.ix)];
   activate(subtools[0], true);
   { let m = 'std'; try { m = localStorage.getItem('bp-mat') || 'std'; } catch {} applyMaterial(m, true); }
-  await loadAlphas();
+  await loadAlphas(); await loadVDMs();
   renderAlphaGrid(); refreshBrushUI(); updateUndoButtons(); frame(); updateTitle();
   const saved = await loadAuto();
   if (saved) {
@@ -6123,6 +6214,8 @@ renderer.setAnimationLoop(() => {
     setProjectPath(p) { projectPath = p; },
     saveNowProject() { return saveProject(false); },
     changedScreenX(before) { const out = []; for (let v = 0; v < nV; v++) { const i = v * 3; if (Math.abs(pos[i] - before[i]) + Math.abs(pos[i+1] - before[i+1]) + Math.abs(pos[i+2] - before[i+2]) > 1e-7) { const q = new V3(pos[i], pos[i+1], pos[i+2]).project(camera), b = canvas.getBoundingClientRect(); out.push(b.left + (q.x + 1) / 2 * b.width); } } out.sort((a, b) => a - b); return out.length ? [out.length, Math.round(out[0]), Math.round(out[out.length >> 1]), Math.round(out[out.length - 1])] : [0]; },
+    vdmInfo() { const st = getVDM(S.vdm); let mx = 0; if (st) for (let k = 0; k < st.vec.length; k++) mx = Math.max(mx, Math.abs(st.vec[k])); return { sel: S.vdm, custom: customVDMs.length, S: st && st.S, max: mx }; },
+    importVDMBytes(name, bytes) { return importVDM({ name, arrayBuffer: async () => new Uint8Array(bytes).buffer }); },
     get brushIds() { return BRUSHES.map(b => b.id); },
     addShrunkCopy() {   // a slightly smaller copy inside the active part, for the projection brush
       const p = pos.slice(); for (let i = 0; i < p.length; i++) p[i] *= 0.92;
