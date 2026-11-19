@@ -26,6 +26,9 @@ const FILES = [
   'three-mesh-bvh/LICENSE',
   'meshoptimizer/meshopt_simplifier.js',
   'meshoptimizer/LICENSE.md',
+  'manifold-3d/manifold.js',
+  'manifold-3d/manifold.wasm',
+  'manifold-3d/LICENSE',
 ];
 
 fs.rmSync(out, { recursive: true, force: true });
