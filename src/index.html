@@ -5183,6 +5183,7 @@ async function saveProjectStream(saveAs) {
   const id = await native.projBegin(projectPath, projectName, saveAs);
   if (!id) return false;
   let ok = false, p = null;
+  renderPaused = true; busyText('保存中…');   // no frames while saving: a big model's frame would slow every step
   try {
     const total = subtools.reduce((n, r) => n + r.pos.byteLength + r.idx.byteLength, 0), big = total > 200 << 20;
     const reader = encodeProjectStream(projectMeta(), subtools.map(recData)).getReader();
@@ -5195,7 +5196,7 @@ async function saveProjectStream(saveAs) {
     }
     await flush(); ok = true;
   } catch (err) { console.error(err); toast('保存に失敗しました: ' + err.message); }
-  finally { busyText(null); p = await native.projEnd(id, ok); }
+  finally { renderPaused = false; busyText(null); p = await native.projEnd(id, ok); }
   if (!ok || !p) return false;
   projectPath = p; projectName = baseName(p);
   if (!$('fname').value.trim() || $('fname').value === 'sculpt') $('fname').value = projectName;
@@ -5908,7 +5909,9 @@ new ResizeObserver(fitView).observe(view);
 // the preview follows sculpting too: compare a cheap checksum of the cage every half second
 let dsAge = 0, dsSum = 0;
 function dsCheck() { dsAge = 0; let s = 0; for (let i = 0; i < pos.length; i += 7) s += pos[i] * (i % 13 + 1); if (s !== dsSum) { dsSum = s; return true; } return false; }
+let renderPaused = false;
 renderer.setAnimationLoop(() => {
+  if (renderPaused) return;
   if ((gpuDirty || gpuPart) && geo) {
     const A = [geo.attributes.position, geo.attributes.normal]; if (colorDirty) A.push(geo.attributes.color);
     // partial upload: runs of marked 4096-vertex chunks (full upload if the change is large or unknown)
