@@ -157,7 +157,8 @@ dl.keys dd{margin:0;color:var(--muted)}
     "three": "./vendor/three/build/three.module.js",
     "three/addons/": "./vendor/three/examples/jsm/",
     "three-mesh-bvh": "./vendor/three-mesh-bvh/build/index.module.js",
-    "meshopt-simplifier": "./vendor/meshoptimizer/meshopt_simplifier.js"
+    "meshopt-simplifier": "./vendor/meshoptimizer/meshopt_simplifier.js",
+    "manifold-3d": "./vendor/manifold-3d/manifold.js"
   }
 }
 </script>
@@ -646,12 +647,13 @@ dl.keys dd{margin:0;color:var(--muted)}
     <section>
       <h2>ブーリアン（パーツ同士の演算）</h2>
       <div class="row"><label for="boolOther">相手のパーツ</label><select id="boolOther" style="width:150px"></select></div>
+      <div class="row"><label for="boolMethod">方式</label><select id="boolMethod" style="width:150px"><option value="exact">正確（角を残す）</option><option value="voxel">ボクセル（穴があっても可）</option></select></div>
       <div class="grid3">
         <button class="btn" id="boolUnion">足す</button>
         <button class="btn" id="boolSub">くり抜く</button>
         <button class="btn" id="boolInt">重なりだけ</button>
       </div>
-      <p class="note">選択中のパーツと相手のパーツを演算した結果で、選択中のパーツを置き換えます（相手は非表示にします）。精度はリメッシュの「細かさ」を使います。</p>
+      <p class="note">選択中のパーツと相手のパーツを演算した結果で、選択中のパーツを置き換えます（相手は非表示にします）。「正確」は角や平らな面をそのまま残します（穴のない閉じたパーツ同士で使えます。穴があるときは自動でボクセルにします）。切り口に細長い三角形ができるので、続けて彫るならリメッシュしてください。「ボクセル」はリメッシュの「細かさ」の精度で作り直します。</p>
       <div class="row" style="margin-top:8px"><input type="checkbox" id="boolLive"><label for="boolLive">ライブブーリアン（動かしながら結果を見る）</label></div>
       <div class="row"><label for="boolLiveOp">ライブの演算</label><select id="boolLiveOp"><option value="union">足す</option><option value="subtract" selected>くり抜く</option><option value="intersect">重なりだけ</option></select></div>
       <button class="btn full" id="boolLiveGo" disabled>ライブの結果を確定</button>
@@ -753,6 +755,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { encodeFBX } from './fbx.js';
 import { encodeEXR } from './exr.js';
 import { levelDisplacement, levelDisplacementCC } from './vdm.js';
+import { loadManifold, exactBoolean } from './exactbool.js';
 import { ccTopology, ccPositions, ccAttr, ccMirror, ccGroups } from './subdiv.js';
 import { slicePlane, panelLoops } from './hardsurface.js';
 import { BUILTIN_VDM, builtinVDM, sampleVDM, vdmPreview, stampFromEXR, captureStamp } from './vdmstamp.js';
@@ -4867,25 +4870,40 @@ async function decimate() {
 }
 
 // ---------------- booleans ----------------
-function runBoolean(op) {
+async function runBoolean(op, method = $('boolMethod').value) {
   if (stroke || gizmo.dragging) return;
   const other = subtools.find(r => String(r.id) === $('boolOther').value);
   if (!other || other === active) { toast('相手のパーツを選んでください'); return; }
+  let W = null, note = '';
+  if (method === 'exact') {
+    if (active.levels.length > 1 && active.lv !== active.levels.length - 1) setLevel(active.levels.length - 1, true);
+    try { $('busy').hidden = false; W = await loadManifold(); } catch (err) { console.error(err); note = '。正確な演算を読み込めなかったので、ボクセルで計算しました'; }
+  }
   return busy(() => {
     flushNormals();
     const t0 = performance.now();
+    if (W) {
+      const ob = other.levels.length > 1 ? { pos: other.pos, idx: other.idx } : other;
+      const e = exactBoolean(W, { pos, idx, mask, paint }, { pos: ob.pos, idx: ob.idx, mask: other.mask && other.mask.length === ob.pos.length / 3 ? other.mask : null, paint: other.paint && other.paint.length === ob.pos.length ? other.paint : null }, op, { base: [BASE_COL.r, BASE_COL.g, BASE_COL.b] });
+      if (!e.error) return finishBoolean(op, other, e, t0, '正確に');
+      if (e.error === 'empty') { toast(op === 'intersect' ? '重なっている部分がありません' : '結果が空になりました'); return; }
+      note = '。穴や重なりのあるパーツなので、ボクセルで計算しました';
+    }
     const r = booleanMesh({ pos, idx, mask, paint }, { pos: other.pos, idx: other.idx, mask: other.mask, paint: other.paint },
       op, { ...remeshOpts(), base: [BASE_COL.r, BASE_COL.g, BASE_COL.b], voxelLimit: VOXEL_LIMIT });
     if (!r) { toast(op === 'intersect' ? '重なっている部分がありません' : '演算できませんでした（細かさを下げてください）'); return; }
-    pushStruct();
-    const old = active, rec = newRec(old.name, r.pos, r.idx, r.mask);
-    rec.paint = r.paint; rec.visible = old.visible;
-    subtools.splice(subtools.indexOf(old), 1, rec);
-    other.visible = false;
-    activate(rec, true); scheduleSave();
-    const label = { union: '足しました', subtract: 'くり抜きました', intersect: '重なりだけ残しました' }[op];
-    toast(`「${other.name}」を${label}（${nF.toLocaleString()} ポリゴン・${((performance.now() - t0) / 1000).toFixed(1)}秒）。「${other.name}」は非表示にしました`);
+    finishBoolean(op, other, r, t0, '', note);
   });
+}
+function finishBoolean(op, other, r, t0, how, note = '') {
+  pushStruct();
+  const old = active, rec = newRec(old.name, r.pos, r.idx, r.mask);
+  rec.paint = r.paint; rec.visible = old.visible;
+  subtools.splice(subtools.indexOf(old), 1, rec);
+  other.visible = false;
+  activate(rec, true); scheduleSave();
+  const label = { union: '足しました', subtract: 'くり抜きました', intersect: '重なりだけ残しました' }[op];
+  toast(`「${other.name}」を${how}${label}（${nF.toLocaleString()} ポリゴン・${((performance.now() - t0) / 1000).toFixed(1)}秒）。「${other.name}」は非表示にしました${note}`);
 }
 
 // ---------------- retopology guide lines (per part, line segments on its surface) ----------------
@@ -6506,6 +6524,11 @@ renderer.setAnimationLoop(() => {
         return [b.id, +vol.toFixed(3), open]; });
     },
     get brushIds() { return BRUSHES.map(b => b.id); },
+    addBox(cx, cy, cz, h, name = '箱2') {   // another closed box part (not selected); returns its id
+      const P = []; for (const z of [-1, 1]) for (const y of [-1, 1]) for (const x of [-1, 1]) P.push(cx + x * h, cy + y * h, cz + z * h);
+      const polys = [[0,2,3,1],[4,5,7,6],[0,1,5,4],[2,6,7,3],[1,3,7,5],[0,4,6,2]], p = Float32Array.from(P);
+      const r = newRec(name, p, PE.triangulate(p, polys), null); r.levels[0].polys = PE.fromPolys(polys); subtools.push(r); syncScene(); renderSubtoolList(); return r.id;
+    },
     addShrunkCopy() {   // a slightly smaller copy inside the active part, for the projection brush
       const p = pos.slice(); for (let i = 0; i < p.length; i++) p[i] *= 0.92;
       const r = newRec('内側', p, idx.slice(), null); subtools.push(r); syncScene(); return subtools.length;
