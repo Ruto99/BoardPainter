@@ -9,6 +9,7 @@
 //   smoothPos(V, N, Q, O, start, list, fo, fx, s, iters, shuffle, parallel?) -> Float32Array  (fieldretopo.js)
 //   bake(lowPos, uvIdx, uv, highPos, highIdx, paint|null, size, maxDist, dilate) -> { normal, color, height, heightRange, hits, misses }  (bake.js)
 //   mirrorPairs(pos, origin, cell, tol2) -> Int32Array  (computeMirror in index.html)
+//   buildBVH(pos, idx) -> { index: Uint32Array (triangles reordered), nodes: Uint32Array }  three-mesh-bvh packed tree
 //   info() -> { version, threads }
 #define NAPI_VERSION 8
 #include <node_api.h>
@@ -26,7 +27,7 @@
 
 namespace {
 
-const char* kVersion = "1.3.0";
+const char* kVersion = "1.4.0";
 
 unsigned hwThreads() {
   unsigned t = std::thread::hardware_concurrency();
@@ -619,6 +620,95 @@ void mirrorPairs(const float* p, size_t n, const double o[3], double cell, doubl
   });
 }
 
+// ---------------- BVH in three-mesh-bvh's packed layout (MeshBVH.deserialize) ----------------
+// Node = 32 bytes, depth-first: 6 float32 bounds (min xyz, max xyz); a leaf has uint32 triangle offset at word 6,
+// uint16 count at half-word 14 and 0xffff at half-word 15; an inner node has its right child's word index at word 6
+// and the split axis at word 7 (the left child follows directly). Split: middle of the longest axis of the
+// triangle-box centers (three-mesh-bvh's CENTER strategy), at most 10 triangles per leaf, depth 40.
+struct TriB { float mn[3], mx[3]; uint32_t t; };
+const size_t kLeafTris = 10;
+const int kMaxDepth = 40;
+
+void rangeBounds(const TriB* T, size_t o, size_t c, float b[6], float cb[6]) {
+  for (int k = 0; k < 3; k++) { b[k] = cb[k] = INFINITY; b[k+3] = cb[k+3] = -INFINITY; }
+  for (size_t i = o; i < o + c; i++) for (int k = 0; k < 3; k++) {
+    const float lo = T[i].mn[k], hi = T[i].mx[k], ce = (lo + hi) * 0.5f;
+    if (lo < b[k]) b[k] = lo; if (hi > b[k+3]) b[k+3] = hi;
+    if (ce < cb[k]) cb[k] = ce; if (ce > cb[k+3]) cb[k+3] = ce;
+  }
+}
+void putNode(std::vector<uint32_t>& out, const float b[6]) {
+  const size_t at = out.size(); out.resize(at + 8, 0);
+  std::memcpy(&out[at], b, 24);
+}
+void makeLeaf(std::vector<uint32_t>& out, size_t at, size_t o, size_t c) {
+  out[at + 6] = (uint32_t)o;
+  out[at + 7] = (uint32_t)c | (0xffffu << 16);   // half-words 14 (count) and 15 (leaf flag), little-endian
+}
+// partition [o, o+c) by the center split; returns the left count, or 0 / c when it doesn't split
+size_t splitRange(TriB* T, size_t o, size_t c, const float cb[6], int& axisOut) {
+  int axis = 0; float ext = cb[3] - cb[0];
+  for (int k = 1; k < 3; k++) if (cb[k+3] - cb[k] > ext) { ext = cb[k+3] - cb[k]; axis = k; }
+  axisOut = axis;
+  if (!(ext > 0)) return 0;
+  const float pos = (cb[axis] + cb[axis+3]) * 0.5f;
+  size_t i = o, j = o + c;
+  while (i < j) {
+    if ((T[i].mn[axis] + T[i].mx[axis]) * 0.5f < pos) i++;
+    else { j--; std::swap(T[i], T[j]); }
+  }
+  return i - o;
+}
+// depth-first build of [o, o+c) appended to `out` (word indices relative to out's start)
+void buildSeq(TriB* T, size_t o, size_t c, int depth, std::vector<uint32_t>& out) {
+  float b[6], cb[6]; rangeBounds(T, o, c, b, cb);
+  const size_t at = out.size(); putNode(out, b);
+  int axis = 0; size_t l = 0;
+  if (c > kLeafTris && depth < kMaxDepth) l = splitRange(T, o, c, cb, axis);
+  if ((l == 0 || l == c) && c > 0xffff) { l = c / 2; axis = 0; }   // a leaf can hold at most 65535 triangles
+  if (l == 0 || l == c) { makeLeaf(out, at, o, c); return; }
+  buildSeq(T, o, l, depth + 1, out);
+  out[at + 6] = (uint32_t)out.size(); out[at + 7] = (uint32_t)axis;
+  buildSeq(T, o + l, c - l, depth + 1, out);
+}
+// append a finished subtree block, moving its inner nodes' right pointers by `shift` words
+void appendBlock(std::vector<uint32_t>& out, const std::vector<uint32_t>& blk, uint32_t shift) {
+  const size_t base = out.size(); out.insert(out.end(), blk.begin(), blk.end());
+  for (size_t n = base; n < out.size(); n += 8) if ((out[n + 7] >> 16) != 0xffffu) out[n + 6] += shift;
+}
+// the top of the tree splits into threads: both halves of a node are built at the same time
+std::vector<uint32_t> buildPar(TriB* T, size_t o, size_t c, int depth, int spawn) {
+  std::vector<uint32_t> out;
+  if (spawn <= 0 || c < 200000) { out.reserve(c / 3 * 8 + 16); buildSeq(T, o, c, depth, out); return out; }
+  float b[6], cb[6]; rangeBounds(T, o, c, b, cb);
+  putNode(out, b);
+  int axis = 0; size_t l = splitRange(T, o, c, cb, axis);
+  if (l == 0 || l == c) { if (c > 0xffff) { l = c / 2; axis = 0; } else { makeLeaf(out, 0, o, c); return out; } }
+  std::vector<uint32_t> L, R;
+  std::thread th([&] { L = buildPar(T, o, l, depth + 1, spawn - 1); });
+  R = buildPar(T, o + l, c - l, depth + 1, spawn - 1);
+  th.join();
+  appendBlock(out, L, 8);
+  out[6] = (uint32_t)out.size(); out[7] = (uint32_t)axis;
+  appendBlock(out, R, (uint32_t)out.size());
+  return out;
+}
+void buildBVH(const float* p, const uint32_t* ix, size_t nF, std::vector<uint32_t>& outIdx, std::vector<uint32_t>& nodes) {
+  const unsigned TH = hwThreads();
+  std::vector<TriB> T(nF);
+  parallelFor(nF, TH, [&](size_t f) {
+    TriB& t = T[f]; t.t = (uint32_t)f;
+    for (int k = 0; k < 3; k++) {
+      const float a = p[ix[f*3]*3+k], b = p[ix[f*3+1]*3+k], c = p[ix[f*3+2]*3+k];
+      t.mn[k] = std::min(a, std::min(b, c)); t.mx[k] = std::max(a, std::max(b, c));
+    }
+  });
+  int spawn = 0; while ((1u << spawn) < TH * 2 && spawn < 8) spawn++;
+  nodes = buildPar(T.data(), 0, nF, 0, spawn);
+  outIdx.resize(nF * 3);
+  parallelFor(nF, TH, [&](size_t i) { const uint32_t f = T[i].t; outIdx[i*3] = ix[f*3]; outIdx[i*3+1] = ix[f*3+1]; outIdx[i*3+2] = ix[f*3+2]; });
+}
+
 // ---------------- Node-API glue ----------------
 #define CHECK(call) do { if ((call) != napi_ok) { napi_throw_error(env, nullptr, "bp_native: " #call); return nullptr; } } while (0)
 
@@ -895,6 +985,29 @@ napi_value MirrorPairs(napi_env env, napi_callback_info info) {
   return r;
 }
 
+// buildBVH(pos: Float32Array, idx: Uint32Array) -> { index: Uint32Array, nodes: Uint32Array }
+napi_value BuildBVH(napi_env env, napi_callback_info info) {
+  size_t argc = 2; napi_value argv[2];
+  CHECK(napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr));
+  float* p; uint32_t* ix; size_t nP, nI;
+  if (argc < 2 || !typedArg(env, argv[0], napi_float32_array, (void**)&p, &nP) || !typedArg(env, argv[1], napi_uint32_array, (void**)&ix, &nI)) {
+    napi_throw_type_error(env, nullptr, "buildBVH(pos: Float32Array, idx: Uint32Array)"); return nullptr;
+  }
+  const size_t nV = nP / 3, nF = nI / 3;
+  if (nP % 3 || nI % 3 || !nF || nF > 0x7fffffff) { napi_throw_range_error(env, nullptr, "buildBVH: bad sizes"); return nullptr; }
+  for (size_t i = 0; i < nI; i++) if (ix[i] >= nV) { napi_throw_range_error(env, nullptr, "buildBVH: index out of range"); return nullptr; }
+  std::vector<uint32_t> outIdx, nodes;
+  buildBVH(p, ix, nF, outIdx, nodes);
+  if ((double)nodes.size() > 4294967295.0) { napi_throw_range_error(env, nullptr, "buildBVH: tree too large"); return nullptr; }
+  napi_value obj, iv, nv;
+  CHECK(napi_create_object(env, &obj));
+  iv = makeTyped(env, napi_uint32_array, outIdx.data(), outIdx.size());
+  nv = makeTyped(env, napi_uint32_array, nodes.data(), nodes.size());
+  if (!iv || !nv) { napi_throw_error(env, nullptr, "buildBVH: out of memory"); return nullptr; }
+  CHECK(napi_set_named_property(env, obj, "index", iv)); CHECK(napi_set_named_property(env, obj, "nodes", nv));
+  return obj;
+}
+
 napi_value Info(napi_env env, napi_callback_info) {
   napi_value obj, v, t;
   CHECK(napi_create_object(env, &obj));
@@ -916,6 +1029,7 @@ NAPI_MODULE_INIT() {
     {"smoothPos", nullptr, SmoothPos, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"bake", nullptr, Bake, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"mirrorPairs", nullptr, MirrorPairs, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"buildBVH", nullptr, BuildBVH, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"info", nullptr, Info, nullptr, nullptr, nullptr, napi_default, nullptr},
   };
   napi_define_properties(env, exports, sizeof(props) / sizeof(props[0]), props);

@@ -55,6 +55,15 @@ nav.tools hr{border:0;border-top:1px solid var(--line);margin:3px 6px;flex:none;
 .alpha:hover{border-color:#6a6b73}
 .alpha.on{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
 #refOverlay{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);max-width:none;pointer-events:none;z-index:1}
+#bpick{position:absolute;inset:0;z-index:7;display:flex;align-items:flex-start;justify-content:center;padding:40px 16px;background:rgba(16,16,18,.72)}
+#bpick .box{width:min(720px,100%);max-height:100%;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+#bpick input{width:100%;height:34px;padding:0 10px;border:1px solid var(--line);border-radius:6px;background:var(--panel-2);margin-bottom:10px}
+#bpick h3{font-size:12px;color:var(--muted);font-weight:600;margin:10px 0 6px}
+#bpick .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px}
+#bpick button{display:flex;align-items:center;gap:8px;text-align:left;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--panel-2);cursor:pointer}
+#bpick button b{font-family:var(--mono);color:var(--accent);min-width:22px}
+#bpick button.on{border-color:var(--accent)}
+#bpick button:hover,#bpick button.hl{border-color:#77787f}
 #rdView{position:absolute;inset:0;z-index:6;display:flex;flex-direction:column;background:rgba(16,16,18,.92)}
 #rdImg{flex:1;min-height:0;object-fit:contain;width:100%;background:repeating-conic-gradient(#2a2b30 0 25%,#232428 0 50%) 0 0/20px 20px}
 .rd-bar{display:flex;align-items:center;gap:8px;padding:10px 12px;border-top:1px solid var(--line)}
@@ -160,7 +169,7 @@ dl.keys dd{margin:0;color:var(--muted)}
     <button class="btn" id="btnNewProj" title="Ctrl+N">新規</button>
     <button class="btn" id="btnOpen" title="Ctrl+O（.bpp プロジェクト / OBJ / STL）">開く <small>Ctrl+O</small></button>
     <button class="btn" id="btnSave" title="Ctrl+S（Ctrl+Shift+S で名前を付けて保存）">保存 <small>Ctrl+S</small></button>
-    <input id="fileIn" type="file" accept=".bpp,.obj,.stl" hidden>
+    <input id="fileIn" type="file" accept=".bpp,.obj,.stl,.fbx,.glb,.gltf" hidden>
     <div class="sep"></div>
     <button class="btn" id="btnUndo" title="Ctrl+Z">元に戻す</button>
     <button class="btn" id="btnRedo" title="Ctrl+Y">やり直し</button>
@@ -168,6 +177,7 @@ dl.keys dd{margin:0;color:var(--muted)}
     <button class="btn" id="btnDivide" title="Ctrl+D（細分化レベルを追加）">細分化 <small>Ctrl+D</small></button>
     <div class="spacer"></div>
     <button class="btn" id="expOBJ">OBJ</button>
+    <button class="btn" id="expFBX" title="Blender・Maya・Unity などへ（四角ポリゴン・UV・頂点カラー・クリース付き）">FBX</button>
     <button class="btn" id="expGLB">GLB <small>ゲーム</small></button>
     <button class="btn primary" id="expSTL">STL <small>3Dプリント</small></button>
     <button class="btn" id="btnPanel">設定</button>
@@ -196,10 +206,11 @@ dl.keys dd{margin:0;color:var(--muted)}
     <div class="overlay" id="stats"></div>
     <div class="overlay" id="hint">
       モデル上を<kbd>左ドラッグ</kbd>で造形 · 背景ドラッグで回転 · <kbd>右</kbd>で平行移動 · ホイールでズーム<br>
-      <kbd>Shift</kbd>スムーズ <kbd>Ctrl</kbd>マスク <kbd>Alt</kbd>反転 <kbd>[</kbd><kbd>]</kbd>サイズ
+      <kbd>B</kbd>ブラシを選ぶ <kbd>Shift</kbd>スムーズ <kbd>Ctrl</kbd>マスク <kbd>Alt</kbd>反転 <kbd>[</kbd><kbd>]</kbd>サイズ
     </div>
     <img id="refOverlay" alt="" hidden>
     <div id="busy" hidden>処理中…</div>
+    <div id="bpick" hidden><div class="box" role="dialog" aria-label="ブラシを選ぶ"><input id="bpickQ" type="text" placeholder="ブラシを探す（名前・説明・英字の略号。Enter で決定、Esc で閉じる）" autocomplete="off"><div id="bpickList"></div></div></div>
     <div id="rdView" hidden>
       <img id="rdImg" alt="レンダリング結果">
       <div class="rd-bar"><span id="rdInfo"></span><button class="btn primary" id="rdSave">PNG で保存</button><button class="btn" id="rdClose">閉じる</button></div>
@@ -251,19 +262,45 @@ dl.keys dd{margin:0;color:var(--muted)}
       <input type="range" id="strength" min="0.02" max="1" step="0.01" value="0.45">
       <div class="row"><label for="falloff">減衰カーブ</label><canvas id="falloffCv" width="88" height="30" aria-hidden="true"></canvas></div>
       <select id="falloff" class="wide" aria-label="減衰カーブ"></select>
-      <div class="row"><label for="strokeType">ストローク</label><select id="strokeType"><option value="dots">連続で塗る</option><option value="drag">ドラッグで配置</option><option value="spray">スプレー（散らす）</option></select></div>
+      <div class="row"><label for="strokeType">ストローク</label><select id="strokeType"><option value="dots">連続で塗る</option><option value="drag">ドラッグで配置</option><option value="spray">スプレー（散らす）</option><option value="dragdot">1つを動かして置く（DragDot）</option><option value="line">直線（押した所から）</option></select></div>
+      <div id="immRow" hidden>
+        <div class="row"><label for="immSel">部品</label><select id="immSel" style="width:150px"></select></div>
+        <div class="row"><input type="checkbox" id="immMerge" checked><label for="immMerge">選択中のパーツに結合する（外すと別のパーツ）</label></div>
+        <div class="grid2"><button class="btn" id="immAdd" title="選択中のパーツを部品として登録します（+Y が上・底が置く面になります）">今のパーツを登録</button><button class="btn" id="immDel">この部品を削除</button></div>
+        <p class="note">モデルの上でクリックすると、表面の向きに合わせて部品を置きます。ドラッグすると大きさと回転を決められます。左右対称（X）がオンなら反対側にも置きます。</p>
+      </div>
+      <div id="vdmRow" hidden>
+        <div class="row"><label for="vdmSel">VDM の型</label><select id="vdmSel" style="width:150px"></select></div>
+        <div class="row"><canvas id="vdmCv" width="64" height="64" style="width:64px;height:64px;border-radius:6px;border:1px solid var(--line)" aria-label="VDM の型のプレビュー"></canvas>
+          <div style="display:grid;gap:4px;flex:1"><button class="btn" id="vdmLoad" title="ベクターディスプレイスメントの EXR（Blender の VDM ブラシなど：R=右・G=上・B=法線、1 = ブラシの半径）">EXR を読み込む…</button>
+          <button class="btn" id="vdmPlate" title="型を彫るための平らな板を追加します（ほかのパーツは非表示にします）">型を彫る板を追加</button>
+          <button class="btn" id="vdmCapture" title="「型を彫る板」で彫った形を VDM の型にします">板から型を作る</button>
+          <button class="btn" id="vdmDel">この型を削除</button></div></div>
+        <input type="file" id="vdmFile" accept=".exr" hidden>
+        <p class="note">モデルの上でクリックし、ドラッグで大きさと向きを決めて押し付けます。ポリゴンが細かいほどきれいに出ます（細分化してから使ってください）。</p>
+      </div>
+      <div class="row" id="emodeRow" hidden><label for="emode">動かし方</label><select id="emode" style="width:150px"><option value="grab">つかむ</option><option value="twist">ねじる（左右にドラッグ）</option><option value="scale">拡大縮小（上下にドラッグ）</option></select></div>
+      <div class="row"><label for="bDepth">深さ（埋め込み）</label><output id="bDepthOut">0.00</output></div>
+      <input type="range" id="bDepth" min="-1" max="1" step="0.05" value="0" title="盛る・彫るブラシは強さの倍率、平面を使うブラシ（クレイ・平らにする・トリムなど）は平面の高さが変わります">
+      <div class="row"><label for="bPlane">彫る向き</label><select id="bPlane" style="width:150px"><option value="area">面の平均（標準）</option><option value="vertex">頂点ごとの法線</option><option value="view">画面の奥行き</option><option value="x">X 軸</option><option value="y">Y 軸</option><option value="z">Z 軸</option></select></div>
+      <div class="row"><input type="checkbox" id="bGroup"><label for="bGroup">塗り始めのポリグループだけに効かせる</label></div>
+      <div class="row"><label for="bCavity">凹凸でマスク</label><select id="bCavity" style="width:130px"><option value="off">なし</option><option value="cavity">凹んだ所だけ</option><option value="peak">出っ張った所だけ</option></select></div>
       <div class="row"><label for="spacing">間隔</label><output id="spacingOut"></output></div>
       <input type="range" id="spacing" min="0.05" max="1.5" step="0.01" value="0.22">
       <div class="row"><label for="lazy">手ぶれ補正 (px)</label><output id="lazyOut"></output></div>
       <input type="range" id="lazy" min="0" max="120" step="1" value="0">
       <div class="row"><input type="checkbox" id="invert"><label for="invert">反転（掘る／マスク解除） <span class="note">Alt</span></label></div>
       <div class="row"><input type="checkbox" id="backface" checked><label for="backface">裏側に影響させない</label></div>
+      <div class="row"><input type="checkbox" id="sizePres"><label for="sizePres">筆圧でサイズも変える</label></div>
+      <div class="row"><input type="checkbox" id="worldSize"><label for="worldSize">ズームしてもモデル上の大きさを保つ</label></div>
       <div class="row"><input type="checkbox" id="dynOn"><label for="dynOn">ダイナミック細分化（塗った所だけ自動で細かく）</label></div>
       <div class="row"><label for="dynDetail">細かさ（画面上の三角形の大きさ px）</label><output id="dynDetailOut">6</output></div>
       <input type="range" id="dynDetail" min="2" max="30" step="1" value="6">
       <div class="row" style="margin-top:8px"><label for="psList">保存した設定</label><select id="psList" style="width:150px"></select></div>
       <div class="grid2"><button class="btn" id="psLoad">呼び出す</button><button class="btn" id="psDel">削除</button></div>
       <div class="row"><input type="text" id="psName" placeholder="名前（空なら自動）" style="flex:1"><button class="btn" id="psSave">今の設定を保存</button></div>
+      <div class="grid2"><button class="btn" id="psExport" title="全ブラシの設定と保存した設定を1つのファイルに書き出します">書き出す…</button><button class="btn" id="psImport" title="書き出したブラシのファイル（.bpbrush）を読み込みます">読み込む…</button></div>
+      <input type="file" id="psFile" accept=".bpbrush,.json,application/json" hidden>
       <p class="note">強さ・減衰カーブ・ストローク・アルファはブラシごとに記憶されます。ペンタブレットの筆圧で強さが変わります。よく使う組み合わせ（ブラシ・サイズ・アルファなど）は名前を付けて保存できます。</p>
     </section>
 
@@ -277,9 +314,18 @@ dl.keys dd{margin:0;color:var(--muted)}
         <button class="btn" data-pe="delete" title="面をクリック：面を消して穴にする">面を消す</button>
         <button class="btn" data-pe="close" title="穴のふちの辺をクリック：穴を1枚の面でふさぐ">穴を閉じる</button>
         <button class="btn" data-pe="move" title="面をクリックしてドラッグ：面を法線の方向に動かす（形はそのまま）">面を動かす</button>
+        <button class="btn" data-pe="bevel" title="辺をクリックしてドラッグ：辺の輪を斜めに面取りする（上へドラッグで幅が広がる）">面取り</button>
+        <button class="btn" data-pe="bridge" title="穴のふちの辺を2つ順にクリック：2つの穴を四角の帯でつなぐ">穴をつなぐ</button>
+        <button class="btn" data-pe="crease" title="辺をクリック：辺の輪にクリースを付ける／外す（細分化しても角が丸くならない）">クリース</button>
       </div>
+      <div class="grid2" style="margin-top:6px">
+        <button class="btn" id="peCreaseAngle" title="面と面の角度が30°以上の辺すべてにクリースを付けます">角の辺をクリース</button>
+        <button class="btn" id="peCreaseClear">クリースを全部外す</button>
+      </div>
+      <div class="row" style="margin-top:6px"><label for="dsLevel">なめらか表示</label><select id="dsLevel" style="width:150px"><option value="0">オフ</option><option value="1">細分化 1 回分</option><option value="2">細分化 2 回分</option><option value="3">細分化 3 回分</option></select></div>
+      <button class="btn full" id="dsApply" disabled title="表示している なめらかな形を、細分化レベルとして確定します">なめらか表示を細分化レベルにする</button>
       <div class="row" style="margin-top:6px"><label for="peTarget">対象</label><select id="peTarget"><option value="poly">ポリゴン1枚</option><option value="flat">つながった平らな面</option></select></div>
-      <p class="note">低ポリゴンのパーツを、面と辺の単位で直接作り変えます。カーソルの下の対象が光り、クリック（押し出す・はめ込む・面を動かすはドラッグ）で実行します。背景のドラッグで視点は回せます。細分化レベルがないパーツで使えます（三角形のパーツは自動で四角にまとめます）。</p>
+      <p class="note">低ポリゴンのパーツを、面と辺の単位で直接作り変えます。カーソルの下の対象が光り、クリック（押し出す・はめ込む・面を動かすはドラッグ）で実行します。背景のドラッグで視点は回せます。細分化レベルがないパーツで使えます（三角形のパーツは自動で四角にまとめます）。「なめらか表示」は細分化した仕上がりを低ポリゴンのまま見せます（ダイナミック細分化）。クリースした辺（水色）は細分化しても丸くなりません。</p>
     </section>
 
     <section id="defSec">
@@ -305,7 +351,13 @@ dl.keys dd{margin:0;color:var(--muted)}
       <div class="grid2">
         <button class="btn" id="exGo" title="マスクした所を、厚みのある別のパーツとして抜き出します（服・鎧・ベルト）">マスクから抜き出す</button>
         <button class="btn" id="clipGo" title="画面に線を引いて、線の片側を平らに切り落とします">クリップ（線で切る）</button>
+        <button class="btn" id="sliceGo" title="画面に線を引くと、線の位置に辺の輪を入れて、片側を新しいポリグループにします（SliceCurve 風）">スライス（線で分ける）</button>
+        <button class="btn" id="panelGo" title="ポリグループごとに、厚みのある別々の板にします（Panel Loops 風）">パネル化</button>
       </div>
+      <div class="row"><label for="panelThick">パネルの厚さ</label><output id="panelThickOut">0.020</output></div>
+      <input type="range" id="panelThick" min="0.002" max="0.1" step="0.001" value="0.02">
+      <div class="row"><label for="panelGap">パネルのすき間</label><output id="panelGapOut">0.006</output></div>
+      <input type="range" id="panelGap" min="0" max="0.05" step="0.001" value="0.006">
       <p class="note">変形は選択中のパーツ全体にかかります（マスクした所は動きません）。「モーフ」ブラシで塗ると、塗った所だけ保存した形に戻ります。クリップは、ボタンを押してから画面上をドラッグして線を引くと、線から出ている短い印の側（Alt で反対側）が線の位置で平らになります。</p>
     </section>
 
@@ -564,6 +616,9 @@ dl.keys dd{margin:0;color:var(--muted)}
       <div class="row"><input type="checkbox" id="rtSym" checked><label for="rtSym">左右対称（X）</label></div>
       <div class="row"><input type="checkbox" id="rtPure" checked><label for="rtPure">四角ポリゴンだけにする（形に沿う）</label></div>
       <div class="row"><input type="checkbox" id="rtSharp" checked><label for="rtSharp">角やエッジを保つ（形に沿う）</label></div>
+      <div class="row"><input type="checkbox" id="rtGroups" checked><label for="rtGroups">ポリグループの境目に沿わせる（形に沿う）</label></div>
+      <div class="row"><input type="checkbox" id="rtGuides" checked><label for="rtGuides">ガイド線の向きに並べる（形に沿う）</label></div>
+      <div class="grid2"><button class="btn" id="rtGuideDraw" title="ガイド線ブラシに切り替えます。表面をなぞると線が引けます">ガイド線を引く</button><button class="btn" id="rtGuideClear">ガイド線を消す</button></div>
       <button class="btn primary full" id="rtGo">自動リトポ</button>
       <p class="note">選択中のパーツを、指定した数前後の四角ポリゴンで作り直した新しいサブツールを作ります（元のパーツは非表示で残ります）。四角ポリゴンは OBJ 書き出しでも四角のまま出力されます。「形に沿う」は面の向きに沿って四角を並べ、角やエッジに沿ってループを通します。左右対称にすると X=0 の面にループが乗り、左右がぴったり同じになります。「格子状」は流れが格子に沿う、より単純な方式です。</p>
     </section>
@@ -605,7 +660,10 @@ dl.keys dd{margin:0;color:var(--muted)}
       <button class="btn primary full" id="bakeGo">法線マップと色を焼き付け</button>
       <div class="row"><input type="checkbox" id="texPreview"><label for="texPreview">焼き付けたテクスチャで表示</label></div>
       <button class="btn full" id="texSave">テクスチャを PNG で保存</button>
-      <p class="note">リトポした軽いパーツで使います：UV を展開 → 「焼き付け元」に元の細かいパーツ（または同じパーツの一番上の細分化レベル）を選んで焼き付け。細部と色がテクスチャになり、GLB にはテクスチャ込み、OBJ には UV 付きで書き出されます。</p>
+      <div class="row" style="margin-top:10px"><label for="dmRef">基準の面</label><select id="dmRef" style="width:150px"><option value="smooth">なめらか（細分化した面）</option><option value="flat">平ら（今のレベルの面）</option></select></div>
+      <div class="row"><label for="dmSize">マップの大きさ</label><select id="dmSize"><option value="1024">1024</option><option value="2048" selected>2048</option><option value="4096">4096</option></select></div>
+      <div class="grid2"><button class="btn" id="dmDisp" title="一番上の細分化レベルの細部を、法線方向の距離（32bit 浮動小数）として書き出します">ディスプレイスメント（EXR）</button><button class="btn" id="dmVec" title="一番上の細分化レベルの細部を、接空間のベクトル（X=U方向・Y=V方向・Z=法線）として書き出します">ベクターディスプレイスメント</button></div>
+      <p class="note">リトポした軽いパーツで使います：UV を展開 → 「焼き付け元」に元の細かいパーツ（または同じパーツの一番上の細分化レベル）を選んで焼き付け。細部と色がテクスチャになり、GLB にはテクスチャ込み、OBJ には UV 付きで書き出されます。ディスプレイスメント（EXR・32bit）は、UV のあるレベルから一番上の細分化レベルまでの細部を、レイを飛ばさずに正確に写します（単位はモデルの座標＝FBX / OBJ と同じ）。</p>
     </section>
 
     <section>
@@ -680,11 +738,18 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { STLLoader } from 'three/addons/loaders/STLLoader.js';
+import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { encodeFBX } from './fbx.js';
+import { encodeEXR } from './exr.js';
+import { levelDisplacement } from './vdm.js';
+import { slicePlane, panelLoops } from './hardsurface.js';
+import { BUILTIN_VDM, builtinVDM, sampleVDM, vdmPreview, stampFromEXR, captureStamp } from './vdmstamp.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { mergeVertices, mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { computeBoundsTree, acceleratedRaycast, MeshBVH, INTERSECTED, NOT_INTERSECTED } from 'three-mesh-bvh';
 import { zsphereMesh } from './zspheres.js';
-import { encodeProject, decodeProject } from './project.js';
+import { encodeProject, decodeProject, encodeProjectStream, decodeProjectStream } from './project.js';
 import { remesh, remeshGrid, quadRemesh, booleanMesh, voxelize, surfaceNets, setAccel, accelTimes, tryAccel } from './remesh.js';
 import { unwrap, drawUV } from './uv.js';
 import { bakeMaps } from './bake.js';
@@ -714,16 +779,42 @@ const BRUSHES = [
   { id:'standard',  key:'1', short:'St', name:'スタンダード', desc:'盛り上げる（Altで掘る）', alpha:true },
   { id:'clay',      key:'2', short:'Cl', name:'クレイ',       desc:'粘土を平らに盛る', alpha:true },
   { id:'claybuild', key:'3', short:'CB', name:'クレイ盛り',   desc:'四角い粘土を盛り重ねる', alpha:true, def:{ alpha:'square', falloff:'flat', strength:0.5 } },
+  { id:'claytubes', key:'',  short:'CT', name:'クレイチューブ', desc:'ストロークの向きに四角い粘土を平らに盛る（ClayTubes）', alpha:true, def:{ alpha:'square', falloff:'flat', strength:0.55, follow:true } },
   { id:'inflate',   key:'4', short:'In', name:'膨らませる',   desc:'面ごとに膨らむ', alpha:true },
   { id:'layer',     key:'',  short:'Ly', name:'レイヤー',     desc:'一定の高さで盛る（重ねても高くならない）', alpha:true, def:{ falloff:'flat', strength:0.4 } },
   { id:'blob',      key:'',  short:'Bb', name:'ブロブ',       desc:'丸く膨らんだ玉を盛る（Altでへこませる）', alpha:true, def:{ falloff:'dome', strength:0.5 } },
+  { id:'spike',     key:'',  short:'Sp', name:'トゲ',         desc:'鋭く高く盛る（ツノ・トゲの先）', alpha:true, base:'standard', def:{ falloff:'sharp', strength:0.9, depth:1 } },
+  { id:'fill',      key:'',  short:'Fi', name:'埋める',       desc:'凹みだけを平らに埋める（Altで出っ張りを削る）', alpha:true, base:'trim', inv:true, def:{ falloff:'flat', strength:0.5 } },
+  { id:'balloon',   key:'',  short:'Bl', name:'風船',         desc:'丸みを保ったまま、風船のように均一に膨らませる', alpha:false, def:{ strength:0.5 } },
+  { id:'fold',      key:'',  short:'Fo', name:'折り目',       desc:'ストロークに沿って布の折り目（盛り上がった筋）を作る', alpha:false, def:{ strength:0.5 } },
+  { id:'wrinkles',  key:'',  short:'Wr', name:'しわ',         desc:'しわの型で細かいしわを彫る（ストロークの向きに沿う）', alpha:true, base:'standard', inv:true, def:{ alpha:'wrinkles', follow:true, strength:0.35 } },
+  { id:'scales',    key:'',  short:'Sc', name:'ウロコ',       desc:'ウロコの型を押していく', alpha:true, base:'standard', def:{ alpha:'scales', falloff:'flat', strength:0.4 } },
+  { id:'fabric',    key:'',  short:'Fb', name:'布目',         desc:'布目の型をドラッグで置く', alpha:true, base:'standard', def:{ alpha:'weave', stroke:'drag', strength:0.3 } },
+  { id:'pores',     key:'',  short:'Pr', name:'毛穴',         desc:'肌の毛穴のような小さなくぼみを散らす（Altで粒）', alpha:false, def:{ strength:0.5 } },
+  { id:'gravity',   key:'',  short:'Gv', name:'重力',         desc:'下（-Y）へ垂らす（布のたるみ・しずく。Altで上へ）', alpha:true, def:{ strength:0.4 } },
+  { id:'zproject',  key:'',  short:'ZP', name:'吸い付け',     desc:'表示中の別のパーツの表面へ吸い付ける（ZProject）', alpha:true, def:{ strength:0.6 } },
   { id:'noise',     key:'',  short:'Nz', name:'ノイズ',       desc:'表面にザラザラした凹凸を付ける（肌・岩）', alpha:true, def:{ strength:0.35 } },
   { id:'smooth',    key:'5', short:'Sm', name:'スムーズ',     desc:'なめらかにする', alpha:false, sep:true },
+  { id:'smoothstrong', key:'', short:'S+', name:'強いスムーズ', desc:'何度もならして大きな凹凸を消す', alpha:false, base:'smooth', reps:3, def:{ strength:1 } },
+  { id:'smoothvalley', key:'', short:'SV', name:'谷をならす',   desc:'凹んだ所だけをならす（尾根は残す）', alpha:false, base:'smooth', def:{ cavity:'cavity' } },
+  { id:'smoothpeak',   key:'', short:'SP', name:'尾根をならす', desc:'出っ張った所だけをならす（溝は残す）', alpha:false, base:'smooth', def:{ cavity:'peak' } },
+  { id:'smoothsharp', key:'', short:'SE', name:'角を残すスムーズ', desc:'角やエッジは残して、面だけをならす', alpha:false, def:{ strength:0.7 } },
+  { id:'smoothdir', key:'',  short:'SD', name:'流れのスムーズ', desc:'ストロークの向きにだけならす（筋や流れを保つ）', alpha:false, def:{ strength:0.7 } },
+  { id:'relax',     key:'',  short:'Rx', name:'そろえる',     desc:'形を変えずにポリゴンの大きさをそろえる（引き伸ばした所に）', alpha:false, def:{ strength:0.6 } },
+  { id:'sharpen',   key:'',  short:'Sa', name:'くっきり',     desc:'細かい凹凸を強める（スムーズの逆）', alpha:false, def:{ strength:0.3 } },
   { id:'polish',    key:'',  short:'Po', name:'ポリッシュ',   desc:'細かい凹凸を削って面を磨く', alpha:true, def:{ strength:0.6 } },
+  { id:'hpolish',   key:'',  short:'hP', name:'平面で磨く', desc:'塗り始めの面で平らに削る。角がくっきり立つ（hPolish）', alpha:true, def:{ falloff:'flat', strength:0.6 } },
   { id:'flatten',   key:'6', short:'Fl', name:'平らにする',   desc:'面を平面に揃える', alpha:true },
+  { id:'planar',    key:'',  short:'Pl', name:'プレーナー',   desc:'平面にしっかり削る・埋める（硬い平らな面）', alpha:true, base:'flatten', def:{ falloff:'flat', strength:0.9 } },
+  { id:'trimdyn',   key:'',  short:'TD', name:'トリム（画面）', desc:'画面に平行な面で出っ張りを削る（TrimDynamic）', alpha:true, base:'trim', def:{ plane:'view', falloff:'flat', strength:0.5 } },
   { id:'trim',      key:'',  short:'Tr', name:'トリム',       desc:'出っ張りだけ平らに削る（Altで凹みを埋める）', alpha:true, def:{ falloff:'flat', strength:0.5 } },
   { id:'dam',       key:'7', short:'Dm', name:'シャープ溝',   desc:'鋭いV字の溝を彫る（Altで尾根）', alpha:false, sep:true, def:{ falloff:'sharp', strength:0.5 } },
   { id:'crease',    key:'',  short:'Cr', name:'溝',           desc:'丸みのある溝を彫る', alpha:true },
+  { id:'mallet',    key:'',  short:'Ml', name:'マレット',     desc:'平らな底のへこみを打ち込む（Altで盛る）', alpha:true, base:'standard', inv:true, def:{ falloff:'flat', strength:0.5, alpha:'square' } },
+  { id:'crack',     key:'',  short:'Ck', name:'ひび',         desc:'細く深いひび割れを彫る', alpha:false, base:'dam', def:{ falloff:'sharp', strength:0.8, depth:0.5 } },
+  { id:'rake',      key:'',  short:'Rk', name:'レーキ',       desc:'ストロークに沿って平行な筋を彫る（毛並み・木目・しわ）', alpha:false, def:{ strength:0.5 } },
+  { id:'stitch',    key:'',  short:'Sw', name:'縫い目',       desc:'ストロークに沿って縫い目の点線を彫る', alpha:false, def:{ strength:0.5 } },
+  { id:'twist',     key:'',  short:'Tw', name:'ねじる',       desc:'ブラシの中心のまわりに表面をねじる（Altで逆回り）', alpha:false, def:{ strength:0.5 } },
   { id:'slash',     key:'',  short:'Sl', name:'切り込み',     desc:'刃物で切ったような細く深い線を彫る', alpha:false, def:{ falloff:'sharp', strength:0.5 } },
   { id:'pinch',     key:'',  short:'Pi', name:'つまむ',       desc:'エッジを鋭くする', alpha:false },
   { id:'magnify',   key:'',  short:'Mg', name:'押し広げる',   desc:'中心から外へ広げて膨らませる（Altで寄せる）', alpha:false },
@@ -731,14 +822,45 @@ const BRUSHES = [
   { id:'pose',      key:'',  short:'Ps', name:'ポーズ',       desc:'マスクしていない所を、クリックした関節を中心に回す（左右・上下にドラッグ）', alpha:false, pose:true },
   { id:'nudge',     key:'',  short:'Nd', name:'ずらす',       desc:'表面をストロークの向きに滑らせる', alpha:false, def:{ strength:0.5 } },
   { id:'move',      key:'8', short:'Mv', name:'ムーブ',       desc:'つかんで大きく動かす', alpha:false, sep:true },
+  { id:'bend',      key:'',  short:'Be', name:'曲げる',       desc:'ストロークの向きに、ブラシの範囲を折り曲げる（Altで逆）', alpha:false, def:{ strength:0.4 } },
+  { id:'scale',     key:'',  short:'Sz', name:'大きさ',       desc:'ブラシの範囲だけを大きくする（Altで小さく）', alpha:false, def:{ strength:0.4 } },
+  { id:'moveinf',   key:'',  short:'MI', name:'ムーブ（奥まで）', desc:'画面の奥まで貫いて動かす（裏側も一緒に）', alpha:false },
+  { id:'movetopo',  key:'',  short:'MT', name:'ムーブ（つながり）', desc:'つかんで動かす。近くにあっても離れた部分（隣の指・唇）は動かない', alpha:false },
+  { id:'elastic',   key:'',  short:'ME', name:'ムーブ（弾性）', desc:'体積を保ってなめらかに動かす（つかむ・ねじる・拡大縮小）', alpha:false, def:{ emode:'grab' } },
   { id:'snake',     key:'0', short:'Sh', name:'引き伸ばし',   desc:'ドラッグした方向へ伸ばす（角・触手）', alpha:false, def:{ strength:0.8 } },
   { id:'tube',      key:'',  short:'Tb', name:'チューブ',     desc:'なぞった線に沿ってチューブ（ロープ・ホース・ツノ）を作る', alpha:false, curve:true, sep:true },
   { id:'insert',    key:'',  short:'Im', name:'並べる',       desc:'なぞった線に沿って形を並べる（鋲・数珠・チェーン）', alpha:false, curve:true },
+  { id:'vdm',       key:'',  short:'VD', name:'VDM',          desc:'ベクターディスプレイスメントの型を押し付ける（張り出した形も1回で）。クリックしてドラッグで大きさと向き', alpha:false, def:{ stroke:'drag', strength:1 } },
+  { id:'imm',       key:'',  short:'IM', name:'部品を置く',   desc:'部品（ボルト・リベット・パイプなど）を表面に置く。クリックしてドラッグで大きさと向き（IMM）', alpha:false },
+  { id:'guide',     key:'',  short:'Gd', name:'ガイド線',   desc:'自動リトポ（形に沿う）のループの向きを決める線を、表面をなぞって引く', alpha:false, curve:true },
   { id:'mask',      key:'9', short:'Mk', name:'マスク',       desc:'塗った所を保護する', alpha:true, sep:true },
+  { id:'maskgrow',  key:'',  short:'MG', name:'マスク広げ',   desc:'マスクを周りへ広げる（Altで縮める）', alpha:false },
+  { id:'maskcavity', key:'', short:'MC', name:'凹みマスク',   desc:'凹んだ所だけにマスクを塗る', alpha:true, base:'mask', def:{ cavity:'cavity' } },
+  { id:'masksmooth', key:'', short:'MS', name:'マスクぼかし', desc:'マスクの境目をなめらかにする（Altでくっきり）', alpha:false },
   { id:'paint',     key:'',  short:'Pt', name:'ペイント',     desc:'色を塗る（Altで元の色に戻す）', alpha:true, def:{ strength:0.7 } },
+  { id:'paintcavity', key:'', short:'PC', name:'凹みペイント', desc:'凹んだ所だけに色を塗る（汚れ・影）', alpha:true, base:'paint', def:{ cavity:'cavity', strength:0.7 } },
+  { id:'paintnoise', key:'', short:'PN', name:'まだらペイント', desc:'ノイズ模様のまだらに色を塗る（肌・石・さび）', alpha:false, def:{ strength:0.7 } },
+  { id:'smear',     key:'',  short:'Sr', name:'色を伸ばす',   desc:'ストロークの向きに色を引きずって混ぜる', alpha:false, def:{ strength:0.6 } },
+  { id:'paintblur', key:'',  short:'PB', name:'色ぼかし',     desc:'ポリペイントの色をなじませる', alpha:false, def:{ strength:0.6 } },
+  { id:'pgpaint',   key:'',  short:'PG', name:'グループ塗り', desc:'塗った所を新しいポリグループにする（Altで塗り始めのグループを広げる）', alpha:false, def:{ falloff:'flat' } },
 ];
 const BRUSH = Object.fromEntries(BRUSHES.map(b => [b.id, b]));
-const canDrag = id => BRUSH[id].alpha && id !== 'layer';
+// the behaviour a brush runs (presets reuse another brush's with their own defaults)
+const baseOf = id => BRUSH[id].base || id;
+// brush picker groups (B key)
+const BRUSH_CATS = [
+  ['盛る', ['standard', 'clay', 'claybuild', 'claytubes', 'inflate', 'balloon', 'layer', 'blob', 'spike', 'fill', 'fold', 'gravity', 'zproject', 'noise']],
+  ['表面の模様', ['wrinkles', 'scales', 'fabric', 'pores', 'stitch', 'rake']],
+  ['整える', ['smooth', 'smoothstrong', 'smoothsharp', 'smoothdir', 'smoothvalley', 'smoothpeak', 'relax', 'sharpen', 'polish', 'hpolish', 'flatten', 'planar', 'trim', 'trimdyn', 'morph']],
+  ['彫る', ['dam', 'crease', 'mallet', 'crack', 'slash', 'pinch', 'magnify', 'twist', 'nudge']],
+  ['動かす', ['move', 'moveinf', 'movetopo', 'elastic', 'snake', 'bend', 'scale', 'pose']],
+  ['作る', ['vdm', 'imm', 'tube', 'insert', 'guide']],
+  ['マスク・色・グループ', ['mask', 'maskcavity', 'maskgrow', 'masksmooth', 'paint', 'paintcavity', 'paintnoise', 'smear', 'paintblur', 'pgpaint']],
+];
+const canDrag = id => (BRUSH[id].alpha || id === 'vdm') && baseOf(id) !== 'layer' && baseOf(id) !== 'hpolish' && id !== 'zproject';
+// brushes that work against a plane (depth / imbed shifts that plane)
+const PLANE_BRUSHES = new Set(['clay', 'claybuild', 'claytubes', 'flatten', 'trim', 'hpolish']);
+const isMoveBrush = id => id === 'move' || id === 'movetopo' || id === 'elastic' || id === 'moveinf';
 
 // falloff: u = 1 at the brush center, 0 at the edge
 const sstep = t => t * t * (3 - 2 * t);
@@ -752,14 +874,16 @@ const FALLOFFS = [
 const FO = Object.fromEntries(FALLOFFS.map(x => [x.id, x.f]));
 
 const BASE_COL = new THREE.Color('#d8c0a2');   // clay color (linear) for unpainted vertices
-const S = { paintHex:'#9c4a3c', paintLin:new THREE.Color('#9c4a3c'), brush:'standard', size:55, spacing:0.22, lazy:0, invert:false, backface:true, sym:true, wire:false, solo:false };
-const BASE_CFG = { strength:0.45, falloff:'smooth', stroke:'dots', alpha:'none', alphaInv:false, follow:false };
+const S = { imm:'i:bolt', immMerge:true, vdm:'v:mushroom', dynSub:0, paintHex:'#9c4a3c', paintLin:new THREE.Color('#9c4a3c'), brush:'standard', size:55, spacing:0.22, lazy:0, invert:false, backface:true, sym:true, wire:false, solo:false, sizePres:false, worldSize:false };
+// depth: -1..1 moves the working plane / height (imbed) · plane: sculpt direction (area / view / vertex / x / y / z)
+// groupMask: only the polygroup under the brush · cavity: off / cavity (only the hollows) / peak (only the bumps)
+const BASE_CFG = { strength:0.45, falloff:'smooth', stroke:'dots', alpha:'none', alphaInv:false, follow:false, depth:0, plane:'area', groupMask:false, cavity:'off', emode:'grab' };
 const BS = Object.fromEntries(BRUSHES.map(b => [b.id, { ...BASE_CFG, ...(b.def || {}) }]));
 try {
   const saved = JSON.parse(localStorage.getItem('bp-brushes') || 'null');
   if (saved) {
     for (const id in saved.bs || {}) if (BS[id]) Object.assign(BS[id], saved.bs[id]);
-    for (const k of ['size', 'spacing', 'lazy', 'brush', 'paintHex']) if (saved[k] !== undefined) S[k] = saved[k];
+    for (const k of ['size', 'spacing', 'lazy', 'brush', 'paintHex', 'sizePres', 'worldSize', 'vdm', 'imm', 'immMerge']) if (saved[k] !== undefined) S[k] = saved[k];
     if (/^#[0-9a-f]{6}$/i.test(S.paintHex)) S.paintLin.set(S.paintHex); else S.paintHex = '#9c4a3c';
   }
 } catch { /* ignore broken prefs */ }
@@ -767,8 +891,12 @@ if (!BRUSH[S.brush]) S.brush = 'standard';
 let prefsT = 0;
 function saveBrushPrefs() {
   clearTimeout(prefsT);
-  prefsT = setTimeout(() => { try { localStorage.setItem('bp-brushes', JSON.stringify({ bs:BS, size:S.size, spacing:S.spacing, lazy:S.lazy, brush:S.brush, paintHex:S.paintHex })); } catch {} }, 300);
+  prefsT = setTimeout(() => { try { localStorage.setItem('bp-brushes', JSON.stringify({ bs:BS, size:S.size, spacing:S.spacing, lazy:S.lazy, brush:S.brush, paintHex:S.paintHex, sizePres:S.sizePres, worldSize:S.worldSize, vdm:S.vdm, imm:S.imm, immMerge:S.immMerge })); } catch {} }, 300);
 }
+
+// VDM stamps: built-in ('v:...') or added by the user ('u:...', kept in IndexedDB)
+const customVDMs = [];
+function getVDM(id) { if (id && id.startsWith('u:')) { const c = customVDMs.find(a => a.id === id); return c ? c : null; } return id ? builtinVDM(id) : null; }
 
 // alphas: built-in ids, or 'c:<n>' for images the user added
 const customAlphas = [];
@@ -907,6 +1035,8 @@ function recData(r) {
     name: r.name, visible: r.visible, pos: r.pos, idx: r.idx, mask: r.mask, mirror: r.mirror, paint: r.paint || null, lv: r.lv,
     pg: r.pg && r.pg.length === r.pos.length / 3 ? r.pg : null,
     morph: r.morph && r.morph.length === r.pos.length ? r.morph : null,
+    guides: r.guides && r.guides.length ? r.guides : null,
+    vdmPlate: r.vdmPlate || null,
     layers: (r.layers || []).filter(l => l.delta.length === r.pos.length).map(l => ({ name: l.name, I: l.I, on: l.on, delta: l.delta })),
     levels: r.levels.map((L, k) => k === r.lv
       ? { current: true, ev: L.ev || null, quads: L.quads || null, ref0: L.ref0 || null, ...texData(L), ...polyData(L) }
@@ -914,7 +1044,7 @@ function recData(r) {
   };
 }
 // uv + baked textures (PNG bytes) stored on a level
-const polyData = L => L.polys ? { polys: { start: L.polys.start, idx: L.polys.idx } } : {};
+const polyData = L => ({ ...(L.polys ? { polys: { start: L.polys.start, idx: L.polys.idx } } : {}), ...(L.crease ? { crease: L.crease } : {}) });
 const texData = L => L.uv ? { uvIdx: L.uvIdx, uv: L.uv, bake: L.bake ? { size: L.bake.size, normalPng: L.bake.normalPng, colorPng: L.bake.colorPng || null, heightPng: L.bake.heightPng || null, heightRange: L.bake.heightRange || 0 } : null } : {};
 function texFromData(L, d, ix) {
   if (!(d.uv instanceof Float32Array) || !(d.uvIdx instanceof Uint32Array) || d.uvIdx.length !== ix.length || d.uv.length !== ix.length * 2) return;
@@ -928,6 +1058,8 @@ function recFromData(s) {
   r.paint = s.paint instanceof Float32Array && s.paint.length === s.pos.length ? s.paint : null;
   r.pg = s.pg instanceof Int32Array && s.pg.length === s.pos.length / 3 ? s.pg : null;
   r.morph = s.morph instanceof Float32Array && s.morph.length === s.pos.length ? s.morph : null;
+  r.guides = s.guides instanceof Float32Array && s.guides.length % 6 === 0 ? s.guides : null;
+  r.vdmPlate = s.vdmPlate && s.vdmPlate.ref instanceof Float32Array ? { ref: s.vdmPlate.ref, h: +s.vdmPlate.h || 1 } : null;
   r.layers = Array.isArray(s.layers) ? s.layers.filter(l => l && l.delta instanceof Float32Array && l.delta.length === s.pos.length)
     .map((l, k) => ({ name: String(l.name || `レイヤー ${k + 1}`), delta: l.delta, I: Number.isFinite(l.I) ? l.I : 1, on: l.on !== false, rec: false })) : [];
   const Ls = Array.isArray(s.levels) ? s.levels : null, lv = s.lv | 0;
@@ -940,6 +1072,7 @@ function recFromData(s) {
                          : { idx: L.idx, ev: L.ev || undefined, pos: L.pos || null, det: L.det || null, quads: L.quads ? okQuads(L.quads, L.idx) : undefined, ref0 };
       if (o.idx) texFromData(o, L, o.idx);
       if (L.polys && L.polys.start instanceof Uint32Array && L.polys.idx instanceof Uint32Array) o.polys = L.polys;
+      if (L.crease instanceof Uint32Array && !(L.crease.length % 2)) o.crease = L.crease;
       return o;
     });
     // sanity: each level's vertex count = lower count + its edge count; positions/details where expected
@@ -955,6 +1088,7 @@ function recFromData(s) {
   } else if (Ls && Ls[0]) {
     if (Ls[0].quads) r.levels[0].quads = okQuads(Ls[0].quads, s.idx);
     if (Ls[0].polys && Ls[0].polys.start instanceof Uint32Array && Ls[0].polys.idx instanceof Uint32Array) r.levels[0].polys = Ls[0].polys;
+    if (Ls[0].crease instanceof Uint32Array && !(Ls[0].crease.length % 2)) r.levels[0].crease = Ls[0].crease;
     texFromData(r.levels[0], Ls[0], s.idx);
   }
   return r;
@@ -978,7 +1112,7 @@ function ensureView(rec) {
   g.setIndex(new THREE.BufferAttribute(rec.idx, 1));
   const painted = rec.paint && rec.paint.length === rec.pos.length;
   if (painted) g.setAttribute('color', new THREE.BufferAttribute(rec.paint, 3));
-  g.computeBoundsTree(); g.computeBoundingSphere();
+  buildBVH(g); g.computeBoundingSphere();
   rec.view = new THREE.Mesh(g, painted ? viewMatPaint : viewMat);
   rec.view.userData.rec = rec; rec.view.frustumCulled = false;
   viewsAlive.add(rec);
@@ -1014,6 +1148,16 @@ function activate(rec, force = false) {
   if (gizmoOn) attachGizmo();
 }
 
+// BVH for picking / brush lookups: built by the native module on all cores for big meshes (same packed tree
+// three-mesh-bvh builds; the geometry's index is reordered the same way), else by three-mesh-bvh
+function buildBVH(g) {
+  const ix = g.index.array, p = g.attributes.position.array;
+  if (ix.length >= 900000 && p instanceof Float32Array && ix instanceof Uint32Array) {
+    const r = tryAccel('buildBVH', [p, ix]);
+    if (r && r.index && r.index.length === ix.length) { g.boundsTree = MeshBVH.deserialize({ roots: [r.nodes.buffer], index: r.index }, g, { setIndex: true }); return; }
+  }
+  g.computeBoundsTree();
+}
 function setMesh(p, ix, m, mir, pt) {
   if (mesh) { scene.remove(mesh); scene.remove(wireMesh); if (wireMesh.geometry !== geo) wireMesh.geometry.dispose(); geo.disposeBoundsTree?.(); geo.dispose(); }
   nV = p.length / 3; nF = ix.length / 3;
@@ -1023,7 +1167,7 @@ function setMesh(p, ix, m, mir, pt) {
   nrm = new Float32Array(nV * 3); col = new Float32Array(nV * 3);
   geo.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
   geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
-  geo.computeBoundsTree();              // may reorder the index; build adjacency afterwards
+  buildBVH(geo);             // may reorder the index; build adjacency afterwards
   pos = p; idx = geo.index.array;
   indexBVH();
   chunkMark = new Uint8Array((nV >> CHUNK) + 1); chunkList = []; gpuPart = false;
@@ -1051,9 +1195,11 @@ function setMesh(p, ix, m, mir, pt) {
     const lg = new THREE.BufferGeometry(); lg.setAttribute('position', geo.attributes.position); lg.setIndex(e);
     wireMesh = new THREE.LineSegments(lg, quadWireMat);
   } else wireMesh = new THREE.Mesh(geo, wireMat);
-  wireMesh.frustumCulled = false; wireMesh.visible = S.wire; wireMesh.raycast = () => {};
+  wireMesh.frustumCulled = false; wireMesh.visible = S.wire || S.dynSub > 0; wireMesh.raycast = () => {};
   mesh.matrixAutoUpdate = wireMesh.matrixAutoUpdate = false;
   scene.add(mesh, wireMesh);
+  buildCreaseLines(); buildGuideLines();
+  dsDirty = true;
   if (active) active.hid = hid;
   applyHidden();
   if (active) {
@@ -1232,7 +1378,62 @@ const undoStack = [], redoStack = [];
 function snapshot(full, extraLayers) { return { rec: active, lvl: active.lv, pos: pos.slice(), mask: mask.slice(), paint: paint ? paint.slice() : null, pg: pg ? pg.slice() : null, lay: laySnap(extraLayers), idx: full ? idx.slice() : null, mirror: full ? mirror.slice() : null }; }
 const structSnap = () => ({ kind:'struct', list: subtools.slice(), active });
 const allSnap = () => ({ kind:'all', items: subtools.map(r => [r, r.pos.slice()]) });
-function pushEntry(e) { undoStack.push(e); while (undoStack.length > Math.max(5, VS.undo | 0)) undoStack.shift(); redoStack.length = 0; updateUndoButtons(); }
+// history also has a memory budget (a quarter of the PC's memory): big models drop their oldest steps first
+const entryBytes = e => { let b = 0; for (const k in e) { const x = e[k]; if (ArrayBuffer.isView(x)) b += x.byteLength; else if (k === 'items') for (const it of x) b += it[1].byteLength; } return b; };
+function undoBudget() { const gb = native && native.memoryGB || 8; return gb * 1073741824 * 0.25; }
+function trimHistory() {
+  while (undoStack.length > Math.max(5, VS.undo | 0)) undoStack.shift();
+  let total = 0; for (const e of undoStack) total += e._bytes ?? (e._bytes = entryBytes(e));
+  while (undoStack.length > 1 && total > undoBudget()) total -= undoStack.shift()._bytes;
+}
+function pushEntry(e) { undoStack.push(e); trimHistory(); redoStack.length = 0; updateUndoButtons(); }
+
+// Sparse stroke undo: only the vertices a stroke changes are saved (position, mask, color, group), on first touch.
+// Used for big meshes, where a full copy per stroke would cost hundreds of MB and a pause at every click.
+const SPARSE_MIN = 200000;
+let sp = null, spMark = null;
+function spBegin() {
+  if (!spMark || spMark.length !== nV) spMark = new Uint32Array(nV);
+  const c = 4096;
+  sp = { n: 0, cap: c, ids: new Uint32Array(c), P: new Float32Array(c * 3), M: new Float32Array(c), C: paint ? new Float32Array(c * 3) : null, G: pg ? new Int32Array(c) : null, paint, pg };
+}
+function spSave(v) {
+  if (!sp || spMark[v]) return;
+  if (sp.n === sp.cap) {
+    const c = sp.cap * 2, grow = (a, k) => { if (!a) return a; const b = new a.constructor(c * k); b.set(a); return b; };
+    sp.ids = grow(sp.ids, 1); sp.P = grow(sp.P, 3); sp.M = grow(sp.M, 1); sp.C = grow(sp.C, 3); sp.G = grow(sp.G, 1); sp.cap = c;
+  }
+  const k = sp.n++, i = v * 3; spMark[v] = k + 1;
+  sp.ids[k] = v; sp.P[k*3] = pos[i]; sp.P[k*3+1] = pos[i+1]; sp.P[k*3+2] = pos[i+2]; sp.M[k] = mask[v];
+  if (sp.C) { sp.C[k*3] = sp.paint[i]; sp.C[k*3+1] = sp.paint[i+1]; sp.C[k*3+2] = sp.paint[i+2]; }
+  if (sp.G) sp.G[k] = sp.pg[v];
+}
+// old values of a vertex saved in this stroke (index into sp), or -1
+const spIdx = v => sp && spMark[v] ? spMark[v] - 1 : -1;
+function spEnd() {
+  if (!sp) return;
+  const n = sp.n, e = { kind: 'sparse', nullPaint: !!sp.nullPaint, undone: false, rec: active, lvl: active.lv, nV, ids: sp.ids.slice(0, n), P: sp.P.slice(0, n * 3), M: sp.M.slice(0, n), C: sp.C ? sp.C.slice(0, n * 3) : null, G: sp.G ? sp.G.slice(0, n) : null };
+  for (let k = 0; k < n; k++) spMark[sp.ids[k]] = 0;
+  sp = null;
+  if (n) pushEntry(e);
+}
+// swap the saved values with the current ones (undo and redo are the same operation)
+function spSwap(e) {
+  const { ids, P, M, C, G } = e, n = ids.length;
+  if (C) ensurePaint();
+  for (let k = 0; k < n; k++) {
+    const v = ids[k], i = v * 3;
+    let t = pos[i]; pos[i] = P[k*3]; P[k*3] = t; t = pos[i+1]; pos[i+1] = P[k*3+1]; P[k*3+1] = t; t = pos[i+2]; pos[i+2] = P[k*3+2]; P[k*3+2] = t;
+    t = mask[v]; mask[v] = M[k]; M[k] = t;
+    if (C) for (let q = 0; q < 3; q++) { t = paint[i+q]; paint[i+q] = C[k*3+q]; C[k*3+q] = t; }
+    if (G && pg) { t = pg[v]; pg[v] = G[k]; G[k] = t; }
+    touch(v); setColor(v);
+  }
+  // the stroke that created the color layer: undo removes it again, redo brings it back
+  e.undone = !e.undone;
+  if (e.nullPaint && e.undone) { paint = active.paint = null; for (let k = 0; k < n; k++) setColor(ids[k]); }
+  flushNormals(); colorDirty = gpuPart = true; geo.computeBoundingSphere();
+}
 function pushUndo(full = false, extraLayers) { pushEntry(snapshot(full, extraLayers)); }
 function pushStruct() { pushEntry(structSnap()); }
 function restore(e) {
@@ -1264,6 +1465,12 @@ function stepHistory(from, to) {
     if (!subtools.includes(e.rec)) continue;   // that subtool was deleted since; nothing to restore
     if (e.rec !== active) activate(e.rec);
     if (e.kind === 'lv') { to.push(lvSnap()); restoreLv(e); break; }
+    if (e.kind === 'sparse') {
+      if (e.lvl !== active.lv) { if (e.lvl >= active.levels.length) continue; setLevel(e.lvl, true); }
+      if (e.nV !== nV) continue;
+      spSwap(e); to.push(e); break;
+    }
+    if (e.kind === 'crease') { if (active.lv !== 0) continue; to.push({ kind: 'crease', rec: active, crease: active.levels[0].crease ? active.levels[0].crease.slice() : null }); active.levels[0].crease = e.crease || undefined; buildCreaseLines(); dsDirty = true; break; }
     if (e.lvl !== active.lv) { if (e.lvl >= active.levels.length) continue; setLevel(e.lvl, true); }
     if (!e.idx && e.pos.length !== pos.length) continue;   // full snapshots (with topology) restore any vertex count
     to.push(snapshot(!!e.idx, e.lay ? e.lay.deltas.map(d => d[0]) : undefined)); restore(e); break;
@@ -1284,6 +1491,16 @@ function vnoise3(x, y, z) {
   const L = (a, b, t) => a + (b - a) * t;
   const c = (dx, dy, dz) => hash3(xi + dx, yi + dy, zi + dz);
   return L(L(L(c(0,0,0), c(1,0,0), u), L(c(0,1,0), c(1,1,0), u), v), L(L(c(0,0,1), c(1,0,1), u), L(c(0,1,1), c(1,1,1), u), v), w);
+}
+// distance to the nearest scattered point (one per cell), for pores
+function worley3(x, y, z) {
+  const xi = Math.floor(x), yi = Math.floor(y), zi = Math.floor(z); let best = 9;
+  for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) for (let c = -1; c <= 1; c++) {
+    const X = xi + a, Y = yi + b, Z = zi + c;
+    const dx = X + hash3(X, Y, Z) - x, dy = Y + hash3(X + 31, Y, Z) - y, dz = Z + hash3(X, Y + 57, Z) - z, d = dx*dx + dy*dy + dz*dz;
+    if (d < best) best = d;
+  }
+  return Math.sqrt(best);
 }
 const fbm3 = (x, y, z) => vnoise3(x, y, z) * 0.57 + vnoise3(x * 2.1 + 17, y * 2.1, z * 2.1) * 0.29 + vnoise3(x * 4.3, y * 4.3 + 31, z * 4.3) * 0.14;
 
@@ -1306,9 +1523,18 @@ function bvhCandidates(P, r) {
   });
   return nc;
 }
+// how hollow a vertex is: > 0 in a cavity, < 0 on a bump (neighbour average vs. the vertex, along its normal, per edge length)
+function cavityAt(v) {
+  const s0 = vvStart[v], s1 = vvStart[v + 1]; if (s1 === s0) return 0;
+  const i = v * 3; let ax = 0, ay = 0, az = 0, el = 0;
+  for (let j = s0; j < s1; j++) { const u = vvList[j] * 3, dx = pos[u] - pos[i], dy = pos[u+1] - pos[i+1], dz = pos[u+2] - pos[i+2]; ax += dx; ay += dy; az += dz; el += Math.sqrt(dx*dx + dy*dy + dz*dz); }
+  const c = s1 - s0; el /= c; if (el < 1e-12) return 0;
+  return (ax * nrm[i] + ay * nrm[i+1] + az * nrm[i+2]) / c / el * 6;
+}
 function gather(P, N0, r, F) {
   const r2 = r * r, px = P.x, py = P.y, pz = P.z;
   const bf = F ? F.bf : S.backface, fo = F ? F.fo : FO.smooth, A = F ? F.A : null, inv = F ? F.inv : false;
+  const gm = F && F.gm !== undefined ? F.gm : -1, cav = F && F.cav ? F.cav : 0;
   let n = 0;
   const useBVH = nV > 40000 && geo.boundsTree;
   const nc = useBVH ? bvhCandidates(P, r) : nV;
@@ -1320,7 +1546,9 @@ function gather(P, N0, r, F) {
     const d2 = dx*dx + dy*dy + dz*dz; if (d2 >= r2) continue;
     if (hid && hid[v]) continue;
     if (bf && nrm[i]*N0.x + nrm[i+1]*N0.y + nrm[i+2]*N0.z < -0.1) continue;
+    if (gm >= 0 && pg && pg[v] !== gm) continue;
     let w = fo(1 - Math.sqrt(d2) / r);
+    if (cav) { const c = cavityAt(v) * cav; if (c <= 0) continue; w *= Math.min(1, c); }
     if (A) {
       let a = sampleAlpha(A, (dx*F.ux + dy*F.uy + dz*F.uz) / r, (dx*F.vx + dy*F.vy + dz*F.vz) / r);
       if (inv) a = 1 - a;
@@ -1331,7 +1559,10 @@ function gather(P, N0, r, F) {
   return n;
 }
 
-function applyDab(P, N0, r, s, dir, brush, F) {
+const vdmS = [0, 0, 0];
+const zpRay = new THREE.Raycaster(); zpRay.firstHitOnly = true;
+function applyDab(P, N0, r, s, dir, brushId, F) {
+  const brush = baseOf(brushId); if (BRUSH[brushId].inv) dir = -dir;
   let n = gather(P, N0, r, F);
   if (brush === 'mask' && S.topoMask) n = topoFilter(P, n);
   if (!n) return;
@@ -1345,12 +1576,32 @@ function applyDab(P, N0, r, s, dir, brush, F) {
   const nl = Math.hypot(nx, ny, nz);
   if (nl < 1e-8) { nx = N0.x; ny = N0.y; nz = N0.z; } else { nx /= nl; ny /= nl; nz /= nl; }
   cx /= ws; cy /= ws; cz /= ws;
+  // sculpt plane: replace the area normal by the view direction or a world axis (pointing the same way as the surface)
+  const pl = F && F.plane || 'area', pv = pl === 'vertex';
+  if (pl === 'view' || pl === 'x' || pl === 'y' || pl === 'z') {
+    let qx = 0, qy = 0, qz = 0;
+    if (pl === 'view') { const e = camera.matrixWorld.elements; qx = e[8]; qy = e[9]; qz = e[10]; if (F.mir) qx = -qx; }
+    else if (pl === 'x') qx = 1; else if (pl === 'y') qy = 1; else qz = 1;
+    if (qx * nx + qy * ny + qz * nz < 0) { qx = -qx; qy = -qy; qz = -qz; }
+    nx = qx; ny = qy; nz = qz;
+  }
+  // depth (imbed): plane brushes move their plane, the others push harder or softer
+  const dep = F && F.depth || 0, amp = 1 + dep;
+  if (PLANE_BRUSHES.has(brush) && dep) { const o = dep * r * 0.25; cx += nx * o; cy += ny * o; cz += nz * o; }
+  if (brush === 'hpolish' && stroke) {   // the plane is fixed at the start of the stroke (one per symmetry side)
+    const hp = stroke.hp || (stroke.hp = {}), key = F && F.mir ? 'm' : 'p';
+    const H = hp[key] || (hp[key] = { nx, ny, nz, cx, cy, cz });
+    nx = H.nx; ny = H.ny; nz = H.nz; cx = H.cx; cy = H.cy; cz = H.cz;
+  }
 
-  if (brush === 'paint') {
-    const pt = ensurePaint(), c = dir > 0 ? S.paintLin : BASE_COL;
+  if (brush === 'paint' || brush === 'paintnoise') {
+    const pt = ensurePaint(), c = dir > 0 ? S.paintLin : BASE_COL, nf = brush === 'paintnoise' ? 6 / r : 0;
     for (let k = 0; k < n; k++) {
-      const v = selIds[k], w = Math.min(1, selW[k] * (1 - mask[v]) * Math.min(1, s * 1.3)), i = v * 3;
+      const v = selIds[k], i = v * 3;
+      let w = Math.min(1, selW[k] * (1 - mask[v]) * Math.min(1, s * 1.3));
+      if (nf) w *= Math.min(1, Math.max(0, (fbm3(pos[i] * nf, pos[i+1] * nf, pos[i+2] * nf) - 0.45) * 5));   // mottled
       if (w <= 0) continue;
+      spSave(v);
       pt[i] += (c.r - pt[i]) * w; pt[i+1] += (c.g - pt[i+1]) * w; pt[i+2] += (c.b - pt[i+2]) * w;
       setColor(v);
       if (rec) rec.push(v);
@@ -1358,9 +1609,63 @@ function applyDab(P, N0, r, s, dir, brush, F) {
     colorDirty = gpuPart = true;
     return;
   }
+  if (brush === 'masksmooth' || brush === 'paintblur') {   // average with the neighbours (Alt on the mask: sharpen)
+    const color = brush === 'paintblur', pt = color ? paint : null;
+    if (color && !pt) return;   // nothing painted yet
+    for (let k = 0; k < n; k++) {
+      const v = selIds[k], s0 = vvStart[v], s1 = vvStart[v + 1]; if (s1 === s0) continue;
+      const f = Math.min(1, selW[k] * Math.max(s, 0.2) * 1.5), c = s1 - s0;
+      spSave(v);
+      if (color) {
+        if (mask[v] >= 1) continue;
+        const i = v * 3, g = f * (1 - mask[v]); let r0 = 0, g0 = 0, b0 = 0;
+        for (let j = s0; j < s1; j++) { const u = vvList[j] * 3; r0 += pt[u]; g0 += pt[u+1]; b0 += pt[u+2]; }
+        pt[i] += (r0 / c - pt[i]) * g; pt[i+1] += (g0 / c - pt[i+1]) * g; pt[i+2] += (b0 / c - pt[i+2]) * g;
+      } else {
+        let a = 0; for (let j = s0; j < s1; j++) a += mask[vvList[j]]; a /= c;
+        const want = dir > 0 ? a : mask[v] + (mask[v] - a) * 2;
+        mask[v] = Math.min(1, Math.max(0, mask[v] + (want - mask[v]) * f));
+      }
+      setColor(v);
+      if (rec) rec.push(v);
+    }
+    colorDirty = gpuPart = true;
+    return;
+  }
+  if (brush === 'maskgrow' || brush === 'smear') {
+    // mask: towards the neighbours' max (Alt: min); colour: towards the upstream neighbour along the stroke
+    const color = brush === 'smear';
+    if (color && (!paint || !F || (!F.sdx && !F.sdy && !F.sdz))) return;
+    for (let k = 0; k < n; k++) {
+      const v = selIds[k], s0 = vvStart[v], s1 = vvStart[v + 1]; if (s1 === s0) continue;
+      const f = Math.min(1, selW[k] * Math.max(s, 0.2) * 1.2), i = v * 3;
+      spSave(v);
+      if (color) {
+        let best = -1, bd = Infinity;
+        for (let j = s0; j < s1; j++) { const u = vvList[j] * 3, d = (pos[u]-pos[i])*F.sdx + (pos[u+1]-pos[i+1])*F.sdy + (pos[u+2]-pos[i+2])*F.sdz; if (d < bd) { bd = d; best = u; } }
+        if (best < 0 || bd >= 0) continue;
+        const g = f * (1 - mask[v]); for (let q = 0; q < 3; q++) paint[i+q] += (paint[best+q] - paint[i+q]) * g;
+      } else {
+        let a = dir > 0 ? 0 : 1; for (let j = s0; j < s1; j++) { const m = mask[vvList[j]]; a = dir > 0 ? Math.max(a, m) : Math.min(a, m); }
+        mask[v] += (a - mask[v]) * f;
+      }
+      setColor(v);
+      if (rec) rec.push(v);
+    }
+    colorDirty = gpuPart = true;
+    return;
+  }
+  if (brush === 'pgpaint') {   // dab: paint the target group
+    const g = stroke && stroke.pgTarget !== undefined ? stroke.pgTarget : 0;
+    if (!pg) return;
+    for (let k = 0; k < n; k++) { const v = selIds[k]; if (selW[k] < 0.3 || mask[v] >= 0.5 || pg[v] === g) continue; spSave(v); pg[v] = g; setColor(v); }
+    colorDirty = gpuPart = true;
+    return;
+  }
   if (brush === 'mask') {
     for (let k = 0; k < n; k++) {
       const v = selIds[k];
+      spSave(v);
       mask[v] = Math.min(1, Math.max(0, mask[v] + selW[k] * Math.max(s, 0.25) * 2.2 * dir));
       setColor(v);
       if (rec) rec.push(v);
@@ -1370,6 +1675,14 @@ function applyDab(P, N0, r, s, dir, brush, F) {
   }
 
   const L = stroke && stroke.layer, dynMark = stroke && stroke.dyn ? stroke.dyn.mark : null;
+  // rake: grooves across the stroke direction; twist: rotation about the area normal
+  let ax = 0, ay = 0, az = 0;
+  const across = brush === 'rake' || brush === 'fold' || brush === 'stitch' || brush === 'bend' || brush === 'smoothdir';
+  if (across && F && (F.sdx || F.sdy || F.sdz)) { ax = ny*F.sdz - nz*F.sdy; ay = nz*F.sdx - nx*F.sdz; az = nx*F.sdy - ny*F.sdx; const l = Math.hypot(ax, ay, az) || 1; ax /= l; ay /= l; az /= l; }
+  if (across && !ax && !ay && !az) return;   // these need the stroke direction (first dab of a stroke)
+  const travel = stroke && stroke.travel || 0;
+  const views = brush === 'zproject' ? visibleViews() : null;
+  if (views && !views.length) { if (stroke && !stroke.zpWarned) { stroke.zpWarned = true; toast('吸い付け先のパーツを表示してください（選択中以外の表示中のパーツに吸い付きます）'); } return; }
   const MO = brush === 'morph' && active.morph && active.morph.length === pos.length ? active.morph : null;
   for (let k = 0; k < n; k++) {
     const v = selIds[k], i = v * 3;
@@ -1377,8 +1690,114 @@ function applyDab(P, N0, r, s, dir, brush, F) {
     if (w <= 0) continue;
     let x = pos[i], y = pos[i+1], z = pos[i+2];
     switch (brush) {
-      case 'standard': { const a = r * 0.035 * s * dir * w; x += nx*a; y += ny*a; z += nz*a; break; }
-      case 'inflate':  { const a = r * 0.03 * s * dir * w; x += nrm[i]*a; y += nrm[i+1]*a; z += nrm[i+2]*a; break; }
+      case 'standard': { const a = r * 0.035 * s * dir * w * amp; if (pv) { x += nrm[i]*a; y += nrm[i+1]*a; z += nrm[i+2]*a; } else { x += nx*a; y += ny*a; z += nz*a; } break; }
+      case 'inflate':  { const a = r * 0.03 * s * dir * w * amp; x += nrm[i]*a; y += nrm[i+1]*a; z += nrm[i+2]*a; break; }
+      case 'claytubes': {
+        // fill up to a plane just above the surface and shave what sticks out of it: a flat-topped strip
+        const off = dir * r * 0.1 * s, d = (x-cx)*nx + (y-cy)*ny + (z-cz)*nz, delta = off - d;
+        const a = delta * w * ((dir > 0 ? delta > 0 : delta < 0) ? 0.5 : 0.15); x += nx*a; y += ny*a; z += nz*a; break;
+      }
+      case 'gravity': { y -= r * 0.04 * s * dir * w * amp; break; }
+      case 'vdm': {
+        // the stamp's displacement at this vertex's place in the brush square, in the brush frame (u, v, hit normal)
+        const st = stroke && stroke.vdm; if (!st || !F) break;
+        const dx = x - P.x, dy = y - P.y, dz = z - P.z, u = (dx*F.ux + dy*F.uy + dz*F.uz) / r, vv = (dx*F.vx + dy*F.vy + dz*F.vz) / r;
+        if (u <= -1 || u >= 1 || vv <= -1 || vv >= 1) break;
+        sampleVDM(st, u, vv, vdmS);
+        const k = r * s * dir * amp;
+        x += (F.ux*vdmS[0] + F.vx*vdmS[1] + N0.x*vdmS[2]) * k; y += (F.uy*vdmS[0] + F.vy*vdmS[1] + N0.y*vdmS[2]) * k; z += (F.uz*vdmS[0] + F.vz*vdmS[1] + N0.z*vdmS[2]) * k;
+        break;
+      }
+      case 'balloon': {
+        // push out along the vertex normal, and even out sideways so the bulge stays round
+        const a = r * 0.03 * s * dir * w * amp; x += nrm[i]*a; y += nrm[i+1]*a; z += nrm[i+2]*a;
+        const s0 = vvStart[v], s1 = vvStart[v + 1]; if (s1 === s0) break;
+        let ex = 0, ey = 0, ez = 0; for (let j = s0; j < s1; j++) { const u = vvList[j] * 3; ex += pos[u]; ey += pos[u+1]; ez += pos[u+2]; }
+        const c = s1 - s0; ex = ex / c - x; ey = ey / c - y; ez = ez / c - z;
+        const dn = ex*nrm[i] + ey*nrm[i+1] + ez*nrm[i+2], f = Math.min(1, w * s) * 0.3;
+        x += (ex - nrm[i]*dn) * f; y += (ey - nrm[i+1]*dn) * f; z += (ez - nrm[i+2]*dn) * f; break;
+      }
+      case 'fold': {
+        // gather toward the stroke's line, raised in the middle: a ridge of cloth
+        const c = (x-P.x)*ax + (y-P.y)*ay + (z-P.z)*az, g = Math.min(0.5, w * s * 0.4);
+        x -= ax*c*g; y -= ay*c*g; z -= az*c*g;
+        const h = r * 0.03 * s * dir * w * amp * Math.max(0, 1 - Math.abs(c) / r); x += nx*h; y += ny*h; z += nz*h; break;
+      }
+      case 'stitch': {
+        // dashes along the stroke (by distance travelled), narrow across it
+        const c = (x-P.x)*ax + (y-P.y)*ay + (z-P.z)*az, wid = r * 0.35;
+        if (Math.abs(c) >= wid || !F) break;
+        const along = travel + (x-P.x)*F.sdx + (y-P.y)*F.sdy + (z-P.z)*F.sdz, ph = Math.cos(2 * Math.PI * along / (r * 0.7));
+        const dash = sstep(Math.min(1, Math.max(0, (ph - 0.1) * 2.5)));
+        const h = -r * 0.04 * s * dir * dash * sstep(1 - Math.abs(c) / wid) * Math.min(1, w * 2) * amp; x += nx*h; y += ny*h; z += nz*h; break;
+      }
+      case 'pores': {
+        const cell = r * 0.18, d = worley3(x / cell, y / cell, z / cell);
+        if (d >= 0.32) break;
+        const t = 1 - d / 0.32, h = -t * t * r * 0.025 * s * dir * w * amp; x += nrm[i]*h; y += nrm[i+1]*h; z += nrm[i+2]*h; break;
+      }
+      case 'bend': {
+        // rotate about the axis across the stroke through the brush center (Rodrigues), weighted by the falloff
+        const a = s * 0.12 * dir * w, c = Math.cos(a), sn = Math.sin(a);
+        const rx = x - P.x, ry = y - P.y, rz = z - P.z, d = rx*ax + ry*ay + rz*az;
+        const qx = ay*rz - az*ry, qy = az*rx - ax*rz, qz = ax*ry - ay*rx;
+        x = P.x + rx*c + qx*sn + ax*d*(1-c); y = P.y + ry*c + qy*sn + ay*d*(1-c); z = P.z + rz*c + qz*sn + az*d*(1-c); break;
+      }
+      case 'scale': { const k = s * 0.06 * dir * w; x += (x - P.x) * k; y += (y - P.y) * k; z += (z - P.z) * k; break; }
+      case 'smoothsharp':
+      case 'smoothdir': {
+        // smoothsharp: neighbours that face the same way count more (edges survive); smoothdir: only the
+        // neighbours along the stroke
+        const s0 = vvStart[v], s1 = vvStart[v + 1]; if (s1 === s0) break;
+        let ex = 0, ey = 0, ez = 0, ws = 0;
+        for (let j = s0; j < s1; j++) {
+          const u = vvList[j], o = u * 3; let g;
+          if (brush === 'smoothsharp') { const d = Math.max(0, nrm[o]*nrm[i] + nrm[o+1]*nrm[i+1] + nrm[o+2]*nrm[i+2]); g = d * d * d * d; }
+          else { const dx = pos[o] - x, dy = pos[o+1] - y, dz = pos[o+2] - z, l = Math.hypot(dx, dy, dz) || 1, cs = Math.abs(dx*F.sdx + dy*F.sdy + dz*F.sdz) / l; g = cs > 0.6 ? cs : 0; }
+          ex += pos[o]*g; ey += pos[o+1]*g; ez += pos[o+2]*g; ws += g;
+        }
+        if (ws < 1e-6) break;
+        const f = Math.min(1, w * Math.max(s, 0.15) * 1.1); x += (ex / ws - x) * f; y += (ey / ws - y) * f; z += (ez / ws - z) * f; break;
+      }
+
+      case 'rake': {
+        const c = (x-P.x)*ax + (y-P.y)*ay + (z-P.z)*az, per = r * 0.3;
+        const h = -(1 - Math.cos(2 * Math.PI * c / per)) * 0.5 * r * 0.03 * s * dir * w * amp;
+        x += nx*h; y += ny*h; z += nz*h; break;
+      }
+      case 'twist': {
+        let tx = x - P.x, ty = y - P.y, tz = z - P.z;
+        const d = tx*nx + ty*ny + tz*nz; tx -= nx*d; ty -= ny*d; tz -= nz*d;
+        const a = s * 0.25 * dir * w, c = Math.cos(a) - 1, sn = Math.sin(a);
+        x += tx*c + (ny*tz - nz*ty)*sn; y += ty*c + (nz*tx - nx*tz)*sn; z += tz*c + (nx*ty - ny*tx)*sn; break;
+      }
+      case 'relax':
+      case 'sharpen': {
+        const s0 = vvStart[v], s1 = vvStart[v + 1]; if (s1 === s0) break;
+        let ex = 0, ey = 0, ez = 0;
+        for (let j = s0; j < s1; j++) { const u = vvList[j] * 3; ex += pos[u]; ey += pos[u+1]; ez += pos[u+2]; }
+        const c = s1 - s0; ex = ex / c - x; ey = ey / c - y; ez = ez / c - z;
+        const dn = ex*nrm[i] + ey*nrm[i+1] + ez*nrm[i+2];
+        if (brush === 'relax') { const f = Math.min(1, w * s); x += (ex - nrm[i]*dn) * f; y += (ey - nrm[i+1]*dn) * f; z += (ez - nrm[i+2]*dn) * f; }
+        else { const f = -dn * Math.min(1, w * s * 0.5) * dir; x += nrm[i]*f; y += nrm[i+1]*f; z += nrm[i+2]*f; }
+        break;
+      }
+      case 'zproject': {
+        // the nearest surface of another shown part along this vertex's normal (either way), within a few radii
+        let best = Infinity, hx = 0, hy = 0, hz = 0;
+        for (const sg of [1, -1]) {
+          zpRay.ray.origin.set(x, y, z); zpRay.ray.direction.set(nrm[i] * sg, nrm[i+1] * sg, nrm[i+2] * sg); zpRay.far = r * 3;
+          const h = zpRay.intersectObjects(views, false)[0];
+          if (h && h.distance < best) { best = h.distance; hx = h.point.x; hy = h.point.y; hz = h.point.z; }
+        }
+        if (best === Infinity) break;
+        const f = Math.min(1, w * s * 1.5); x += (hx - x) * f; y += (hy - y) * f; z += (hz - z) * f; break;
+      }
+      case 'hpolish': {
+        const d = (x-cx)*nx + (y-cy)*ny + (z-cz)*nz;
+        if (dir > 0 ? d > 0 : d < 0) { const a = -d * Math.min(1, w * s * 1.2); x += nx*a; y += ny*a; z += nz*a; }
+        break;
+      }
       case 'clay':
       case 'claybuild': {
         const build = brush === 'claybuild';
@@ -1390,7 +1809,7 @@ function applyDab(P, N0, r, s, dir, brush, F) {
       }
       case 'layer': {
         // height is fixed for the whole stroke, so overlapping dabs don't pile up
-        const h = L.h * s * dir * w, acc = L.acc;
+        const h = L.h * s * dir * w * amp, acc = L.acc;
         if (dir > 0 ? h > acc[v] : h < acc[v]) acc[v] = h;
         x = L.start[i] + L.sn[i] * acc[v]; y = L.start[i+1] + L.sn[i+1] * acc[v]; z = L.start[i+2] + L.sn[i+2] * acc[v];
         break;
@@ -1430,7 +1849,7 @@ function applyDab(P, N0, r, s, dir, brush, F) {
       }
       case 'crease': {
         const w2 = w * w;
-        const a = -r * 0.03 * s * dir * w2; x += nx*a; y += ny*a; z += nz*a;
+        const a = -r * 0.03 * s * dir * w2 * amp; if (pv) { x += nrm[i]*a; y += nrm[i+1]*a; z += nrm[i+2]*a; } else { x += nx*a; y += ny*a; z += nz*a; }
         let tx = P.x - x, ty = P.y - y, tz = P.z - z;
         const d = tx*nx + ty*ny + tz*nz; tx -= nx*d; ty -= ny*d; tz -= nz*d;
         const b = w * s * 0.18; x += tx*b; y += ty*b; z += tz*b; break;
@@ -1442,16 +1861,16 @@ function applyDab(P, N0, r, s, dir, brush, F) {
       }
       case 'blob': {
         // dome-shaped bulge: push along the area normal and a little along each vertex normal (rounds the result)
-        const a = r * 0.05 * s * dir * w; x += (nx * 0.6 + nrm[i] * 0.4) * a; y += (ny * 0.6 + nrm[i+1] * 0.4) * a; z += (nz * 0.6 + nrm[i+2] * 0.4) * a;
+        const a = r * 0.05 * s * dir * w * amp; x += (nx * 0.6 + nrm[i] * 0.4) * a; y += (ny * 0.6 + nrm[i+1] * 0.4) * a; z += (nz * 0.6 + nrm[i+2] * 0.4) * a;
         break;
       }
       case 'noise': {
         // fixed 3D value noise in world space, so overlapping dabs keep the same pattern
-        const f = 9 / r, h = (fbm3(x * f, y * f, z * f) - 0.5) * r * 0.05 * s * dir * w;
+        const f = 9 / r, h = (fbm3(x * f, y * f, z * f) - 0.5) * r * 0.05 * s * dir * w * amp;
         x += nrm[i] * h; y += nrm[i+1] * h; z += nrm[i+2] * h; break;
       }
       case 'slash': {
-        const w4 = w * w * w * w, a = -r * 0.12 * s * dir * w4; x += nx*a; y += ny*a; z += nz*a; break;
+        const w4 = w * w * w * w, a = -r * 0.12 * s * dir * w4 * amp; if (pv) { x += nrm[i]*a; y += nrm[i+1]*a; z += nrm[i+2]*a; } else { x += nx*a; y += ny*a; z += nz*a; } break;
       }
       case 'magnify': {
         let tx = x - P.x, ty = y - P.y, tz = z - P.z;
@@ -1468,13 +1887,14 @@ function applyDab(P, N0, r, s, dir, brush, F) {
       }
       case 'dam': {
         // deep narrow cut + pull toward the stroke's center line (not toward a point) => crisp V groove
-        const a = -r * 0.16 * s * dir * w; x += nx*a; y += ny*a; z += nz*a;
+        const a = -r * 0.16 * s * dir * w * amp; if (pv) { x += nrm[i]*a; y += nrm[i+1]*a; z += nrm[i+2]*a; } else { x += nx*a; y += ny*a; z += nz*a; }
         let tx = P.x - x, ty = P.y - y, tz = P.z - z;
         const d = tx*nx + ty*ny + tz*nz; tx -= nx*d; ty -= ny*d; tz -= nz*d;
         if (F) { const e = tx*F.sdx + ty*F.sdy + tz*F.sdz; tx -= F.sdx*e; ty -= F.sdy*e; tz -= F.sdz*e; }
         const b = Math.min(0.9, w * s * 0.5); x += tx*b; y += ty*b; z += tz*b; break;
       }
     }
+    spSave(v);
     pos[i] = x; pos[i+1] = y; pos[i+2] = z;
     touch(v);
     if (rec) rec.push(v);
@@ -1515,7 +1935,9 @@ function hitNormal(h) {
   return v.lengthSq() > 0 ? v.normalize() : camera.position.clone().sub(h.point).normalize();
 }
 function worldPerPx(P) { return 2 * camera.position.distanceTo(P) * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) / Math.max(1, canvas.clientHeight); }
-function worldRadius(P) { return S.size * worldPerPx(P); }
+// world-fixed size: the brush keeps its size in the model while zooming (measured at the default camera distance)
+function worldPerPxRef() { return 2 * 6.5 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) / Math.max(1, canvas.clientHeight); }
+function worldRadius(P) { return S.size * (S.sizePres && stroke && stroke.pressure ? stroke.pressure : 1) * (S.worldSize ? worldPerPxRef() : worldPerPx(P)); }
 const pres = e => e.pointerType === 'pen' && e.pressure > 0 ? Math.max(0.08, e.pressure) : 1;
 function effectiveBrush(e) { if (e.shiftKey) return 'smooth'; if (e.ctrlKey || e.metaKey) return 'mask'; return S.brush; }
 function camAxis(col) { const e = camera.matrixWorld.elements, k = col * 4; return new V3(e[k], e[k+1], e[k+2]); }
@@ -1529,13 +1951,16 @@ function makeFrame(N, ref, cfg, brush) {
   return {
     ux:u.x, uy:u.y, uz:u.z, vx:v.x, vy:v.y, vz:v.z,
     A: BRUSH[brush].alpha ? getAlpha(cfg.alpha) : null, inv: cfg.alphaInv,
-    fo: FO[cfg.falloff] || FO.smooth, bf: S.backface, sdx:0, sdy:0, sdz:0,
+    fo: brush === 'vdm' ? () => 1 : FO[cfg.falloff] || FO.smooth, bf: S.backface, sdx:0, sdy:0, sdz:0,
+    plane: cfg.plane || 'area', depth: +cfg.depth || 0, mir: false,
+    gm: cfg.groupMask && stroke && stroke.gm !== undefined ? stroke.gm : -1, gmM: cfg.groupMask && stroke && stroke.gmM !== undefined ? stroke.gmM : -1, cav: cfg.cavity === 'cavity' ? 1 : cfg.cavity === 'peak' ? -1 : 0,
   };
 }
-const mirrorFrame = F => ({ ...F, ux:-F.ux, vx:-F.vx, sdx:-F.sdx });
+const mirrorFrame = F => ({ ...F, ux:-F.ux, vx:-F.vx, sdx:-F.sdx, mir:true, gm: F.gmM !== undefined ? F.gmM : F.gm });
 
-function dabSym(P, N, r, ref, reps = 1) {
+function dabSym(P, N, r, ref, reps = 0) {
   const st = stroke, s = st.cfg.strength * st.pressure;
+  if (!reps) reps = BRUSH[st.brush].reps || 1;
   const F = makeFrame(N, ref || (st.cfg.follow && st.dirVec ? st.dirVec : st.refUp), st.cfg, st.brush);
   if (st.dirVec) { F.sdx = st.dirVec.x; F.sdy = st.dirVec.y; F.sdz = st.dirVec.z; }
   const mP = new V3(-P.x, P.y, P.z), mN = new V3(-N.x, N.y, N.z), mF = mirrorFrame(F);
@@ -1571,29 +1996,48 @@ function onDown(e) {
     updateCursor(null);
     return;
   }
+  if (brush === 'imm') {   // place a part: the drag sets its size and turn, it is built on release
+    const part = getIMM(S.imm); if (!part) { toast('部品を選んでください'); return; }
+    stroke = { brush, cfg, id: e.pointerId, pressure: 1, imm: { P: hit.point.clone(), N: hitNormal(hit), x0: e.clientX, y0: e.clientY, part, dx: 0, dy: 0 } };
+    immPreview(stroke.imm); updateCursor(null);
+    return;
+  }
   if (BRUSH[brush].curve) {   // tube / insert: just record the path; the mesh is built on release
     stroke = { brush, cfg, id: e.pointerId, pressure: 1, curve: { pts: [hit.point.clone()], nrm: [hitNormal(hit)], r: worldRadius(hit.point) } };
     curvePreview(stroke.curve.pts); updateCursor(null);
     return;
   }
   const dir = (S.invert ? -1 : 1) * (e.altKey ? -1 : 1);
-  let useDyn = S.dyn && DYN_BRUSHES.has(brush) && cfg.stroke !== 'drag';
+  let useDyn = S.dyn && DYN_BRUSHES.has(baseOf(brush)) && cfg.stroke !== 'drag';
   if (useDyn && active.levels.length > 1) { useDyn = false; if (!dynWarned) { dynWarned = true; toast('細分化レベルがあるパーツではダイナミック細分化は使えません'); } }
-  pushUndo(useDyn);
-  const top = undoStack[undoStack.length - 1];
-  stroke = { brush, cfg, dir, last:null, pressure:pres(e), id:e.pointerId, refUp:camAxis(1), dirVec:null, lazy:{ x:e.clientX, y:e.clientY } };
-  const recL = brush !== 'mask' && brush !== 'paint' ? layersOf().find(l => l.rec) : null;
+  const recL = !['mask', 'paint', 'paintnoise', 'paintblur', 'smear', 'masksmooth', 'maskgrow', 'pgpaint'].includes(baseOf(brush)) ? layersOf().find(l => l.rec) : null;
+  const sparse = nV >= SPARSE_MIN && !useDyn && brush !== 'layer' && !(recL && Math.abs(layEff(recL)) > 0.05);
+  if (brush === 'pgpaint' && !pg) pg = active.pg = new Int32Array(nV);   // before the undo record, so the stroke's groups are saved
+  const paints = baseOf(brush) === 'paint' || brush === 'paintnoise';
+  if (sparse) { const fresh = paints && !paint; if (paints) ensurePaint(); spBegin(); sp.nullPaint = fresh; } else pushUndo(useDyn);
+  const top = sparse ? null : undoStack[undoStack.length - 1];
+  stroke = { brush, cfg, dir, last:null, pressure:pres(e), id:e.pointerId, refUp:camAxis(1), dirVec:null, lazy:{ x:e.clientX, y:e.clientY }, sparse };
   if (recL && Math.abs(layEff(recL)) > 0.05) stroke.layRec = { L: recL, base: top.pos };
   if (useDyn) stroke.dyn = { mark: new Uint8Array(nV), t: performance.now(), Lt: S.dynDetail * worldPerPx(hit.point), changed: false };
   const P = hit.point.clone(), N = hitNormal(hit), r = worldRadius(P);
-  if (brush === 'move') startMove(P, N, r);
+  if (brush === 'vdm') { stroke.vdm = getVDM(S.vdm); if (!stroke.vdm) toast('VDM の型を選んでください'); }
+  if (brush === 'pgpaint') {   // Alt: grow the group the stroke starts on; otherwise paint a new group
+    let mx = 0; for (let v = 0; v < nV; v++) if (pg[v] > mx) mx = pg[v];
+    stroke.pgTarget = dir < 0 ? pg[idx[hit.faceIndex * 3]] : mx + 1;
+    if (!S.showPG) setShowPG(true);
+  }
+  // auto masking by polygroup: the group under the brush (and its mirror) at the start of the stroke
+  if (cfg.groupMask && pg) { const v = idx[hit.faceIndex * 3]; stroke.gm = pg[v]; stroke.gmM = mirror && mirror[v] >= 0 ? pg[mirror[v]] : pg[v]; }
+  if (isMoveBrush(brush)) startMove(P, N, r, brush, hit);
   else if (brush === 'snake') stroke.sn = { P, N };
-  else if (cfg.stroke === 'drag' && canDrag(brush)) stroke.drag = { P, N, x0:e.clientX, y0:e.clientY, start:top.pos, startMask:top.mask, startPaint:top.paint, rec:[] };
+  else if ((cfg.stroke === 'drag' || cfg.stroke === 'dragdot' || cfg.stroke === 'line') && canDrag(brush))
+    stroke.drag = { kind: cfg.stroke, P, N, x0:e.clientX, y0:e.clientY, start: top && top.pos, startMask: top && top.mask, startPaint: top && top.paint, rec:[] };
   else {
     if (brush === 'layer') stroke.layer = { acc:new Float32Array(nV), start:top.pos, sn:nrm.slice(), h:r * 0.12 };
     stroke.last = P.clone(); dabSym(P, N, r); flushNormals();
   }
-  updateCursor(stroke.drag || brush === 'move' || brush === 'snake' ? null : hit);
+  if (stroke.drag && stroke.drag.kind === 'dragdot') { stroke.pressure = pres(e); dabSym(P, N, r, null, 2); }
+  updateCursor(stroke.drag || isMoveBrush(brush) || brush === 'snake' ? null : hit);
 }
 
 function strokeTo(hit) {
@@ -1609,6 +2053,7 @@ function strokeTo(hit) {
   const n = Math.min(steps, 64);
   const spray = stroke.cfg.stroke === 'spray';
   for (let i = 1; i <= n; i++) {
+    stroke.travel = (stroke.travel || 0) + sp * (steps / n);
     const q = stroke.last.clone().addScaledVector(dv, sp * i * (steps / n));
     if (!spray) { dabSym(q, N, r); continue; }
     // spray: scattered position, size and turn for every dab
@@ -1624,46 +2069,148 @@ function strokeTo(hit) {
 function dragStamp(e) {
   const D = stroke.drag, dx = e.clientX - D.x0, dy = e.clientY - D.y0, px = Math.hypot(dx, dy);
   for (const v of D.rec) {
-    const i = v * 3; pos[i] = D.start[i]; pos[i+1] = D.start[i+1]; pos[i+2] = D.start[i+2];
-    mask[v] = D.startMask[v];
-    if (paint) { const sp = D.startPaint; paint[i] = sp ? sp[i] : BASE_COL.r; paint[i+1] = sp ? sp[i+1] : BASE_COL.g; paint[i+2] = sp ? sp[i+2] : BASE_COL.b; }
+    const i = v * 3, k = spIdx(v);
+    if (k >= 0) {   // sparse stroke: the saved first-touch values are the start shape
+      pos[i] = sp.P[k*3]; pos[i+1] = sp.P[k*3+1]; pos[i+2] = sp.P[k*3+2]; mask[v] = sp.M[k];
+      if (paint && sp.C) { paint[i] = sp.C[k*3]; paint[i+1] = sp.C[k*3+1]; paint[i+2] = sp.C[k*3+2]; }
+    } else if (D.start) {
+      pos[i] = D.start[i]; pos[i+1] = D.start[i+1]; pos[i+2] = D.start[i+2];
+      mask[v] = D.startMask[v];
+      if (paint) { const s0 = D.startPaint; paint[i] = s0 ? s0[i] : BASE_COL.r; paint[i+1] = s0 ? s0[i+1] : BASE_COL.g; paint[i+2] = s0 ? s0[i+2] : BASE_COL.b; }
+    }
     setColor(v); colorDirty = true;
     touch(v);
   }
   D.rec.length = 0; gpuDirty = true;
   quad.visible = quad2.visible = false;
+  stroke.pressure = pres(e);
+  if (D.kind === 'dragdot') {   // one dab of the normal size that follows the pointer (re-placed from the original shape)
+    setNDC(e); const h = pick(); if (!h) return;
+    dabSym(h.point.clone(), hitNormal(h), worldRadius(h.point), null, 2); return;
+  }
+  if (D.kind === 'line') {   // a straight stroke from the press point to the pointer, along the surface
+    const r0 = worldRadius(D.P), stepPx = Math.max(2, S.size * S.spacing * (S.sizePres ? stroke.pressure : 1));
+    const n = Math.min(400, Math.max(1, Math.round(px / stepPx)));
+    let prev = null;
+    for (let k = 0; k <= n; k++) {
+      const x = D.x0 + dx * k / n, y = D.y0 + dy * k / n;
+      setNDCxy(x, y); const h = pick(); if (!h) continue;
+      if (prev) stroke.dirVec = h.point.clone().sub(prev).normalize();
+      prev = h.point.clone();
+      dabSym(prev, hitNormal(h), worldRadius(h.point) || r0);
+    }
+    stroke.dirVec = null;
+    return;
+  }
   if (px < 4) return;
   const r = px * worldPerPx(D.P);
   // screen drag direction -> world (screen y grows downward)
   const ref = camAxis(0).multiplyScalar(dx).addScaledVector(camAxis(1), -dy).normalize();
-  stroke.pressure = pres(e);
-  const F = dabSym(D.P, D.N, r, ref, 4);
+  const F = dabSym(D.P, D.N, r, ref, baseOf(stroke.brush) === 'vdm' ? 1 : 4);
   if (F.A && syncAlphaTex(stroke.cfg.alpha, stroke.cfg.alphaInv)) {
     placeQuad(quad, D.P, D.N, F, r);
     if (S.sym) placeQuad(quad2, new V3(-D.P.x, D.P.y, D.P.z), new V3(-D.N.x, D.N.y, D.N.z), mirrorFrame(F), r);
   }
 }
 
-function startMove(P, N, r) {
-  const wa = new Float32Array(nV), wb = new Float32Array(nV), list = [];
-  const F = { fo: FO[BS.move.falloff] || FO.smooth, bf: S.backface, A: null };
-  let n = gather(P, N, r, F);
-  for (let k = 0; k < n; k++) { const v = selIds[k]; wa[v] = selW[k] * (1 - mask[v]); list.push(v); }
-  if (S.sym) {
-    n = gather(new V3(-P.x, P.y, P.z), new V3(-N.x, N.y, N.z), r, F);
-    for (let k = 0; k < n; k++) { const v = selIds[k]; if (wa[v] === 0 && wb[v] === 0) list.push(v); wb[v] = selW[k] * (1 - mask[v]); }
+// move brushes keep only what they need: the moved vertices, their start positions and weights (list-aligned),
+// so a grab on a 50M-polygon model doesn't copy the whole mesh
+let mvSlot = null;
+// every vertex within r of the line through P along D (the view ray): the whole depth of the model, front and back
+function gatherLine(P, D, r, F) {
+  const r2 = r * r, fo = F.fo; let n = 0;
+  for (let v = 0; v < nV; v++) {
+    if (hid && hid[v]) continue;
+    if (F.gm >= 0 && pg && pg[v] !== F.gm) continue;
+    const i = v * 3, dx = pos[i] - P.x, dy = pos[i+1] - P.y, dz = pos[i+2] - P.z, t = dx*D.x + dy*D.y + dz*D.z;
+    const ex = dx - D.x*t, ey = dy - D.y*t, ez = dz - D.z*t, d2 = ex*ex + ey*ey + ez*ez;
+    if (d2 >= r2) continue;
+    selIds[n] = v; selW[n] = fo(1 - Math.sqrt(d2) / r); n++;
   }
+  return n;
+}   // vertex -> index in the list being built (+1), reused between strokes
+function startMove(P, N, r, brush = 'move', hit = null) {
   const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(camera.getWorldDirection(new V3()), P);
-  stroke.mv = { wa, wb, list: Uint32Array.from(list), P0: P.clone(), plane, start: undoStack[undoStack.length - 1].pos };
+  const cfg = BS[brush];
+  const gm = stroke.gm !== undefined ? stroke.gm : -1, gmM = stroke.gmM !== undefined ? stroke.gmM : -1;
+  if (!mvSlot || mvSlot.length !== nV) mvSlot = new Uint32Array(nV);
+  const ids = [], wa = [], wb = [];
+  const add = (v, a, b) => { let j = mvSlot[v]; if (!j) { ids.push(v); wa.push(0); wb.push(0); j = mvSlot[v] = ids.length; } wa[j - 1] += a; wb[j - 1] += b; };
+  const done = () => { for (const v of ids) mvSlot[v] = 0; const list = Uint32Array.from(ids), st = new Float32Array(list.length * 3); list.forEach((v, j) => { st[j*3] = pos[v*3]; st[j*3+1] = pos[v*3+1]; st[j*3+2] = pos[v*3+2]; }); return { list, st }; };
+  if (brush === 'elastic') {
+    // Kelvinlet: every vertex within a few radii moves, with a falloff that keeps the volume (no hard brush edge)
+    const R = r * 3.5, F = { fo: () => 1, bf: false, A: null, gm };
+    let n = gather(P, N, R, F); for (let k = 0; k < n; k++) add(selIds[k], 0, 0);
+    const mP = new V3(-P.x, P.y, P.z), sym = S.sym && Math.abs(P.x) > r * 0.1;
+    if (sym) { n = gather(mP, new V3(-N.x, N.y, N.z), R, { ...F, gm: gmM }); for (let k = 0; k < n; k++) add(selIds[k], 0, 0); }
+    const { list, st } = done();
+    stroke.mv = { elastic: true, mode: cfg.emode || 'grab', eps: r, R, list, start: st, P0: P.clone(), mP, sym, plane,
+      x0: stroke.lazy.x, y0: stroke.lazy.y, view: camera.getWorldDirection(new V3()) };
+    return;
+  }
+  const F = { fo: FO[cfg.falloff] || FO.smooth, bf: S.backface, A: null, gm };
+  const view = camera.getWorldDirection(new V3());
+  let n = brush === 'moveinf' ? gatherLine(P, view, r, F) : gather(P, N, r, F);
+  if (brush === 'movetopo') n = topoFilter(P, n);   // only what is connected to the grabbed point
+  for (let k = 0; k < n; k++) { const v = selIds[k]; add(v, selW[k] * (1 - mask[v]), 0); }
+  if (S.sym) {
+    const mP = new V3(-P.x, P.y, P.z);
+    n = brush === 'moveinf' ? gatherLine(mP, new V3(-view.x, view.y, view.z), r, { ...F, gm: gmM }) : gather(mP, new V3(-N.x, N.y, N.z), r, { ...F, gm: gmM });
+    if (brush === 'movetopo') n = topoFilter(mP, n);
+    for (let k = 0; k < n; k++) { const v = selIds[k]; const j = mvSlot[v]; if (j) wb[j - 1] = 0; add(v, 0, selW[k] * (1 - mask[v])); }
+  }
+  const W = { a: Float32Array.from(wa), b: Float32Array.from(wb) }, { list, st } = done();
+  stroke.mv = { wa: W.a, wb: W.b, list, P0: P.clone(), plane, start: st };
 }
-function moveTo() {
+// regularized Kelvinlet profiles (de Goes & James 2017), scaled to 1 at the center; Poisson ratio 0.4
+const KV_A = 1, KV_B = KV_A / (4 * (1 - 0.4));
+function kelvinGrab(rx, ry, rz, eps, fx, fy, fz, out) {
+  const r2 = rx*rx + ry*ry + rz*rz, e2 = eps * eps, re = Math.sqrt(r2 + e2), re3 = re * re * re;
+  const norm = 1 / ((KV_A - KV_B) / eps + KV_A / (2 * eps));
+  const c1 = ((KV_A - KV_B) / re + KV_A * e2 / (2 * re3)) * norm, c2 = KV_B / re3 * norm * (rx*fx + ry*fy + rz*fz);
+  out[0] = c1 * fx + c2 * rx; out[1] = c1 * fy + c2 * ry; out[2] = c1 * fz + c2 * rz;
+}
+const kelvinTwist = (r2, eps) => { const e2 = eps * eps, re = Math.sqrt(r2 + e2), re3 = re * re * re; return (1 / re3 + 1.5 * e2 / (re3 * re * re)) / (2.5 / (eps * eps * eps)); };
+const kelvinScale = (r2, eps) => { const e2 = eps * eps, re = Math.sqrt(r2 + e2), re3 = re * re * re; return (2 / re3 + 3 * e2 / (re3 * re * re)) / (5 / (eps * eps * eps)); };
+function moveTo(e) {
   const m = stroke.mv, P1 = new V3();
   raycaster.setFromCamera(ndc, camera);
+  if (m.elastic) { elasticTo(m, e); return; }
   if (!raycaster.ray.intersectPlane(m.plane, P1)) return;
-  const dx = P1.x - m.P0.x, dy = P1.y - m.P0.y, dz = P1.z - m.P0.z, st = m.start;
-  for (const v of m.list) {
-    const i = v * 3, a = m.wa[v], b = m.wb[v];
-    pos[i] = st[i] + dx * (a - b); pos[i+1] = st[i+1] + dy * (a + b); pos[i+2] = st[i+2] + dz * (a + b);
+  const dx = P1.x - m.P0.x, dy = P1.y - m.P0.y, dz = P1.z - m.P0.z, st = m.start, L = m.list;
+  for (let j = 0; j < L.length; j++) {
+    const v = L[j], i = v * 3, s3 = j * 3, a = m.wa[j], b = m.wb[j];
+    spSave(v);
+    pos[i] = st[s3] + dx * (a - b); pos[i+1] = st[s3+1] + dy * (a + b); pos[i+2] = st[s3+2] + dz * (a + b);
+    touch(v);
+  }
+}
+function elasticTo(m, e) {
+  const st = m.start, eps = m.eps, R = m.R, k = Math.min(1.5, stroke.cfg.strength * 2.2) * stroke.pressure, out = [0, 0, 0];
+  let fx = 0, fy = 0, fz = 0, ang = 0, sc = 0;
+  if (m.mode === 'grab') {
+    const P1 = new V3(); if (!raycaster.ray.intersectPlane(m.plane, P1)) return;
+    fx = (P1.x - m.P0.x) * k; fy = (P1.y - m.P0.y) * k; fz = (P1.z - m.P0.z) * k;
+  } else if (m.mode === 'twist') ang = ((e ? e.clientX : m.x0) - m.x0) * 0.012 * k;
+  else sc = Math.exp(-((e ? e.clientY : m.y0) - m.y0) * 0.006 * k) - 1;
+  const ax = m.view.x, ay = m.view.y, az = m.view.z;
+  const one = (i, cx, cy, cz, mx) => {   // displacement of the vertex with start st[i..i+2] from the center (cx, cy, cz); mx = -1 mirrored
+    const rx = st[i] - cx, ry = st[i+1] - cy, rz = st[i+2] - cz, r2 = rx*rx + ry*ry + rz*rz;
+    const fade = r2 >= R * R ? 0 : sstep(1 - Math.sqrt(r2) / R);   // fade out at the gather radius
+    if (m.mode === 'grab') { kelvinGrab(rx, ry, rz, eps, fx * mx, fy, fz, out); out[0] *= fade; out[1] *= fade; out[2] *= fade; return; }
+    if (m.mode === 'scale') { const w = kelvinScale(r2, eps) * sc * fade; out[0] = rx * w; out[1] = ry * w; out[2] = rz * w; return; }
+    // twist: rotate around the view axis through the center by an angle that falls off with distance
+    const t = kelvinTwist(r2, eps) * ang * fade * mx, ux = ax * mx, c = Math.cos(t), sn = Math.sin(t), d = ux*rx + ay*ry + az*rz;
+    const qx = ay*rz - az*ry, qy = az*rx - ux*rz, qz = ux*ry - ay*rx;
+    out[0] = rx*c + qx*sn + ux*d*(1-c) - rx; out[1] = ry*c + qy*sn + ay*d*(1-c) - ry; out[2] = rz*c + qz*sn + az*d*(1-c) - rz;
+  };
+  for (let j = 0; j < m.list.length; j++) {
+    const v = m.list[j], i = v * 3, s3 = j * 3, w = 1 - mask[v];
+    let x = 0, y = 0, z = 0;
+    one(s3, m.P0.x, m.P0.y, m.P0.z, 1); x += out[0]; y += out[1]; z += out[2];
+    if (m.sym) { one(s3, m.mP.x, m.mP.y, m.mP.z, -1); x += out[0]; y += out[1]; z += out[2]; }
+    spSave(v);
+    pos[i] = st[s3] + x * w; pos[i+1] = st[s3+1] + y * w; pos[i+2] = st[s3+2] + z * w;
     touch(v);
   }
 }
@@ -1680,7 +2227,7 @@ function snakeTo() {
   const F = { fo: FO[stroke.cfg.falloff] || FO.smooth, bf: false, A: null };
   const pull = (P, N, dx, dy, dz) => {
     const n = gather(P, N, r, F);
-    for (let j = 0; j < n; j++) { const v = selIds[j], i = v * 3, w = selW[j] * (1 - mask[v]) * k; pos[i] += dx*w; pos[i+1] += dy*w; pos[i+2] += dz*w; touch(v); }
+    for (let j = 0; j < n; j++) { const v = selIds[j], i = v * 3, w = selW[j] * (1 - mask[v]) * k; spSave(v); pos[i] += dx*w; pos[i+1] += dy*w; pos[i+2] += dz*w; touch(v); }
   };
   pull(m.P, m.N, d.x, d.y, d.z);
   if (S.sym) pull(new V3(-m.P.x, m.P.y, m.P.z), new V3(-m.N.x, m.N.y, m.N.z), -d.x, d.y, d.z);
@@ -1705,6 +2252,7 @@ canvas.addEventListener('pointermove', e => {
   if (stroke) {
     if (e.pointerId !== stroke.id) return;
     if (stroke.pose) { poseTo(e); flushNormals(); return; }
+    if (stroke.imm) { stroke.imm.dx = e.clientX - stroke.imm.x0; stroke.imm.dy = e.clientY - stroke.imm.y0; immPreview(stroke.imm); return; }
     if (stroke.curve) {
       const hit = pick(), c = stroke.curve;
       if (hit && hit.point.distanceTo(c.pts[c.pts.length - 1]) > c.r * 0.08) { c.pts.push(hit.point.clone()); c.nrm.push(hitNormal(hit)); curvePreview(c.pts); }
@@ -1712,7 +2260,7 @@ canvas.addEventListener('pointermove', e => {
     }
     stroke.pressure = pres(e);
     if (stroke.drag) { dragStamp(e); flushNormals(); return; }
-    if (stroke.brush === 'move') { moveTo(); flushNormals(); updateCursor(null); return; }
+    if (isMoveBrush(stroke.brush)) { moveTo(e); flushNormals(); updateCursor(null); return; }
     if (S.lazy > 0) {
       // lazy mouse: the brush trails the pointer on a string of length S.lazy px
       const L = stroke.lazy, dx = e.clientX - L.x, dy = e.clientY - L.y, d = Math.hypot(dx, dy);
@@ -1746,6 +2294,7 @@ function endStroke() {
   showLazy(null);
   if (!stroke) return;
   if (stroke.curve) { const st = stroke; stroke = null; busy(() => finishCurve(st)); return; }
+  if (stroke.imm) { const st = stroke; stroke = null; immPreview(null); busy(() => immCommit(st.imm)); return; }
   if (stroke.dyn) { dynRefine(); if (stroke.dyn.changed) syncScene(); }
   const lr = stroke.layRec;
   if (lr && layersOf().includes(lr.L) && lr.L.delta.length === pos.length) {
@@ -1754,6 +2303,7 @@ function endStroke() {
     for (let i = 0; i < d.length; i++) { const x = pos[i] - b[i]; if (x) d[i] += x * k; }
   }
   stroke = null;
+  spEnd();
   flushNormals(); geo.computeBoundingSphere();
   if (S.showOver) recolorAll();
   scheduleSave();
@@ -2227,7 +2777,7 @@ function deleteHidden() {
   });
 }
 // per-level data that depends on the exact triangles (quad outlines, UVs, baked textures)
-function clearLevelExtras(L) { L.quads = undefined; L.polys = undefined; L.uv = undefined; L.uvIdx = undefined; L.bake = undefined; }
+function clearLevelExtras(L) { L.quads = undefined; L.polys = undefined; L.crease = undefined; L.uv = undefined; L.uvIdx = undefined; L.bake = undefined; }
 
 // ---------------- dynamic topology (Sculptris Pro style): split long edges where the brush has been ----------------
 const DYN_BRUSHES = new Set(['standard', 'clay', 'claybuild', 'inflate', 'blob', 'noise', 'crease', 'dam', 'slash', 'pinch', 'magnify', 'nudge', 'smooth', 'polish', 'flatten', 'trim']);
@@ -2471,6 +3021,14 @@ function finishCurve(st) {
   curveLine.visible = false;
   const c = st.curve;
   if (c.pts.length < 2) { toast('線が短すぎます。モデルの表面をなぞってください'); return; }
+  if (st.brush === 'guide') {   // retopology guide: kept on the part as line segments
+    const old = active.guides || new Float32Array(0), add = [];
+    for (let i = 1; i < c.pts.length; i++) add.push(c.pts[i-1].x, c.pts[i-1].y, c.pts[i-1].z, c.pts[i].x, c.pts[i].y, c.pts[i].z);
+    const g = new Float32Array(old.length + add.length); g.set(old); g.set(add, old.length);
+    active.guides = g; buildGuideLines(); scheduleSave();
+    toast(`ガイド線を引きました（${Math.round(g.length / 6)} 区間）。自動リトポ（形に沿う）でループがこの向きに並びます`);
+    return;
+  }
   const rad = c.r * +$('cvThick').value, taper = +$('cvTaper').value;
   const { P, N } = resampleCurve(c.pts, c.nrm, Math.max(rad * 0.35, 1e-4));
   if (P.length < 2) return;
@@ -2718,13 +3276,17 @@ function extractShell() {
 }
 
 // ---------------- clip: draw a line; everything on its right (Alt: left) is flattened onto the line's plane ----------------
-let clipArmed = false, clip = null;
-function armClip() { clipArmed = true; $('clipGo').classList.add('primary'); toast('画面上をドラッグして切る線を引いてください（Esc でやめる）'); }
-function disarmClip() { clipArmed = false; $('clipGo').classList.remove('primary'); }
+let clipArmed = false, clip = null;   // clipArmed: false | 'clip' | 'slice'
+function armClip(kind = 'clip') {
+  if (kind === 'slice' && active.levels.length > 1) { toast('スライスは細分化レベルがないパーツで使えます（上か下のレベルを削除してください）'); return; }
+  clipArmed = kind; $('clipGo').classList.toggle('primary', kind === 'clip'); $('sliceGo').classList.toggle('primary', kind === 'slice');
+  toast(kind === 'slice' ? '画面上をドラッグして分ける線を引いてください（線の片側が新しいグループになります・Esc でやめる）' : '画面上をドラッグして切る線を引いてください（Esc でやめる）');
+}
+function disarmClip() { clipArmed = false; $('clipGo').classList.remove('primary'); $('sliceGo').classList.remove('primary'); }
 function startClip(e) {
   controls.enabled = false; e.preventDefault(); canvas.setPointerCapture(e.pointerId);
   const b = canvas.getBoundingClientRect();
-  clip = { id: e.pointerId, a: [e.clientX - b.left, e.clientY - b.top], b: [e.clientX - b.left, e.clientY - b.top], flip: e.altKey };
+  clip = { id: e.pointerId, kind: clipArmed, a: [e.clientX - b.left, e.clientY - b.top], b: [e.clientX - b.left, e.clientY - b.top], flip: e.altKey };
   lassoPoly.classList.remove('un');
 }
 function clipMove(e) {
@@ -2750,6 +3312,7 @@ function finishClip() {
   const nrmP = new V3().subVectors(p2, p1).cross(r1.direction).normalize();
   if (C.flip) nrmP.negate();
   const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(nrmP, p1);
+  if (C.kind === 'slice') { busy(() => sliceWith(plane)); return; }
   pushUndo();
   let n = 0;
   for (let v = 0; v < nV; v++) {
@@ -2760,6 +3323,53 @@ function finishClip() {
   }
   afterBulkEdit();
   toast(n ? `${n.toLocaleString()} 頂点を線の位置で平らにしました` : '線の片側に頂点がありません（Alt を押しながら引くと反対側）');
+}
+
+// replace the active single-level part's triangles; per-vertex attributes come from `pick(v)` -> old vertex (or a blend)
+function replaceTopology(P, ix, attrs) {
+  const old = active;
+  pushStruct();
+  const rec = newRec(old.name, P, ix, attrs.mask);
+  rec.paint = attrs.paint || null; rec.pg = attrs.pg || null; rec.visible = old.visible; rec.guides = old.guides || null;
+  subtools.splice(subtools.indexOf(old), 1, rec);
+  activate(rec, true); scheduleSave();
+  return rec;
+}
+// Slice: an exact edge loop along the plane; the far side (normal side) becomes a new polygroup
+function sliceWith(plane) {
+  if (active.levels.length > 1) { toast('スライスは細分化レベルがないパーツで使えます'); return; }
+  flushNormals();
+  const r = slicePlane(pos, idx, [plane.normal.x, plane.normal.y, plane.normal.z], plane.constant);
+  if (!r.side.includes(1) || !r.side.includes(-1)) { toast('線がモデルを横切っていません'); return; }
+  const n = r.pos.length / 3, SR = r.src, m = new Float32Array(n), pt = paint ? new Float32Array(n * 3) : null, g = new Int32Array(n);
+  let mx = 0; if (pg) for (let v = 0; v < nV; v++) mx = Math.max(mx, pg[v]);
+  const g0 = v => pg ? pg[v] : 0;
+  for (let v = 0; v < n; v++) {
+    const a = SR[v*3], b = SR[v*3+1], t = SR[v*3+2];
+    m[v] = mask[a] + (mask[b] - mask[a]) * t;
+    if (pt) for (let k = 0; k < 3; k++) pt[v*3+k] = paint[a*3+k] + (paint[b*3+k] - paint[a*3+k]) * t;
+    // the cut loop stays with the near side; the far side gets a fresh group (one per old group it crosses)
+    g[v] = r.side[v] > 0 ? g0(t < 0.5 ? a : b) + mx + 1 : g0(r.side[a] <= 0 ? a : b);
+  }
+  replaceTopology(r.pos, r.idx, { mask: m, paint: pt, pg: g });
+  if (!S.showPG) setShowPG(true);
+  toast(`スライスしました（${r.cuts.toLocaleString()} 本の辺を切って、線の片側を新しいグループに）`);
+}
+// Panel loops: one thick, closed panel per polygroup with a gap between them
+function makePanels() {
+  if (!pg || pgCountGroups() < 2) { toast('ポリグループが2つ以上必要です（スライスや「マスクからグループ」で作れます）'); return; }
+  if (active.levels.length > 1) { toast('パネル化は細分化レベルがないパーツで使えます'); return; }
+  return busy(() => {
+    flushNormals();
+    const size = sceneBounds([active]).getSize(new V3()).length() / Math.sqrt(3);
+    const fg = new Int32Array(nF);
+    for (let f = 0; f < nF; f++) { const a = pg[idx[f*3]], b = pg[idx[f*3+1]], c = pg[idx[f*3+2]]; fg[f] = b === c ? b : a; }   // majority of the corners
+    const r = panelLoops(pos, idx, fg, +$('panelThick').value * size, +$('panelGap').value * size);
+    const n = r.pos.length / 3, m = new Float32Array(n), pt = paint ? new Float32Array(n * 3) : null;
+    for (let v = 0; v < n; v++) { const o = r.src[v]; m[v] = mask[o]; if (pt) { pt[v*3] = paint[o*3]; pt[v*3+1] = paint[o*3+1]; pt[v*3+2] = paint[o*3+2]; } }
+    replaceTopology(r.pos, r.idx, { mask: m, paint: pt, pg: r.group });
+    toast(`${r.panels} 枚のパネルにしました（厚さ ${(+$('panelThick').value * size * mmPerUnit()).toFixed(2)} mm 相当）`);
+  });
 }
 
 // ---------------- reference image (下絵) + Spotlight-style projection into polypaint ----------------
@@ -3343,6 +3953,211 @@ function presetLoad() {
   for (const id of ['spacing', 'lazy']) { const el = $(id); el.value = S[id]; el.dispatchEvent(new Event('input')); }
   toast(`ブラシ設定「${p.name}」を呼び出しました`);
 }
+// ---------------- IMM: parts placed on the surface ----------------
+// A part is { p, ix } in its own frame: standing on y = 0 (the face that goes on the surface), +Y up, its
+// footprint about 1 in radius. Built-ins are made here; the user can add any part (kept in IndexedDB).
+const BUILTIN_IMM = [
+  { id: 'i:bolt', name: 'ボルト（六角頭）' }, { id: 'i:rivet', name: 'リベット（丸頭）' }, { id: 'i:pipe', name: 'パイプ（短い筒）' },
+  { id: 'i:cube', name: '立方体' }, { id: 'i:cylinder', name: '円柱' }, { id: 'i:cone', name: '円すい（トゲ）' },
+  { id: 'i:ring', name: '輪' }, { id: 'i:panel', name: '板（パネル）' },
+];
+const immCache = new Map(), customIMMs = [];
+function geoToPart(g) {
+  g.deleteAttribute('normal'); g.deleteAttribute('uv'); g = mergeVertices(g, 1e-5);
+  return { p: new Float32Array(g.attributes.position.array), ix: dropDegenerate(Uint32Array.from(g.index.array)) };
+}
+// closed lathe around +Y from a profile [[r, y], ...] that starts and ends on the axis
+const lathePart = (prof, seg) => geoToPart(new THREE.LatheGeometry(prof.map(([r, y]) => new THREE.Vector2(r, y)), seg));
+function builtinIMM(id) {
+  if (immCache.has(id)) return immCache.get(id);
+  let part = null;
+  if (id === 'i:bolt') part = lathePart([[0, 0], [1, 0], [1, 0.45], [0.92, 0.55], [0, 0.55]], 6);
+  else if (id === 'i:rivet') { const pr = [[0, 0]]; for (let i = 0; i <= 12; i++) { const a = i / 12 * Math.PI / 2; pr.push([Math.cos(a), 0.12 + Math.sin(a) * 0.55]); } pr.splice(1, 0, [1, 0]); pr.push([0, 0.67]); part = lathePart(pr, 32); }
+  else if (id === 'i:pipe') part = lathePart([[0.55, 0], [1, 0], [1, 1.4], [0.55, 1.4], [0.55, 0]], 32);
+  else if (id === 'i:cube') { const g = new THREE.BoxGeometry(1.6, 1.6, 1.6); g.translate(0, 0.8, 0); part = geoToPart(g); }
+  else if (id === 'i:cylinder') part = lathePart([[0, 0], [1, 0], [1, 1.2], [0, 1.2]], 40);
+  else if (id === 'i:cone') part = lathePart([[0, 0], [1, 0], [0, 2.2]], 40);
+  else if (id === 'i:ring') { const g = new THREE.TorusGeometry(0.75, 0.25, 16, 48); g.rotateX(Math.PI / 2); g.translate(0, 0.25, 0); part = geoToPart(g); }
+  else if (id === 'i:panel') { const g = new THREE.BoxGeometry(2, 0.18, 1.4); g.translate(0, 0.09, 0); part = geoToPart(g); }
+  if (part) immCache.set(id, part);
+  return part;
+}
+function getIMM(id) { if (id && id.startsWith('m:')) return customIMMs.find(a => a.id === id) || null; return id ? builtinIMM(id) : null; }
+function renderIMMs() {
+  const sel = $('immSel'), items = [...BUILTIN_IMM, ...customIMMs.map(a => ({ id: a.id, name: a.name }))];
+  if (!items.some(x => x.id === S.imm)) S.imm = items[0].id;
+  sel.innerHTML = items.map(x => `<option value="${x.id}">${x.name.replace(/[<&"]/g, '')}</option>`).join('');
+  sel.value = S.imm; $('immDel').disabled = !S.imm.startsWith('m:'); $('immMerge').checked = S.immMerge;
+}
+async function saveIMMs() {
+  try { const db = await idb(); await new Promise(res => { const tx = db.transaction('s', 'readwrite'); tx.objectStore('s').put(customIMMs.map(a => ({ id: a.id, name: a.name, p: a.p, ix: a.ix })), 'imms'); tx.oncomplete = tx.onerror = tx.onabort = res; }); } catch { /* storage unavailable */ }
+}
+async function loadIMMs() {
+  try {
+    const db = await idb();
+    const list = await new Promise(res => { const r = db.transaction('s').objectStore('s').get('imms'); r.onsuccess = () => res(r.result || []); r.onerror = () => res([]); });
+    for (const a of list) if (a && a.id && a.p instanceof Float32Array && a.ix instanceof Uint32Array) customIMMs.push(a);
+  } catch { /* none */ }
+}
+// the selected part as a new IMM part: centred on its footprint, standing on y = 0, footprint radius 1
+function registerIMM() {
+  if (nF > 200000) { toast('ポリゴンが多すぎます（20万まで）。ポリゴン削減してから登録してください'); return; }
+  flushNormals();
+  const P = pos, n = nV; let minY = Infinity, cx = 0, cz = 0;
+  for (let v = 0; v < n; v++) { minY = Math.min(minY, P[v*3+1]); cx += P[v*3]; cz += P[v*3+2]; }
+  cx /= n; cz /= n;
+  let R = 1e-9; for (let v = 0; v < n; v++) R = Math.max(R, Math.hypot(P[v*3] - cx, P[v*3+2] - cz));
+  const p = new Float32Array(n * 3); for (let v = 0; v < n; v++) { p[v*3] = (P[v*3] - cx) / R; p[v*3+1] = (P[v*3+1] - minY) / R; p[v*3+2] = (P[v*3+2] - cz) / R; }
+  const id = 'm:' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  customIMMs.push({ id, name: active.name, p, ix: idx.slice() }); S.imm = id;
+  renderIMMs(); saveIMMs(); saveBrushPrefs();
+  toast(`「${active.name}」を部品に登録しました（${nF.toLocaleString()} ポリゴン）`);
+}
+// where the part goes: up = surface normal, its x = the drag direction (or the screen's right), size from the drag
+function immFrame(m) {
+  const px = Math.hypot(m.dx, m.dy), N = m.N.clone().normalize();
+  let ref = px >= 4 ? camAxis(0).multiplyScalar(m.dx).addScaledVector(camAxis(1), -m.dy) : camAxis(0);
+  ref.addScaledVector(N, -ref.dot(N)); if (ref.lengthSq() < 1e-10) ref = new V3(1, 0, 0).addScaledVector(N, -N.x); ref.normalize();
+  const W = new V3().crossVectors(ref, N), size = (px >= 4 ? px : S.size) * worldPerPx(m.P);
+  return { U: ref, N, W, size, P: m.P };
+}
+// part -> world positions (and the mirrored copy with its faces turned back the right way)
+function immPlace(part, f, mirror = false) {
+  const n = part.p.length / 3, out = new Float32Array(n * 3), sink = f.size * 0.05;
+  for (let v = 0; v < n; v++) {
+    const x = part.p[v*3], y = part.p[v*3+1], z = part.p[v*3+2];
+    for (let k = 0; k < 3; k++) { const a = ['x', 'y', 'z'][k]; out[v*3+k] = f.P[a] + (f.U[a] * x + f.N[a] * y + f.W[a] * z) * f.size - f.N[a] * sink; }
+    if (mirror) out[v*3] = -out[v*3];
+  }
+  let ix = part.ix;
+  if (mirror) { ix = ix.slice(); for (let i = 0; i < ix.length; i += 3) { const t = ix[i+1]; ix[i+1] = ix[i+2]; ix[i+2] = t; } }
+  return { p: out, ix };
+}
+let immMesh = null;
+const immMat = new THREE.MeshStandardMaterial({ color: 0xd9a35b, roughness: 0.5, transparent: true, opacity: 0.7 });
+function immPreview(m) {
+  if (immMesh) { scene.remove(immMesh); immMesh.geometry.dispose(); immMesh = null; }
+  if (!m) return;
+  const f = immFrame(m), parts = [immPlace(m.part, f)];
+  if (S.sym && Math.abs(m.P.x) > f.size * 0.5) parts.push(immPlace(m.part, f, true));
+  const g = mergeGeometries(parts.map(q => { const gg = new THREE.BufferGeometry(); gg.setAttribute('position', new THREE.BufferAttribute(q.p, 3)); gg.setIndex(new THREE.BufferAttribute(q.ix, 1)); return gg; }));
+  g.computeVertexNormals();
+  immMesh = new THREE.Mesh(g, immMat); immMesh.raycast = () => {}; immMesh.frustumCulled = false; scene.add(immMesh);
+}
+function immCommit(m) {
+  const f = immFrame(m), parts = [immPlace(m.part, f)];
+  if (S.sym && Math.abs(m.P.x) > f.size * 0.5) parts.push(immPlace(m.part, f, true));
+  let nv = 0, ni = 0; for (const q of parts) { nv += q.p.length / 3; ni += q.ix.length; }
+  const p = new Float32Array(nv * 3), ix = new Uint32Array(ni); let ov = 0, oi = 0;
+  for (const q of parts) { p.set(q.p, ov * 3); for (let k = 0; k < q.ix.length; k++) ix[oi + k] = q.ix[k] + ov; ov += q.p.length / 3; oi += q.ix.length; }
+  if (S.immMerge && active.levels.length === 1) {
+    // append to the selected part (one undo step with the old topology); the part gets its own polygroup
+    flushNormals(); pushUndo(true);
+    const n0 = nV, NP = new Float32Array(pos.length + p.length), NI = new Uint32Array(idx.length + ix.length), NM = new Float32Array(n0 + nv);
+    NP.set(pos); NP.set(p, pos.length); NI.set(idx); for (let k = 0; k < ix.length; k++) NI[idx.length + k] = ix[k] + n0; NM.set(mask);
+    const NC = paint ? (() => { const c = new Float32Array(NP.length); c.set(paint); c.set(basePaint(nv), paint.length); return c; })() : null;
+    let mx = 0; if (pg) for (let v = 0; v < n0; v++) mx = Math.max(mx, pg[v]);
+    const g = new Int32Array(NM.length); if (pg) g.set(pg); g.fill(mx + 1, n0); active.pg = g;
+    clearLevelExtras(active.levels[0]); active.hid = null;
+    setMesh(NP, NI, NM, null, NC); syncScene(); scheduleSave();
+    return;
+  }
+  if (S.immMerge) toast('細分化レベルがあるパーツには結合できないので、別のパーツとして置きました');
+  pushStruct();
+  const rec = newRec(uniqueName((BUILTIN_IMM.find(b => b.id === S.imm) || customIMMs.find(b => b.id === S.imm) || { name: '部品' }).name.replace(/（.*$/, '')), p, ix);
+  insertAfterActive(rec); syncScene(); scheduleSave();
+}
+$('immSel').onchange = e => { S.imm = e.target.value; renderIMMs(); saveBrushPrefs(); };
+$('immMerge').onchange = e => { S.immMerge = e.target.checked; saveBrushPrefs(); };
+$('immAdd').onclick = () => registerIMM();
+$('immDel').onclick = () => { const i = customIMMs.findIndex(a => a.id === S.imm); if (i < 0) return; const n = customIMMs[i].name; customIMMs.splice(i, 1); S.imm = BUILTIN_IMM[0].id; renderIMMs(); saveIMMs(); toast(`部品「${n}」を削除しました`); };
+
+// ---------------- VDM stamp library (UI) ----------------
+function renderVDMs() {
+  const sel = $('vdmSel'), items = [...BUILTIN_VDM, ...customVDMs.map(a => ({ id: a.id, name: a.name }))];
+  if (!items.some(x => x.id === S.vdm)) S.vdm = items[0].id;
+  sel.innerHTML = items.map(x => `<option value="${x.id}">${x.name.replace(/[<&"]/g, '')}</option>`).join('');
+  sel.value = S.vdm; $('vdmDel').disabled = !S.vdm.startsWith('u:');
+  const st = getVDM(S.vdm), cv = $('vdmCv');
+  if (st) cv.getContext('2d').putImageData(new ImageData(vdmPreview(st, 64), 64, 64), 0, 0);
+}
+async function saveVDMs() {
+  try { const db = await idb(); await new Promise(res => { const tx = db.transaction('s', 'readwrite'); tx.objectStore('s').put(customVDMs.map(a => ({ id: a.id, name: a.name, S: a.S, vec: a.vec })), 'vdms'); tx.oncomplete = tx.onerror = tx.onabort = res; }); } catch { /* storage unavailable */ }
+}
+async function loadVDMs() {
+  try {
+    const db = await idb();
+    const list = await new Promise(res => { const r = db.transaction('s').objectStore('s').get('vdms'); r.onsuccess = () => res(r.result || []); r.onerror = () => res([]); });
+    for (const a of list) if (a && a.id && a.vec && a.vec.length === a.S * a.S * 3) customVDMs.push(a);
+  } catch { /* none */ }
+}
+function addVDM(name, st) {
+  const id = 'u:' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  customVDMs.push({ id, name, S: st.S, vec: st.vec }); S.vdm = id; renderVDMs(); saveVDMs(); saveBrushPrefs();
+}
+async function importVDM(file) {
+  try { const st = stampFromEXR(await file.arrayBuffer()); addVDM(file.name.replace(/\.[^.]+$/, ''), st); toast(`VDM の型「${file.name}」を追加しました（${st.S}px）`); }
+  catch (err) { console.error(err); toast('読み込めませんでした: ' + err.message); }
+}
+// a flat plate (XY plane, facing the default view) to sculpt a stamp on; it remembers where it started
+function addVDMPlate() {
+  return busy(() => {
+    let g = new THREE.PlaneGeometry(2, 2, 160, 160); g.deleteAttribute('normal'); g.deleteAttribute('uv'); g = mergeVertices(g, 1e-6);
+    const p = new Float32Array(g.attributes.position.array), ix = Uint32Array.from(g.index.array);
+    pushStruct();
+    const rec = newRec(uniqueName('VDM の板'), p, ix, null);
+    rec.vdmPlate = { ref: p.slice(), h: 1 };
+    for (const r of subtools) r.visible = false;
+    subtools.push(rec); activate(rec, true); frame(); scheduleSave();
+    toast('板を追加しました（ほかのパーツは非表示）。真ん中に盛って・張り出させて彫り、「板から型を作る」で VDM の型にします。細分化しても大丈夫です');
+  });
+}
+function captureVDM() {
+  const pl = active.vdmPlate;
+  if (!pl || !(pl.ref instanceof Float32Array) || pl.ref.length !== levelVerts(active.levels[0]) * 3) { toast('「型を彫る板を追加」で作った板を選んでから使ってください'); return; }
+  return busy(() => {
+    flushNormals();
+    // the plate's original (flat) positions at the current level: subdivided the same way as the levels
+    let ref = pl.ref; for (let j = 1; j <= active.lv; j++) ref = subdivPositions(ref, active.levels[j - 1], active.levels[j]);
+    if (ref.length !== pos.length) { toast('板の形が変わっていて型にできません（リメッシュやポリゴン編集をしていない板で作ってください）'); return; }
+    const st = captureStamp(pos, ref, idx, 0, 0, pl.h, 256);
+    addVDM(`彫った型 ${customVDMs.length + 1}`, st);
+    toast('彫った形を VDM の型にしました。VDM ブラシで押し付けられます');
+  });
+}
+$('vdmSel').onchange = e => { S.vdm = e.target.value; renderVDMs(); saveBrushPrefs(); };
+$('vdmLoad').onclick = () => $('vdmFile').click();
+$('vdmFile').onchange = e => { const f = e.target.files[0]; e.target.value = ''; if (f) importVDM(f); };
+$('vdmPlate').onclick = () => addVDMPlate();
+$('vdmCapture').onclick = () => captureVDM();
+$('vdmDel').onclick = () => { const i = customVDMs.findIndex(a => a.id === S.vdm); if (i < 0) return; const n = customVDMs[i].name; customVDMs.splice(i, 1); S.vdm = BUILTIN_VDM[0].id; renderVDMs(); saveVDMs(); toast(`VDM の型「${n}」を削除しました`); };
+
+// brush library file (.bpbrush): every brush's settings + the saved presets (custom alphas stay in this app)
+function brushFile() { return { format: 'boardpainter-brushes', version: 1, bs: BS, presets, size: S.size, spacing: S.spacing, lazy: S.lazy }; }
+function applyBrushFile(o) {
+  if (!o || o.format !== 'boardpainter-brushes' || typeof o.bs !== 'object') throw new Error('ブラシのファイルではありません');
+  let nb = 0, np = 0;
+  for (const id in o.bs) if (BS[id] && o.bs[id] && typeof o.bs[id] === 'object') {
+    const c = o.bs[id], d = BS[id];
+    for (const k of Object.keys(BASE_CFG)) if (c[k] !== undefined && typeof c[k] === typeof BASE_CFG[k]) d[k] = c[k];
+    if (!FO[d.falloff]) d.falloff = 'smooth';
+    if (d.alpha.startsWith('c:') && !getAlpha(d.alpha)) d.alpha = 'none';
+    nb++;
+  }
+  for (const p of Array.isArray(o.presets) ? o.presets : []) {
+    if (!p || typeof p.name !== 'string' || !BRUSH[p.brush] || typeof p.cfg !== 'object') continue;
+    const at = presets.findIndex(x => x.name === p.name), q = { name: p.name.slice(0, 80), brush: p.brush, cfg: { ...BASE_CFG, ...p.cfg }, size: +p.size || S.size, spacing: +p.spacing || S.spacing, lazy: +p.lazy || 0 };
+    if (at >= 0) presets[at] = q; else presets.push(q);
+    np++;
+  }
+  savePresets(); renderPresets(); refreshBrushUI(); saveBrushPrefs();
+  return { nb, np };
+}
+function brushExport() { saveOne(() => ({ name: 'brushes.bpbrush', blob: new Blob([JSON.stringify(brushFile(), null, 1)], { type: 'application/json' }) })); }
+async function brushImport(file) {
+  try { const r = applyBrushFile(JSON.parse(await file.text())); toast(`ブラシ${r.nb}種類の設定と、保存した設定${r.np}個を読み込みました`); }
+  catch (err) { toast('読み込めませんでした: ' + err.message); }
+}
 function presetDelete() {
   const i = +$('psList').value, p = presets[i]; if (!p) return;
   presets.splice(i, 1); savePresets(); renderPresets(); toast(`「${p.name}」を削除しました`);
@@ -3638,16 +4453,26 @@ function vvOf(ix, n) {
 }
 // Loop subdivision topology: 1 triangle -> 4, plus the edge stencil
 function loopTopology(ix, n) {
-  const nF0 = ix.length / 3, edgeMap = new Map(), maxE = nF0 * 3;
-  const ev = new Int32Array(maxE * 4), faceE = new Uint32Array(nF0 * 3);
+  // Edges are numbered in first-seen order without a Map (a Map stops near 16.7M entries): every face edge is
+  // bucketed under its smaller vertex, and the first slot holding the same other vertex identifies the edge.
+  const nF0 = ix.length / 3, nS = nF0 * 3, start = new Uint32Array(n + 1);
+  for (let i = 0; i < nS; i++) { const f3 = i - i % 3, a = ix[i], b = ix[f3 + (i % 3 + 1) % 3]; start[(a < b ? a : b) + 1]++; }
+  for (let v = 0; v < n; v++) start[v + 1] += start[v];
+  const other = new Uint32Array(nS), fill = start.slice(0, n);
+  for (let i = 0; i < nS; i++) { const f3 = i - i % 3, a = ix[i], b = ix[f3 + (i % 3 + 1) % 3]; if (a < b) other[fill[a]++] = b; else other[fill[b]++] = a; }
+  const slotE = new Int32Array(nS).fill(-1), faceE = new Uint32Array(nS);
   let eN = 0;
-  for (let f = 0; f < nF0; f++) for (let k = 0; k < 3; k++) {
-    const a = ix[f*3+k], b = ix[f*3+(k+1)%3], c = ix[f*3+(k+2)%3];
-    const key = a < b ? a * n + b : b * n + a;
-    let e = edgeMap.get(key);
-    if (e === undefined) { e = eN++; edgeMap.set(key, e); ev[e*4] = a; ev[e*4+1] = b; ev[e*4+2] = c; ev[e*4+3] = -1; }
+  for (let i = 0; i < nS; i++) {
+    const f3 = i - i % 3, a = ix[i], b = ix[f3 + (i % 3 + 1) % 3], lo = a < b ? a : b, hi = a < b ? b : a;
+    let s = start[lo]; while (other[s] !== hi) s++;
+    if (slotE[s] < 0) slotE[s] = eN++;
+    faceE[i] = slotE[s];
+  }
+  const ev = new Int32Array(eN * 4).fill(-1), seen = new Uint8Array(eN);
+  for (let i = 0; i < nS; i++) {
+    const f3 = i - i % 3, k = i % 3, e = faceE[i], c = ix[f3 + (k + 2) % 3];
+    if (!seen[e]) { seen[e] = 1; ev[e*4] = ix[i]; ev[e*4+1] = ix[f3 + (k + 1) % 3]; ev[e*4+2] = c; }
     else ev[e*4+3] = c;
-    faceE[f*3+k] = e;
   }
   const ni = new Uint32Array(nF0 * 12);
   for (let f = 0; f < nF0; f++) {
@@ -3656,17 +4481,44 @@ function loopTopology(ix, n) {
     ni[o]=a; ni[o+1]=ab; ni[o+2]=ca;  ni[o+3]=ab; ni[o+4]=b; ni[o+5]=bc;
     ni[o+6]=ca; ni[o+7]=bc; ni[o+8]=c;  ni[o+9]=ab; ni[o+10]=bc; ni[o+11]=ca;
   }
-  return { idx: ni, ev: ev.slice(0, eN * 4) };
+  // edge id of (a, b) at the lower level, or -1 (used to carry mirror pairs up a level)
+  const edgeOf = (a, b) => { const lo = a < b ? a : b, hi = a < b ? b : a; for (let s = start[lo]; s < start[lo + 1]; s++) if (other[s] === hi) return slotE[s]; return -1; };
+  return { idx: ni, ev, edgeOf };
 }
 // Loop-subdivided positions of the lower level P on the upper level's vertex numbering
+// crease edges (pairs of vertex ids on a level): kept sharp by the subdivision, and carried to the next level
+function creaseSet(L, n) {
+  const c = L.crease; if (!c || !c.length) return null;
+  const set = new Set(); for (let i = 0; i + 1 < c.length; i += 2) { const a = c[i], b = c[i + 1]; if (a >= n || b >= n) return null; set.add(a < b ? a * n + b : b * n + a); }
+  return set;
+}
+function creaseUp(lo, hi, n) {
+  const set = creaseSet(lo, n); if (!set) return undefined;
+  const ev = hi.ev, out = [];
+  for (let e = 0; e < ev.length / 4; e++) { const a = ev[e*4], b = ev[e*4+1]; if (set.has(a < b ? a * n + b : b * n + a)) out.push(a, n + e, n + e, b); }
+  return out.length ? Uint32Array.from(out) : undefined;
+}
 function subdivPositions(P, lo, hi) {
   const n = P.length / 3, ev = hi.ev, nE = ev.length / 4, out = new Float32Array((n + nE) * 3);
   if (!lo.vv) lo.vv = vvOf(lo.idx, n);
   const { start, list } = lo.vv, bnd = new Uint8Array(n);
   for (let e = 0; e < nE; e++) if (ev[e*4+3] < 0) bnd[ev[e*4]] = bnd[ev[e*4+1]] = 1;
+  // creases: an edge on a crease subdivides like a border; a vertex on exactly 2 crease edges follows its crease
+  // curve, a vertex on 3 or more stays a corner
+  const cs = creaseSet(lo, n), isC = cs ? new Uint8Array(nE) : null, cc = cs ? new Uint8Array(n) : null, cn = cs ? new Int32Array(n * 2).fill(-1) : null;
+  if (cs) for (let e = 0; e < nE; e++) {
+    const a = ev[e*4], b = ev[e*4+1]; if (!cs.has(a < b ? a * n + b : b * n + a)) continue;
+    isC[e] = 1;
+    for (const [x, y] of [[a, b], [b, a]]) { if (cc[x] < 2) cn[x * 2 + cc[x]] = y; if (cc[x] < 255) cc[x]++; }
+  }
   for (let v = 0; v < n; v++) {
     const i = v * 3, s0 = start[v], s1 = start[v + 1], c = s1 - s0;
-    if (bnd[v] || c < 3) { out[i] = P[i]; out[i+1] = P[i+1]; out[i+2] = P[i+2]; continue; }
+    if (bnd[v] || c < 3 || (cc && cc[v] >= 3)) { out[i] = P[i]; out[i+1] = P[i+1]; out[i+2] = P[i+2]; continue; }
+    if (cc && cc[v] === 2) {
+      const a = cn[v * 2] * 3, b = cn[v * 2 + 1] * 3;
+      out[i] = P[i] * 0.75 + (P[a] + P[b]) * 0.125; out[i+1] = P[i+1] * 0.75 + (P[a+1] + P[b+1]) * 0.125; out[i+2] = P[i+2] * 0.75 + (P[a+2] + P[b+2]) * 0.125;
+      continue;
+    }
     const beta = c === 3 ? 3 / 16 : 3 / (8 * c), k = 1 - c * beta;
     let ax = 0, ay = 0, az = 0;
     for (let j = s0; j < s1; j++) { const u = list[j] * 3; ax += P[u]; ay += P[u+1]; az += P[u+2]; }
@@ -3674,7 +4526,7 @@ function subdivPositions(P, lo, hi) {
   }
   for (let e = 0; e < nE; e++) {
     const a = ev[e*4]*3, b = ev[e*4+1]*3, o = (n + e) * 3;
-    if (ev[e*4+3] < 0) { out[o] = (P[a]+P[b])/2; out[o+1] = (P[a+1]+P[b+1])/2; out[o+2] = (P[a+2]+P[b+2])/2; }
+    if (ev[e*4+3] < 0 || (isC && isC[e])) { out[o] = (P[a]+P[b])/2; out[o+1] = (P[a+1]+P[b+1])/2; out[o+2] = (P[a+2]+P[b+2])/2; }
     else {
       const c = ev[e*4+2]*3, d = ev[e*4+3]*3;
       out[o]   = 0.375*(P[a]+P[b])     + 0.125*(P[c]+P[d]);
@@ -3760,6 +4612,17 @@ const levelVerts = L => (L.pos || L.det).length / 3;
 function restoreLv(e) {
   // bring the current state to the level that the snapshot had active (levels are identified by vertex count)
   const want0 = levelVerts(e.levels[e.lv]), at = active.levels.findIndex(L => levelVerts(L) === want0);
+  if (at < 0) {
+    // the snapshot's level isn't in the current list (redo of "subdivide", undo of "delete higher"): the current
+    // level is in the snapshot's list, so switch to that list and step up through the stored details
+    const cur = active.levels[active.lv], k = e.levels.indexOf(cur);
+    if (k >= 0 && e.levels.slice(k + 1, e.lv + 1).every(L => L.det && L.det.length)) {
+      active.levels = e.levels; active.lv = k;
+      if (e.lv !== k) setLevel(e.lv, true);
+      syncScene(); if (gizmoOn) attachGizmo();
+      return;
+    }
+  }
   setLevel(at >= 0 ? at : 0, true);
   const cur = active.levels[active.lv];
   active.levels = e.levels; active.lv = e.lv;
@@ -3770,8 +4633,30 @@ function restoreLv(e) {
   setMesh(want.pos, want.idx, mask, want.mirror, paint);
   syncScene(); if (gizmoOn) attachGizmo();
 }
-// polygon limit for subdivision, by installed memory (desktop): 16 GB+ -> 24 million, 8 GB+ -> 6 million
-function maxPolys() { const gb = native && native.memoryGB || 0; return gb >= 15 ? 24_000_000 : gb >= 7 ? 6_000_000 : 2_400_000; }
+// polygons a part may be subdivided to, from the PC's memory (measured ~180 bytes per polygon in the page plus the
+// GPU copy, and room for the level below and the history). Without the native module the JavaScript BVH builder
+// needs a 96-byte-per-triangle buffer, which can't exceed 2 GB.
+function maxPolys() {
+  const gb = native && native.memoryGB || 0;
+  const cap = gb >= 56 ? 100_000_000 : gb >= 28 ? 50_000_000 : gb >= 15 ? 28_000_000 : gb >= 7 ? 8_000_000 : 3_000_000;
+  return ACCEL ? cap : Math.min(cap, 20_000_000);
+}
+// mirror pairs one level up: old vertices keep theirs, an edge's new vertex pairs with the mirrored edge's.
+// null (= search by position) when the lower level has no pairs or its topology isn't symmetric enough
+function mirrorUp(mir, hi, n, edgeOf) {
+  if (!mir || mir.length !== n) return null;
+  const ev = hi.ev, nE = ev.length / 4, out = new Int32Array(n + nE);
+  out.set(mir);
+  let want = 0, miss = 0;
+  for (let e = 0; e < nE; e++) {
+    const ma = mir[ev[e*4]], mb = mir[ev[e*4+1]];
+    if (ma < 0 || mb < 0) { out[n + e] = -1; continue; }
+    want++;
+    const f = edgeOf(ma, mb);
+    if (f < 0) { out[n + e] = -1; miss++; } else out[n + e] = n + f;
+  }
+  return want && miss > want * 0.01 ? null : out;
+}
 function addLevel() {
   if (stroke) return;
   if (active.lv < active.levels.length - 1) setLevel(active.levels.length - 1, true);
@@ -3780,11 +4665,13 @@ function addLevel() {
   pushEntry(lvSnap());
   const lo = active.levels[active.lv];
   const topo = loopTopology(idx, nV), hi = { idx: topo.idx, ev: topo.ev };
+  hi.crease = creaseUp(lo, hi, nV);
   hi.pos = subdivPositions(pos, lo, hi); hi.ref0 = hi.pos.slice();
   const m = upMask(mask, hi), pt = upAttr(paint, hi, 3);
   active.pg = pgToLevel(pg, 0, hi);
+  const mir = mirrorUp(mirror, hi, nV, topo.edgeOf);
   active.levels.push(hi); active.lv++;
-  setMesh(hi.pos, hi.idx, m, undefined, pt);
+  setMesh(hi.pos, hi.idx, m, mir, pt);
   syncScene(); if (gizmoOn) attachGizmo(); scheduleSave();
   toast(`細分化しました（レベル ${active.lv + 1} / ${active.levels.length}・${nF.toLocaleString()} ポリゴン）`);
 }
@@ -3798,7 +4685,7 @@ function deleteLower() {
   if (active.lv === 0) { toast('下のレベルはありません'); return; }
   pushEntry(lvSnap());
   const cur = active.levels[active.lv];
-  active.levels = [{ idx: cur.idx, pos: cur.pos, mirror: cur.mirror, quads: cur.quads, polys: cur.polys, uvIdx: cur.uvIdx, uv: cur.uv, bake: cur.bake }, ...active.levels.slice(active.lv + 1)];
+  active.levels = [{ idx: cur.idx, pos: cur.pos, mirror: cur.mirror, quads: cur.quads, polys: cur.polys, crease: cur.crease, uvIdx: cur.uvIdx, uv: cur.uv, bake: cur.bake }, ...active.levels.slice(active.lv + 1)];
   active.lv = 0;
   syncScene(); scheduleSave(); toast('下のレベルを削除しました（今のレベルが一番下になりました）');
 }
@@ -3930,6 +4817,97 @@ function runBoolean(op) {
   });
 }
 
+// ---------------- retopology guide lines (per part, line segments on its surface) ----------------
+let guideLines = null;
+function buildGuideLines() {
+  if (guideLines) { scene.remove(guideLines); guideLines.geometry.dispose(); guideLines = null; }
+  const g = active && active.guides; if (!g || !g.length) return;
+  const geo2 = new THREE.BufferGeometry(); geo2.setAttribute('position', new THREE.BufferAttribute(g.slice(), 3));
+  guideLines = new THREE.LineSegments(geo2, new THREE.LineBasicMaterial({ color: 0x9be36b, depthTest: false, transparent: true, opacity: 0.9 }));
+  guideLines.renderOrder = 6; guideLines.frustumCulled = false; guideLines.raycast = () => {};
+  scene.add(guideLines);
+}
+
+// ---------------- creases + dynamic subdivision preview ----------------
+let creaseLines = null;
+const creaseMat = new THREE.LineBasicMaterial({ color: 0x5ad1e6, depthTest: true, transparent: true, opacity: 0.95 });
+function buildCreaseLines() {
+  if (creaseLines) { scene.remove(creaseLines); creaseLines.geometry.dispose(); creaseLines = null; }
+  const L = active && active.levels[active.lv], c = L && L.crease && creaseSet(L, nV) ? L.crease : null;
+  if (!c) return;
+  const g = new THREE.BufferGeometry(); g.setAttribute('position', geo.attributes.position); g.setIndex(Array.from(c));
+  creaseLines = new THREE.LineSegments(g, creaseMat); creaseLines.frustumCulled = false; creaseLines.raycast = () => {}; creaseLines.renderOrder = 5;
+  creaseLines.visible = pe.on || S.wire || S.dynSub > 0;
+  scene.add(creaseLines);
+}
+function setCrease(arr) {
+  const L = active.levels[0];
+  L.crease = arr && arr.length ? Uint32Array.from(arr) : undefined;
+  buildCreaseLines(); dsDirty = true; scheduleSave();
+}
+const creaseKeys = () => { const c = active.levels[0].crease, set = new Set(); if (c) for (let i = 0; i < c.length; i += 2) set.add(PE.edgeKey(c[i], c[i + 1])); return set; };
+const keysToPairs = set => { const out = []; for (const k of set) out.push(Math.floor(k / 0x200000), k % 0x200000); return out; };
+function creaseToggleLoop(a, b) {
+  const M = peMeshOf(), loop = PE.edgeLoop(M.polys, nV, a, b, M.vf), set = creaseKeys();
+  pushCrease();
+  const on = !set.has(PE.edgeKey(a, b));
+  for (const [u, w] of loop.edges) { const k = PE.edgeKey(u, w); if (on) set.add(k); else set.delete(k); }
+  setCrease(keysToPairs(set));
+  toast(on ? `${loop.edges.length} 本の辺にクリースを付けました` : `${loop.edges.length} 本の辺のクリースを外しました`);
+}
+function creaseByAngle(deg = 30) {
+  if (peAvailable()) { toast(peAvailable()); return; }
+  const M = peMeshOf(), by = PE.adjacency(M.polys), c = Math.cos(deg * Math.PI / 180), set = new Set();
+  const fn = M.polys.map(f => PE.polyNormal(pos, f));
+  for (const [k, fs] of by) if (fs.length === 2) { const a = fn[fs[0]], b = fn[fs[1]]; if (a[0]*b[0] + a[1]*b[1] + a[2]*b[2] < c) set.add(k); }
+  pushCrease(); setCrease(keysToPairs(set));
+  toast(set.size ? `${set.size} 本の角の辺にクリースを付けました` : '30°以上の角はありませんでした');
+}
+// crease edits are undoable: the whole crease list is one snapshot
+function pushCrease() { pushEntry({ kind: 'crease', rec: active, crease: active.levels[0].crease ? active.levels[0].crease.slice() : null }); }
+
+// Dynamic subdivision (preview only): the smooth, crease-aware Loop surface of the low-poly part is drawn in place
+// of the part while you model; "apply" turns it into real subdivision levels.
+let dsMesh = null, dsDirty = true;
+function dsClear() { if (dsMesh) { scene.remove(dsMesh); dsMesh.geometry.dispose(); dsMesh = null; } }
+function dsUpdate() {
+  dsDirty = false;
+  const k = S.dynSub | 0;
+  $('dsApply').disabled = !(k > 0 && active && active.levels.length === 1);
+  if (!k || !active || active.levels.length !== 1 || !mesh) { dsClear(); return; }
+  let n = Math.min(k, Math.max(0, Math.floor(Math.log(2_000_000 / Math.max(1, nF)) / Math.log(4))));
+  let L = { idx, crease: active.levels[0].crease }, P = pos, C = col;
+  for (let i = 0; i < n; i++) {
+    const nv = P.length / 3, t = loopTopology(L.idx, nv), hi = { idx: t.idx, ev: t.ev };
+    hi.crease = creaseUp(L, hi, nv); P = subdivPositions(P, L, hi); C = upAttr(C, hi, 3); L = hi;
+  }
+  if (!dsMesh || dsMesh.geometry.index.count !== L.idx.length) {
+    dsClear();
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(P, 3)); g.setAttribute('color', new THREE.BufferAttribute(C, 3)); g.setIndex(new THREE.BufferAttribute(L.idx, 1));
+    g.setAttribute('normal', new THREE.BufferAttribute(computeNormals(P, L.idx), 3));
+    dsMesh = new THREE.Mesh(g, material); dsMesh.frustumCulled = false; dsMesh.raycast = () => {}; dsMesh.matrixAutoUpdate = false;
+    scene.add(dsMesh);
+  } else {
+    const g = dsMesh.geometry;
+    g.attributes.position.array.set(P); g.attributes.position.needsUpdate = true;
+    g.attributes.color.array.set(C); g.attributes.color.needsUpdate = true;
+    g.attributes.normal.array.set(computeNormals(P, L.idx)); g.attributes.normal.needsUpdate = true;
+    dsMesh.material = material;
+  }
+}
+function dsSet(k) {
+  if (k > 0 && active.levels.length !== 1) { toast('なめらか表示は細分化レベルがないパーツで使えます'); k = 0; }
+  S.dynSub = k; $('dsLevel').value = String(k); dsDirty = true;
+  if (creaseLines) creaseLines.visible = pe.on || S.wire || k > 0;
+  if (k > 0 && wireMesh) wireMesh.visible = true; else if (wireMesh) wireMesh.visible = S.wire;
+}
+function dsApply() {
+  const k = S.dynSub | 0; if (!k || active.levels.length !== 1) return;
+  dsSet(0); dsClear(); if (pe.on) peSet(false);
+  for (let i = 0; i < k; i++) addLevel();
+}
+
 // ---------------- polygon editing (ZModeler-like) ----------------
 // Works on the polygon faces of a single-level part (flow / grid retopo keep theirs; triangle parts are paired
 // into quads first). Every operation rebuilds the part (one undo step); extrude / inset / move then follow the drag.
@@ -3986,7 +4964,14 @@ function peHover(e) {
   const M = peMeshOf(), segs = [];
   const outline = f => { const g = M.polys[f]; for (let k = 0; k < g.length; k++) segs.push(...pePt(pos, g[k]), ...pePt(pos, g[(k + 1) % g.length])); };
   const a = pe.action;
-  if (a === 'loop') {
+  if (a === 'bevel' || a === 'crease') {
+    for (const [u, w] of PE.edgeLoop(M.polys, nV, h.edge[0], h.edge[1], M.vf).edges) segs.push(...pePt(pos, u), ...pePt(pos, w));
+  } else if (a === 'bridge') {
+    const fs = M.vf[h.edge[0]].filter(i => M.polys[i].includes(h.edge[1]));
+    const show = l => { if (l) for (let i = 0; i < l.length; i++) segs.push(...pePt(pos, l[i]), ...pePt(pos, l[(i + 1) % l.length])); };
+    if (pe.bridgeA) show(PE.holeLoop(M.polys, pe.bridgeA[0], pe.bridgeA[1]));
+    if (fs.length === 1) show(PE.holeLoop(M.polys, h.edge[0], h.edge[1]));
+  } else if (a === 'loop') {
     const r = PE.insertLoop(pos, M.polys, h.edge[0], h.edge[1], 0.5);
     if (r) for (let i = 0; i < r.segs.length; i += 2) segs.push(...pePt(r.pos, r.segs[i]), ...pePt(r.pos, r.segs[i + 1]));
   } else if (a === 'close') {
@@ -4004,6 +4989,8 @@ function peReplace(res) {
   const rec = newRec(old.name, res.pos, tri, m);
   rec.paint = pt; rec.pg = g; rec.visible = old.visible;
   rec.levels[0].polys = PE.fromPolys(res.polys);
+  const cr = PE.carryCreases(pos, res.polys, res.pos, src, old.levels[0].crease);
+  if (cr) rec.levels[0].crease = cr;
   subtools.splice(subtools.indexOf(old), 1, rec);
   activate(rec, true); scheduleSave();
   return rec;
@@ -4021,6 +5008,31 @@ function peDown(e) {
     const sel = peSelection(h.f);
     if (sel.length >= M.polys.length) { toast('すべての面は消せません'); return true; }
     peReplace(PE.deleteFaces(pos, M.polys, sel)); toast(`${sel.length} 枚の面を消しました`);
+  } else if (a === 'crease') {
+    creaseToggleLoop(h.edge[0], h.edge[1]);
+  } else if (a === 'bridge') {
+    const fs = M.vf[h.edge[0]].filter(i => M.polys[i].includes(h.edge[1]));
+    if (fs.length !== 1) { toast('穴のふちの辺をクリックしてください'); return true; }
+    if (!pe.bridgeA) { pe.bridgeA = [h.edge[0], h.edge[1]]; toast('つなぐ もう1つの穴のふちをクリックしてください'); peHover(e); return true; }
+    const [a1, b1] = pe.bridgeA; pe.bridgeA = null;
+    const r = PE.bridge(pos, M.polys, a1, b1, h.edge[0], h.edge[1]);
+    if (r.error === 'same') toast('同じ穴です。別の穴のふちをクリックしてください');
+    else if (r.error === 'count') toast(`2つの穴の辺の数が違うのでつなげません（${r.a} と ${r.b}）。ループを入れて数を揃えてください`);
+    else if (r.error) toast('穴のふちの辺をクリックしてください');
+    else { peReplace(r); toast(`2つの穴をつなぎました（${r.size} 枚の四角）`); }
+  } else if (a === 'bevel') {
+    const loop = PE.edgeLoop(M.polys, nV, h.edge[0], h.edge[1], M.vf);
+    const base = pos.slice(), polys = M.polys, t0 = 0.12;
+    const r = PE.bevel(base, polys, loop.edges, t0);
+    if (!r) { toast('この辺は面取りできません（穴のふちや、3枚以上の面が集まる辺）'); return true; }
+    const was = creaseKeys(), rec = peReplace(r);
+    if (loop.edges.some(([u, w]) => was.has(PE.edgeKey(u, w)))) {   // a creased edge stays sharp: crease the new rails
+      const set = creaseKeys(); for (let i = 0; i < r.rails.length; i += 2) set.add(PE.edgeKey(r.rails[i], r.rails[i + 1]));
+      active.levels[0].crease = Uint32Array.from(keysToPairs(set)); buildCreaseLines();
+    }
+    pe.drag = { id: e.pointerId, y0: e.clientY, kind: 'bevel', base, polys, edges: loop.edges, t: t0, rec, amt: t0, nOut: r.pos.length };
+    controls.enabled = false; canvas.setPointerCapture(e.pointerId); peShow(null);
+    toast(`${loop.edges.length} 本の辺を面取りします（上下にドラッグで幅）`);
   } else if (a === 'close') {
     const r = PE.closeHole(pos, M.polys, h.edge[0], h.edge[1]);
     if (!r) { toast('穴のふちの辺をクリックしてください'); return true; }
@@ -4051,6 +5063,12 @@ function peDragTo(e) {
   const d = pe.drag; if (!d || active !== d.rec) return;
   const dy = (d.y0 - e.clientY) / Math.max(200, view.clientHeight);   // fraction of the view height
   const B = d.base;
+  if (d.kind === 'bevel') {
+    const t = Math.max(0.02, Math.min(0.48, d.t + dy * 1.2)); d.amt = t;
+    const r = PE.bevel(B, d.polys, d.edges, t);
+    if (r && r.pos.length === pos.length) pos.set(r.pos);
+    computeAllNormals(); geo.computeBoundingSphere(); dsDirty = true; return;
+  }
   if (d.kind === 'inset') {
     const t = Math.max(0, Math.min(0.95, dy * 2)); d.amt = t;
     for (const [c, v] of d.moved) for (let k = 0; k < 3; k++) pos[c*3+k] = B[v*3+k] + (d.center[k] - B[v*3+k]) * t;
@@ -4058,19 +5076,20 @@ function peDragTo(e) {
     const off = dy * d.size * 0.6; d.amt = off;
     for (const [c, v, n] of d.moved) for (let k = 0; k < 3; k++) pos[c*3+k] = B[v*3+k] + n[k] * off;
   }
-  computeAllNormals(); geo.computeBoundingSphere();
+  computeAllNormals(); geo.computeBoundingSphere(); dsDirty = true;
 }
 function peUp() {
   const d = pe.drag; pe.drag = null; controls.enabled = true;
   if (!d) return;
   geo.computeBoundingBox(); mirror = active.mirror = active.levels[0].mirror = computeMirror(pos);
   scheduleSave();
-  const what = { extrude: '押し出しました', inset: 'はめ込みました', move: '面を動かしました' }[d.kind];
+  const what = { extrude: '押し出しました', inset: 'はめ込みました', move: '面を動かしました', bevel: '面取りしました' }[d.kind];
   toast(Math.abs(d.amt) < 1e-6 ? `${what}（ドラッグで量を決めます。元に戻すで取り消せます）` : what);
 }
 function peSet(on) {
   if (on) { const why = peAvailable(); if (why) { toast(why); $('peOn').checked = false; return; } if (gizmoOn) setGizmo(false); }
-  pe.on = on; $('peOn').checked = on; pe.cache = null; pe.hover = null; peShow(null);
+  pe.on = on; $('peOn').checked = on; pe.cache = null; pe.hover = null; pe.bridgeA = null; peShow(null);
+  if (creaseLines) creaseLines.visible = on || S.wire || S.dynSub > 0;
   ring.visible = ring2.visible = quad.visible = quad2.visible = false;
   if (on) { const L = active.levels[0]; if (!levelPolys(L)) { L.polys = PE.fromPolys(peMeshOf().polys); setMesh(pos, idx, mask, mirror, paint); } toast('ポリゴン編集モード：面や辺にカーソルを合わせてクリック'); }
 }
@@ -4308,6 +5327,35 @@ async function setTexPreview(on) {
   previewMesh = new THREE.Mesh(uvGeometry(pos, L, nrm), m); previewMesh.raycast = () => {}; previewMesh.frustumCulled = false;
   scene.add(previewMesh); mesh.visible = false;
 }
+// 32-bit displacement / vector displacement (EXR) from the subdivision levels above the current (UV) level
+async function exportDisplacement(vector) {
+  const L = curLevel();
+  if (!hasUV(L)) { toast('先にこのレベルで UV を展開してください（リトポした軽いパーツ → UV 展開 → 細分化して彫る → 一番下のレベルに戻して書き出し）'); return; }
+  if (active.lv >= active.levels.length - 1) { toast('上の細分化レベルがありません（細分化して彫ってから、UV のあるレベルに戻して書き出します）'); return; }
+  const S = +$('dmSize').value, smooth = $('dmRef').value === 'smooth';
+  const top = active.levels.length - 1, topF = active.levels[top].idx.length / 3;
+  if (topF > 12_000_000) { toast('一番上のレベルが大きすぎます（1,200万ポリゴンまで）'); return; }
+  let res, t0 = performance.now();
+  await busy(() => { res = computeDisplacement(S, smooth); });
+  if (!res) { toast('ディスプレイスメントを作れませんでした（レベルのつながりが読み取れません）'); return; }
+  const blob = vector ? encodeEXR(S, S, { R: res.vec.filter((_, i) => i % 3 === 0), G: res.vec.filter((_, i) => i % 3 === 1), B: res.vec.filter((_, i) => i % 3 === 2) })
+                      : encodeEXR(S, S, { R: res.disp, G: res.disp, B: res.disp });
+  const name = `${fileBase()}_${vector ? 'vdm' : 'displacement'}.exr`;
+  lastDisp = { vector, res, S };
+  await saveOne(async () => ({ blob, name }));
+  toast(`${vector ? 'ベクター' : ''}ディスプレイスメントを書き出しました（${S}px・最大 ${res.range.toFixed(4)}・UV の使用率 ${Math.round(res.coverage * 100)}%・${((performance.now() - t0) / 1000).toFixed(1)}秒）`);
+}
+let lastDisp = null;
+function computeDisplacement(S, smooth) {
+  const L = curLevel(), top = active.levels.length - 1;
+  flushNormals();
+  const high = materializeLevel(top).pos;
+  // smooth reference: the levels' subdivision of the current level with no details
+  let ref = null;
+  if (smooth) { ref = pos; for (let j = active.lv + 1; j <= top; j++) ref = subdivPositions(ref, active.levels[j - 1], active.levels[j]); }
+  const chain = active.levels.slice(active.lv + 1, top + 1).map(x => ({ idx: x.idx, ev: x.ev }));
+  return levelDisplacement({ pos, idx: L.uvIdx, uv: L.uv }, chain, high, ref, S);
+}
 async function saveTextures() {
   const L = curLevel(); if (!hasUV(L) || !L.bake) return;
   const base = fileBase(), files = [{ name: `${base}_normal.png`, data: L.bake.normalPng.slice().buffer }];
@@ -4326,7 +5374,8 @@ function retopo() {
   return busy(() => {
     flushNormals();
     const t0 = performance.now(), flow = $('rtMode').value === 'flow';
-    const r = flow ? fieldRetopo({ pos, idx }, { target, smooth: Math.min(12, +$('rtSmooth').value), sym: $('rtSym').checked, pureQuad: $('rtPure').checked, sharpAngle: $('rtSharp').checked ? 60 : 0 })
+    const groups = $('rtGroups').checked && pg && pgCountGroups() > 1 ? pg : null, guides = $('rtGuides').checked && active.guides && active.guides.length ? active.guides : null;
+    const r = flow ? fieldRetopo({ pos, idx }, { target, smooth: Math.min(12, +$('rtSmooth').value), sym: $('rtSym').checked, pureQuad: $('rtPure').checked, sharpAngle: $('rtSharp').checked ? 60 : 0, groups, guides })
                    : quadRemesh({ pos, idx }, { target, smooth: +$('rtSmooth').value, sym: $('rtSym').checked, voxelLimit: VOXEL_LIMIT });
     if (!r) { toast('リトポできませんでした。目標ポリゴン数を変えてみてください'); return; }
     pushStruct();
@@ -4363,7 +5412,15 @@ async function importFile(file) {
   const name = file.name.replace(/\.[^.]+$/, '');
   const ext = file.name.split('.').pop().toLowerCase();
   const bytes = () => file.data ? Promise.resolve(file.data) : file.arrayBuffer();
-  if (ext === 'bpp') { await openProject(await bytes(), file.path || null, name); return; }
+  if (ext === 'bpp') {
+    // read as a stream: big files arrive from the desktop side in pieces, dropped files stream from disk
+    let stream;
+    if (file.big && native && native.openRead) {
+      let off = 0; const size = file.size;
+      stream = new ReadableStream({ async pull(c) { if (off >= size) { c.close(); return; } const b = await native.openRead(off, Math.min(32 << 20, size - off)); if (!b || !b.length) { c.error(new Error('読み込めませんでした')); return; } off += b.length; c.enqueue(new Uint8Array(b)); } });
+    } else stream = file.stream ? file.stream() : new Blob([file.data]).stream();
+    await openProject(stream, file.path || null, name); return;
+  }
   const parts = [];
   if (ext === 'stl') {
     parts.push({ name, g: new STLLoader().parse(await bytes()) });
@@ -4371,7 +5428,15 @@ async function importFile(file) {
     const group = new OBJLoader().parse(new TextDecoder().decode(await bytes()));
     group.updateMatrixWorld(true);
     group.traverse(o => { if (o.isMesh) { const g = o.geometry.clone(); g.applyMatrix4(o.matrixWorld); parts.push({ name: o.name || name, g }); } });
-  } else { toast('.bpp / OBJ / STL を選んでください'); return; }
+  } else if (ext === 'fbx' || ext === 'glb' || ext === 'gltf') {
+    let root;
+    try {
+      if (ext === 'fbx') root = new FBXLoader().parse(await bytes(), '');
+      else { const data = await bytes(); root = (await new Promise((res, rej) => new GLTFLoader().parse(ext === 'gltf' ? new TextDecoder().decode(data) : data, '', res, rej))).scene; }
+    } catch (err) { console.error(err); toast(`${file.name} を読み込めませんでした: ${err.message || err}`); return; }
+    root.updateMatrixWorld(true);
+    root.traverse(o => { if (o.isMesh) { const g = o.geometry.clone(); g.applyMatrix4(o.matrixWorld); parts.push({ name: o.name || name, g }); } });
+  } else { toast('.bpp / OBJ / STL / FBX / GLB を選んでください'); return; }
   if (!parts.length) { toast('メッシュが見つかりませんでした'); return; }
   await busy(() => {
     // one transform for every part, so their relative placement is kept (fit to ~2.2 units, centered)
@@ -4428,7 +5493,11 @@ function applyProject(meta, subs, opts) {
 async function openProject(buf, path, name) {
   if (!confirmDiscard('開き直')) return;
   let proj;
-  try { proj = await decodeProject(buf); } catch (err) { console.error(err); toast('開けませんでした: ' + err.message); return; }
+  try {
+    busyText('プロジェクトを読み込み中…');
+    proj = await decodeProjectStream(buf, f => busyText(`プロジェクトを読み込み中… ${Math.round(f * 100)}%`));
+  } catch (err) { console.error(err); busyText(null); toast('開けませんでした: ' + err.message); return; }
+  busyText(null);
   await busy(() => applyProject(proj.meta, proj.subtools, { path, name }));
   autosaveSoon();
   toast(`${name}.bpp を開きました（サブツール ${subtools.length} 個）`);
@@ -4436,6 +5505,7 @@ async function openProject(buf, path, name) {
 async function saveProject(saveAs = false) {
   if (stroke || gizmo.dragging) return false;
   flushNormals();
+  if (native && native.projBegin) return saveProjectStream(saveAs);
   let data;
   try { data = await encodeProject(projectMeta(), subtools.map(recData)); } catch (err) { console.error(err); toast('保存に失敗しました: ' + err.message); return false; }
   if (!native) {
@@ -4445,6 +5515,32 @@ async function saveProject(saveAs = false) {
   let p;
   try { p = await native.saveProject(projectPath, projectName, data.buffer, saveAs); } catch (err) { console.error(err); toast('保存に失敗しました: ' + err.message); return false; }
   if (!p) return false;
+  projectPath = p; projectName = baseName(p);
+  if (!$('fname').value.trim() || $('fname').value === 'sculpt') $('fname').value = projectName;
+  setDirty(false); updateTitle(); autosaveSoon();
+  toast(`保存しました: ${p}`);
+  return true;
+}
+// desktop: the compressed file goes to disk in pieces, so any size of model can be saved
+async function saveProjectStream(saveAs) {
+  const id = await native.projBegin(projectPath, projectName, saveAs);
+  if (!id) return false;
+  let ok = false, p = null;
+  renderPaused = true; busyText('保存中…');   // no frames while saving: a big model's frame would slow every step
+  try {
+    const total = subtools.reduce((n, r) => n + r.pos.byteLength + r.idx.byteLength, 0), big = total > 200 << 20;
+    const reader = encodeProjectStream(projectMeta(), subtools.map(recData)).getReader();
+    let pend = [], pn = 0, done = 0;
+    const flush = async () => { if (!pn) return; const b = new Uint8Array(pn); let o = 0; for (const x of pend) { b.set(x, o); o += x.length; } pend = []; pn = 0; if (!(await native.projWrite(id, b))) throw new Error('書き込めませんでした'); };
+    for (;;) {
+      const { value, done: end } = await reader.read(); if (end) break;
+      pend.push(value); pn += value.length; done += value.length;
+      if (pn >= 8 << 20) { await flush(); if (big) busyText(`保存中… ${Math.round(done / 1048576).toLocaleString()} MB`); }
+    }
+    await flush(); ok = true;
+  } catch (err) { console.error(err); toast('保存に失敗しました: ' + err.message); }
+  finally { renderPaused = false; busyText(null); p = await native.projEnd(id, ok); }
+  if (!ok || !p) return false;
   projectPath = p; projectName = baseName(p);
   if (!$('fname').value.trim() || $('fname').value === 'sculpt') $('fname').value = projectName;
   setDirty(false); updateTitle(); autosaveSoon();
@@ -4545,6 +5641,32 @@ function makeSTL() {
   }
   return { blob: new Blob([buf], { type:'model/stl' }), name: `${fileBase()}_${hmm}mm.stl` };
 }
+// FBX: each shown part at its current level; polygon faces when it has them (triangles when it has UVs),
+// vertex colors (sRGB), smooth normals and crease edges
+async function makeFBX() {
+  flushNormals();
+  const meshes = [];
+  for (const r of shownRecs()) {
+    const L = r.levels[r.lv], P = r.pos, normals = r === active ? nrm : computeNormals(P, r.idx);
+    let polys, uv = null;
+    if (hasUV(L)) {
+      polys = []; for (let f = 0; f < L.uvIdx.length; f += 3) polys.push([L.uvIdx[f], L.uvIdx[f+1], L.uvIdx[f+2]]);
+      uv = { idx: Int32Array.from({ length: L.uvIdx.length }, (_, i) => i), uv: L.uv };
+    } else {
+      const PL = levelPolys(L);
+      polys = PL ? PE.toPolys(PL.start, PL.idx) : Array.from({ length: r.idx.length / 3 }, (_, f) => [r.idx[f*3], r.idx[f*3+1], r.idx[f*3+2]]);
+    }
+    let colors = null;
+    if (r.paint && r.paint.length === P.length) { colors = new Float32Array(P.length); for (let i = 0; i < P.length; i++) colors[i] = lin2srgb(r.paint[i]); }
+    let crease = null;
+    const cs = L.crease && creaseSet(L, P.length / 3) ? L.crease : null;
+    if (cs) { crease = new Set(); for (let i = 0; i < cs.length; i += 2) { const a = cs[i], b = cs[i + 1]; crease.add(a < b ? a + ',' + b : b + ',' + a); } }
+    meshes.push({ name: r.name.replace(/[\0\x01]/g, '') || 'mesh', pos: P, polys, normals, colors, uv, crease });
+  }
+  if (!meshes.length) { toast('書き出すパーツがありません（表示中のパーツが対象です）'); return null; }
+  const blob = await encodeFBX(meshes, { unit: 1 });
+  return { blob, name: fileBase() + '.fbx' };
+}
 async function makeGLB() {
   flushNormals();
   const tex = new Map();
@@ -4615,16 +5737,23 @@ async function writeAutosave() {
 async function readAutosaveFile() {
   if (!native || !native.autoInfo) return null;
   const info = await native.autoInfo(); if (!info) return null;
-  const buf = new Uint8Array(info.bytes), CH = 32 << 20, big = info.bytes > 64 << 20;
-  for (let o = 0; o < info.bytes; o += CH) {
-    if (big) busyText(`前回の作業を読み込み中… ${Math.round(o / info.bytes * 100)}%（${Math.round(info.bytes / 1048576).toLocaleString()} MB）`);
-    const c = await native.autoRead(o, Math.min(CH, info.bytes - o)); if (!c || !c.length) return null; buf.set(c, o);
-  }
+  // every array is read straight into its own buffer (one buffer for the whole file would stop at 2 GB)
+  const CH = 32 << 20, big = info.bytes > 64 << 20;
   const TYPES = { Float32Array, Uint32Array, Int32Array, Uint8Array, Uint16Array, Int16Array, Int8Array, Float64Array, Uint8ClampedArray };
-  const walk = x => {
-    if (x && typeof x === 'object' && !Array.isArray(x) && '$a' in x) { const T = TYPES[x.$a]; if (!T || x.o + x.n * T.BYTES_PER_ELEMENT > buf.length) throw new Error('bad autosave'); return new T(buf.buffer, x.o, x.n).slice(); }   // own buffer each (IPC would copy a shared one whole)
-    if (Array.isArray(x)) return x.map(walk);
-    if (x && typeof x === 'object') { const o = {}; for (const k in x) o[k] = walk(x[k]); return o; }
+  let readBytes = 0;
+  const walk = async x => {
+    if (x && typeof x === 'object' && !Array.isArray(x) && '$a' in x) {
+      const T = TYPES[x.$a]; if (!T || x.o + x.n * T.BYTES_PER_ELEMENT > info.bytes) throw new Error('bad autosave');
+      const a = new T(x.n), b = new Uint8Array(a.buffer);
+      for (let o = 0; o < b.length; o += CH) {
+        const c = await native.autoRead(x.o + o, Math.min(CH, b.length - o)); if (!c || !c.length) throw new Error('bad autosave');
+        b.set(c, o); readBytes += c.length;
+        if (big) busyText(`前回の作業を読み込み中… ${Math.round(readBytes / info.bytes * 100)}%（${Math.round(info.bytes / 1048576).toLocaleString()} MB）`);
+      }
+      return a;
+    }
+    if (Array.isArray(x)) { const out = []; for (const v of x) out.push(await walk(v)); return out; }
+    if (x && typeof x === 'object') { const o = {}; for (const k in x) o[k] = await walk(x[k]); return o; }
     return x;
   };
   return walk(JSON.parse(info.header));
@@ -4722,6 +5851,11 @@ function refreshBrushUI() {
   $('falloff').value = c.falloff; drawFalloff(c.falloff);
   const st = $('strokeType'); st.value = canDrag(S.brush) ? c.stroke : 'dots'; st.disabled = !canDrag(S.brush);
   $('alphaInv').checked = c.alphaInv; $('alphaFollow').checked = c.follow;
+  $('bDepth').value = c.depth || 0; $('bDepthOut').textContent = (+c.depth || 0).toFixed(2);
+  $('bPlane').value = c.plane || 'area'; $('bGroup').checked = !!c.groupMask; $('bCavity').value = c.cavity || 'off';
+  $('emodeRow').hidden = S.brush !== 'elastic'; $('emode').value = c.emode || 'grab';
+  $('vdmRow').hidden = S.brush !== 'vdm'; if (S.brush === 'vdm') renderVDMs();
+  $('immRow').hidden = S.brush !== 'imm'; if (S.brush === 'imm') renderIMMs();
   $('alphaSec').classList.toggle('off', !b.alpha);
   $('alphaNote').textContent = b.alpha
     ? '白い所ほど強く効きます。画像はビューにドラッグ＆ドロップでも追加できます。細かい模様は「細分化」でポリゴンを増やすときれいに出ます。'
@@ -4742,6 +5876,13 @@ $('strength').addEventListener('input', e => { cur().strength = +e.target.value;
 $('falloff').onchange = e => { cur().falloff = e.target.value; drawFalloff(cur().falloff); saveBrushPrefs(); };
 $('strokeType').onchange = e => { cur().stroke = e.target.value; saveBrushPrefs(); };
 $('alphaInv').onchange = e => { cur().alphaInv = e.target.checked; saveBrushPrefs(); };
+$('bDepth').addEventListener('input', e => { cur().depth = +e.target.value; $('bDepthOut').textContent = cur().depth.toFixed(2); saveBrushPrefs(); });
+$('bPlane').onchange = e => { cur().plane = e.target.value; saveBrushPrefs(); };
+$('bGroup').onchange = e => { cur().groupMask = e.target.checked; saveBrushPrefs(); if (e.target.checked && !pg) toast('ポリグループがまだありません（ポリグループの欄で作れます）'); };
+$('bCavity').onchange = e => { cur().cavity = e.target.value; saveBrushPrefs(); };
+$('emode').onchange = e => { cur().emode = e.target.value; saveBrushPrefs(); };
+$('sizePres').checked = S.sizePres; $('sizePres').onchange = e => { S.sizePres = e.target.checked; saveBrushPrefs(); };
+$('worldSize').checked = S.worldSize; $('worldSize').onchange = e => { S.worldSize = e.target.checked; saveBrushPrefs(); };
 $('alphaFollow').onchange = e => { cur().follow = e.target.checked; saveBrushPrefs(); };
 
 // custom alphas from images (kept in IndexedDB)
@@ -4788,7 +5929,7 @@ $('alphaDel').onclick = () => {
 $('invert').onchange = e => S.invert = e.target.checked;
 $('backface').onchange = e => S.backface = e.target.checked;
 function setSym(v) { S.sym = v; $('chipSym').classList.toggle('on', v); updateStats(); }
-function setWire(v) { S.wire = v; $('chipWire').classList.toggle('on', v); if (wireMesh) wireMesh.visible = v; }
+function setWire(v) { S.wire = v; $('chipWire').classList.toggle('on', v); if (wireMesh) wireMesh.visible = v || S.dynSub > 0; if (creaseLines) creaseLines.visible = pe.on || v || S.dynSub > 0; }
 $('chipSym').onclick = () => setSym(!S.sym);
 $('chipWire').onclick = () => setWire(!S.wire);
 $('chipFrame').onclick = frame;
@@ -4810,12 +5951,18 @@ $('nzPreview').onclick = () => noisePreview();
 $('nzApply').onclick = () => noiseApply();
 $('nzCancel').onclick = () => noiseCancel();
 $('peOn').onchange = e => peSet(e.target.checked);
+$('peCreaseAngle').onclick = () => creaseByAngle(30);
+$('peCreaseClear').onclick = () => { if (!active.levels[0].crease) { toast('クリースはありません'); return; } if (active.levels.length !== 1) { toast('細分化レベルがないパーツで使えます'); return; } pushCrease(); setCrease(null); toast('クリースを全部外しました'); };
+$('dsLevel').onchange = e => dsSet(+e.target.value);
+$('dsApply').onclick = () => busy(dsApply);
 for (const b of $('peActs').querySelectorAll('[data-pe]')) b.onclick = () => {
-  pe.action = b.dataset.pe;
+  pe.action = b.dataset.pe; pe.bridgeA = null;
   for (const x of $('peActs').children) x.classList.toggle('on', x === b);
   if (!pe.on) peSet(true);
 };
 $('rtGo').onclick = () => retopo();
+$('rtGuideDraw').onclick = () => { selectBrush('guide'); toast('ガイド線：モデルの表面をなぞって線を引きます'); };
+$('rtGuideClear').onclick = () => { if (!active.guides) { toast('ガイド線はありません'); return; } active.guides = null; buildGuideLines(); scheduleSave(); toast('ガイド線を消しました'); };
 $('decRatio').addEventListener('input', updateDecEstimate);
 $('decGo').onclick = () => decimate();
 $('boolUnion').onclick = () => runBoolean('union');
@@ -4854,6 +6001,9 @@ $('opMaskInv').onclick = maskInvert; $('opMaskClear').onclick = maskClear;
 $('expOBJ').onclick = () => saveOne(() => busy(makeOBJ));
 $('expSTL').onclick = () => saveOne(() => busy(makeSTL));
 $('expGLB').onclick = () => saveOne(makeGLB);
+$('expFBX').onclick = () => saveOne(makeFBX);
+$('dmDisp').onclick = () => exportDisplacement(false);
+$('dmVec').onclick = () => exportDisplacement(true);
 $('expAll').onclick = () => saveAll();
 $('btnOpen').onclick = () => openModel();
 $('fileIn').onchange = e => { const f = e.target.files[0]; if (f) importFile(f); e.target.value = ''; };
@@ -4971,7 +6121,10 @@ document.querySelectorAll('[data-def]').forEach(b => b.onclick = () => busy(() =
 $('dfAmt').addEventListener('input', e => { $('dfAmtOut').textContent = (+e.target.value).toFixed(2); });
 $('exThick').addEventListener('input', e => { $('exThickOut').textContent = (+e.target.value).toFixed(3); });
 $('mfStore').onclick = morphStore; $('mfRestore').onclick = morphRestore; $('mfDel').onclick = morphDelete;
-$('exGo').onclick = extractShell; $('clipGo').onclick = () => clipArmed ? disarmClip() : armClip();
+$('exGo').onclick = extractShell; $('clipGo').onclick = () => clipArmed === 'clip' ? disarmClip() : armClip('clip');
+$('sliceGo').onclick = () => clipArmed === 'slice' ? disarmClip() : armClip('slice');
+$('panelGo').onclick = () => makePanels();
+for (const [id, d] of [['panelThick', 3], ['panelGap', 3]]) $(id).addEventListener('input', () => { $(id + 'Out').textContent = (+$(id).value).toFixed(d); });
 $('refLoad').onclick = () => $('refFile').click();
 $('refFile').onchange = e => { const f = e.target.files[0]; if (f) loadRef(f); e.target.value = ''; };
 $('refClear').onclick = () => clearRef(false);
@@ -4991,6 +6144,8 @@ document.querySelectorAll('[data-view]').forEach(b => b.onclick = () => snapView
 S.showOver = false;
 $('rpHoles').onclick = fillHoles; $('rpFrags').onclick = removeFragments; $('rpOrient').onclick = fixOrientation;
 $('rpOver').onchange = e => setOverhang(e.target.checked); $('rpMeasure').onclick = armMeasure; $('mkPeaks').onclick = () => busy(maskPeaks);
+$('psExport').onclick = brushExport; $('psImport').onclick = () => $('psFile').click();
+$('psFile').onchange = e => { const f = e.target.files[0]; e.target.value = ''; if (f) brushImport(f); };
 renderPresets(); $('psSave').onclick = presetSave; $('psLoad').onclick = presetLoad; $('psDel').onclick = presetDelete;
 for (const [id, k] of [['vsFov', 'fov'], ['vsLight', 'lightAng'], ['vsLightK', 'lightK']]) $(id).addEventListener('input', e => { VS[k] = +e.target.value; applyView(true); });
 $('vsBg').onchange = e => { VS.bg = e.target.value; applyView(true); };
@@ -5011,8 +6166,42 @@ view.addEventListener('drop', e => {
   else if (fs[0]) importFile(fs[0]);
 });
 
+// ---------------- brush picker (B): every brush by group, with search ----------------
+function pickerOpen() {
+  const box = $('bpick'); box.hidden = false; $('bpickQ').value = ''; pickerRender(); $('bpickQ').focus();
+}
+function pickerClose() { $('bpick').hidden = true; canvas.focus?.(); }
+function pickerRender() {
+  const q = $('bpickQ').value.trim().toLowerCase(), list = $('bpickList'); list.textContent = '';
+  let first = null;
+  for (const [cat, ids] of BRUSH_CATS) {
+    const hits = ids.filter(id => BRUSH[id]).filter(id => { const b = BRUSH[id]; return !q || b.name.toLowerCase().includes(q) || b.desc.toLowerCase().includes(q) || b.short.toLowerCase().startsWith(q) || id.includes(q); });
+    if (!hits.length) continue;
+    const h = document.createElement('h3'); h.textContent = cat; list.appendChild(h);
+    const g = document.createElement('div'); g.className = 'grid';
+    for (const id of hits) {
+      const b = BRUSH[id], el = document.createElement('button');
+      el.innerHTML = `<b>${b.short}</b><span>${b.name}</span>`; el.title = b.desc; el.dataset.id = id;
+      el.classList.toggle('on', id === S.brush);
+      el.onclick = () => { selectBrush(id); pickerClose(); toast(`${b.name}：${b.desc}`); };
+      if (!first) { first = el; if (q) el.classList.add('hl'); }
+      g.appendChild(el);
+    }
+    list.appendChild(g);
+  }
+  if (!first) list.textContent = '見つかりませんでした';
+}
+$('bpickQ').addEventListener('input', pickerRender);
+$('bpickQ').addEventListener('keydown', e => {
+  if (e.key === 'Escape') { e.preventDefault(); pickerClose(); }
+  else if (e.key === 'Enter') { e.preventDefault(); const b = $('bpickList').querySelector('button'); if (b) b.click(); }
+  e.stopPropagation();
+});
+$('bpick').addEventListener('pointerdown', e => { if (e.target === $('bpick')) pickerClose(); });
+
 window.addEventListener('keydown', e => {
   const t = e.target;
+  if (!$('bpick').hidden) return;
   if (t.tagName === 'INPUT' && (t.type === 'text' || t.type === 'number')) return;
   if (t.tagName === 'SELECT') return;
   if (e.key === 'Alt') e.preventDefault();
@@ -5034,6 +6223,7 @@ window.addEventListener('keydown', e => {
   if (e.key === '[') { S.size = Math.max(5, Math.round(S.size / 1.15)); syncSize(); saveBrushPrefs(); return; }
   if (e.key === ']') { S.size = Math.min(300, Math.round(S.size * 1.15)); syncSize(); saveBrushPrefs(); return; }
   const k = e.key.toLowerCase();
+  if (k === 'b') { e.preventDefault(); pickerOpen(); return; }
   if (k === 'x') setSym(!S.sym);
   else if (k === 'w') setWire(!S.wire);
   else if (k === 'f' && e.shiftKey) setShowPG(!S.showPG);
@@ -5061,7 +6251,12 @@ function fitView() {
 fitView();   // right away too: the observer only fires on a rendered frame
 new ResizeObserver(fitView).observe(view);
 
+// the preview follows sculpting too: compare a cheap checksum of the cage every half second
+let dsAge = 0, dsSum = 0;
+function dsCheck() { dsAge = 0; let s = 0; for (let i = 0; i < pos.length; i += 7) s += pos[i] * (i % 13 + 1); if (s !== dsSum) { dsSum = s; return true; } return false; }
+let renderPaused = false;
 renderer.setAnimationLoop(() => {
+  if (renderPaused) return;
   if ((gpuDirty || gpuPart) && geo) {
     const A = [geo.attributes.position, geo.attributes.normal]; if (colorDirty) A.push(geo.attributes.color);
     // partial upload: runs of marked 4096-vertex chunks (full upload if the change is large or unknown)
@@ -5082,7 +6277,11 @@ renderer.setAnimationLoop(() => {
     colorDirty = false; gpuDirty = gpuPart = false;
   }
   if (!stroke) ensureBVH();
+  if (S.dynSub && (dsDirty || (!stroke && !pe.drag && dsAge++ > 30))) { if (dsDirty || dsCheck()) dsUpdate(); }
+  const hideCage = !!(dsMesh && mesh && S.dynSub), wasVis = mesh && mesh.visible;
+  if (hideCage) mesh.visible = false;
   renderer.render(scene, camera);
+  if (hideCage) mesh.visible = wasVis;
 });
 
 // ---------------- boot ----------------
@@ -5091,7 +6290,7 @@ renderer.setAnimationLoop(() => {
   subtools = [newRec('球', b.p, b.ix)];
   activate(subtools[0], true);
   { let m = 'std'; try { m = localStorage.getItem('bp-mat') || 'std'; } catch {} applyMaterial(m, true); }
-  await loadAlphas();
+  await loadAlphas(); await loadVDMs(); await loadIMMs();
   renderAlphaGrid(); refreshBrushUI(); updateUndoButtons(); frame(); updateTitle();
   const saved = await loadAuto();
   if (saved) {
@@ -5119,6 +6318,63 @@ renderer.setAnimationLoop(() => {
     if (first) importFile(first);
   }
   window.__boardPainter = {
+    lowCube(n = 1) {   // a box of n x n x n quads per side as the only part (tests)
+      let P = new Float32Array([-0.8,-0.8,-0.8, 0.8,-0.8,-0.8, 0.8,0.8,-0.8, -0.8,0.8,-0.8, -0.8,-0.8,0.8, 0.8,-0.8,0.8, 0.8,0.8,0.8, -0.8,0.8,0.8]);
+      let polys = [[0,3,2,1],[4,5,6,7],[0,1,5,4],[2,3,7,6],[1,2,6,5],[0,4,7,3]];
+      const rec = newRec('箱', P, PE.triangulate(P, polys), null); rec.levels[0].polys = PE.fromPolys(polys);
+      subtools = [rec]; activate(rec, true); frame(); return nV;
+    },
+    async fbxRoundTrip() {
+      const f = await makeFBX(), buf = await f.blob.arrayBuffer(), root = new FBXLoader().parse(buf, ''), out = [];
+      root.traverse(o => { if (o.isMesh) { const g = o.geometry, p = g.attributes.position; g.computeBoundingBox(); out.push({ name: o.name, verts: p.count, colors: !!g.attributes.color, uv: !!g.attributes.uv, min: g.boundingBox.min.toArray(), max: g.boundingBox.max.toArray() }); } });
+      return { bytes: buf.byteLength, meshes: out, head: new TextDecoder().decode(new Uint8Array(buf, 0, 18)) };
+    },
+    async importFBXBack() { const f = await makeFBX(); await importFile({ name: 'rt.fbx', data: await f.blob.arrayBuffer() }); return subtools.length; },
+    dispTest(smooth, S = 256) {
+      const r = computeDisplacement(S, smooth); if (!r) return null;
+      // the largest per-vertex offset from the reference, to compare with the map
+      const top = active.levels.length - 1, high = materializeLevel(top).pos;
+      let ref = pos; for (let j = active.lv + 1; j <= top; j++) ref = subdivPositions(ref, active.levels[j - 1], active.levels[j]);
+      let mx = 0; for (let i = 0; i < high.length; i += 3) mx = Math.max(mx, Math.hypot(high[i] - ref[i], high[i+1] - ref[i+1], high[i+2] - ref[i+2]));
+      let vmx = 0; for (let k = 0; k < r.vec.length; k += 3) vmx = Math.max(vmx, Math.hypot(r.vec[k], r.vec[k+1], r.vec[k+2]));
+      const exr = encodeEXR(S, S, { R: r.disp });
+      return { range: r.range, coverage: r.coverage, vecMax: vmx, vertMax: mx, exrBytes: exr.size };
+    },
+    unwrapNow() { return unwrapUV(); },
+    setLv(k) { setLevel(k, true); return active.lv; },
+    mirrorCheck() { const ref = computeMirror(pos); let same = 0, paired = 0; for (let v = 0; v < nV; v++) { if (ref[v] >= 0) paired++; if (ref[v] === mirror[v]) same++; } return { nV, same, paired }; },
+    get bvhKind() { return geo.boundsTree && geo.boundsTree._roots ? geo.boundsTree._roots.length : 0; },
+    fullChecksum() { let s = 0; for (let i = 0; i < nV * 3; i++) s += pos[i] * ((i % 7) + 1); for (let v = 0; v < nV; v++) s += mask[v] * 3; if (paint) for (let i = 0; i < nV * 3; i++) s += paint[i] * ((i % 5) + 1); return s; },
+    get undoInfo() { const top = undoStack[undoStack.length - 1]; return { n: undoStack.length, kind: top ? (top.kind || 'full') : null, bytes: top ? entryBytes(top) : 0 }; },
+    setProjectPath(p) { projectPath = p; },
+    saveNowProject() { return saveProject(false); },
+    changedScreenX(before) { const out = []; for (let v = 0; v < nV; v++) { const i = v * 3; if (Math.abs(pos[i] - before[i]) + Math.abs(pos[i+1] - before[i+1]) + Math.abs(pos[i+2] - before[i+2]) > 1e-7) { const q = new V3(pos[i], pos[i+1], pos[i+2]).project(camera), b = canvas.getBoundingClientRect(); out.push(b.left + (q.x + 1) / 2 * b.width); } } out.sort((a, b) => a - b); return out.length ? [out.length, Math.round(out[0]), Math.round(out[out.length >> 1]), Math.round(out[out.length - 1])] : [0]; },
+    vdmInfo() { const st = getVDM(S.vdm); let mx = 0; if (st) for (let k = 0; k < st.vec.length; k++) mx = Math.max(mx, Math.abs(st.vec[k])); return { sel: S.vdm, custom: customVDMs.length, S: st && st.S, max: mx }; },
+    importVDMBytes(name, bytes) { return importVDM({ name, arrayBuffer: async () => new Uint8Array(bytes).buffer }); },
+    immCheck() {
+      return BUILTIN_IMM.map(b => { const q = builtinIMM(b.id), p = q.p, ix = q.ix, em = new Map(); let vol = 0;
+        for (let f = 0; f < ix.length; f += 3) { const a = ix[f]*3, c = ix[f+1]*3, d = ix[f+2]*3; vol += (p[a]*(p[c+1]*p[d+2]-p[c+2]*p[d+1]) - p[a+1]*(p[c]*p[d+2]-p[c+2]*p[d]) + p[a+2]*(p[c]*p[d+1]-p[c+1]*p[d])) / 6;
+          for (const [x, y] of [[ix[f], ix[f+1]], [ix[f+1], ix[f+2]], [ix[f+2], ix[f]]]) em.set(x + ',' + y, 1); }
+        let open = 0; for (const k of em.keys()) { const [x, y] = k.split(','); if (!em.has(y + ',' + x)) open++; }
+        return [b.id, +vol.toFixed(3), open]; });
+    },
+    get brushIds() { return BRUSHES.map(b => b.id); },
+    addShrunkCopy() {   // a slightly smaller copy inside the active part, for the projection brush
+      const p = pos.slice(); for (let i = 0; i < p.length; i++) p[i] *= 0.92;
+      const r = newRec('内側', p, idx.slice(), null); subtools.push(r); syncScene(); return subtools.length;
+    },
+    get retopoGroupsTest() { return { groups: pg ? pgCountGroups() : 0, guides: active.guides ? active.guides.length / 6 : 0 }; },
+    get crease() { const c = active.levels[0].crease; return c ? Array.from(c) : null; },
+    pePolys() { const M = peMeshOf(); return { polys: M.polys, pos: Array.from(pos) }; },
+    peSetAction(a) { document.querySelector(`[data-pe="${a}"]`).click(); return pe.action; },
+    get dsInfo() { return dsMesh ? { nF: dsMesh.geometry.index.count / 3, visible: dsMesh.visible, cageHidden: true } : null; },
+    dsPos() { return dsMesh ? Array.from(dsMesh.geometry.attributes.position.array) : null; },
+    levelCount() { return active.levels.length; },
+    setBrush(id, cfg = {}, st = {}) { S.brush = id; Object.assign(BS[id], cfg); Object.assign(S, st); refreshBrushUI(); return { ...BS[id] }; },
+    posCopy() { return Array.from(pos.subarray(0, nV * 3)); },
+    get pgInfo() { return pg ? Array.from(new Set(pg)).length : 0; },
+    brushFile() { return JSON.parse(JSON.stringify(brushFile())); },
+    applyBrushFile(o) { return applyBrushFile(o); },
     get nV() { return nV; }, get nF() { return nF; },
     get subtools() { return subtools.map(r => ({ name: r.name, visible: r.visible, nF: r.idx.length / 3, active: r === active })); },
     get project() { return { path: projectPath, name: projectName, dirty }; },

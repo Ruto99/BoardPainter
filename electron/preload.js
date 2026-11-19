@@ -17,6 +17,10 @@ contextBridge.exposeInMainWorld('bp', {
   saveFile: (name, data) => ipcRenderer.invoke('bp:save-file', { name, data }),
   saveMany: files => ipcRenderer.invoke('bp:save-many', files),
   saveProject: (filePath, name, data, saveAs) => ipcRenderer.invoke('bp:save-project', { filePath, name, data, saveAs }),
+  projBegin: (filePath, name, saveAs) => ipcRenderer.invoke('bp:proj-begin', { filePath, name, saveAs }),
+  projWrite: (id, chunk) => ipcRenderer.invoke('bp:proj-write', id, chunk),
+  projEnd: (id, ok) => ipcRenderer.invoke('bp:proj-end', id, ok),
+  openRead: (offset, length) => ipcRenderer.invoke('bp:open-read', offset, length),
   confirmClose: name => ipcRenderer.invoke('bp:confirm-close', name),
   reveal: p => ipcRenderer.invoke('bp:reveal', p),
   // autosave on disk, streamed in chunks
@@ -34,6 +38,7 @@ contextBridge.exposeInMainWorld('bp', {
     smoothOrient: (N, Q, start, list, fq, iters, shuffle, parallel) => nativeCall('smoothOrient', { N, Q, start, list, fq, iters, shuffle, parallel }),
     smoothPos: (V, N, Q, O, start, list, fo, fx, s, iters, shuffle, parallel) => nativeCall('smoothPos', { V, N, Q, O, start, list, fo, fx, s, iters, shuffle, parallel }),
     mirrorPairs: (pos, o, cell, tol2) => nativeCall('mirrorPairs', { pos, o, cell, tol2 }),
+    buildBVH: (pos, idx) => nativeCall('buildBVH', { pos, idx }),
     bake: (lowPos, uvIdx, uv, highPos, highIdx, paint, size, maxDist, dilate) => nativeCall('bake', { lowPos, uvIdx, uv, highPos, highIdx, paint, size, maxDist, dilate }),
   },
   onOpenModel: cb => ipcRenderer.on('bp:open-model', (_e, m) => m && cb(m)),

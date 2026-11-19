@@ -61,6 +61,42 @@ function sharpFeatures(pos, idx, angleDeg) {
   for (const [v, d] of deg) if (d >= 3) corners.push(pos[v*3], pos[v*3+1], pos[v*3+2]);
   return { segs: new Float32Array(segs), corners: new Float32Array(corners) };
 }
+// polygroup borders as features: per-vertex groups, so the border runs through the triangles whose corners
+// differ (between edge midpoints); where three groups meet there is a corner at the triangle's center
+function groupFeatures(pos, idx, groups) {
+  // border graph: nodes are edge midpoints (key = edge) and triple-junction centers (key = face); the raw path
+  // zigzags across the triangles, so it is chained and smoothed before its directions steer the field
+  const nV = pos.length / 3, P = new Map(), adj = new Map(), fixed = new Set();
+  const ekey = (a, b) => a < b ? a * nV + b : b * nV + a;
+  const node = (k, p) => { if (!P.has(k)) { P.set(k, p); adj.set(k, []); } return k; };
+  const mid = (a, b) => node(ekey(a, b), [(pos[a*3] + pos[b*3]) / 2, (pos[a*3+1] + pos[b*3+1]) / 2, (pos[a*3+2] + pos[b*3+2]) / 2]);
+  const link = (x, y) => { adj.get(x).push(y); adj.get(y).push(x); };
+  for (let f = 0; f < idx.length; f += 3) {
+    const a = idx[f], b = idx[f+1], c = idx[f+2], ga = groups[a], gb = groups[b], gc = groups[c];
+    if (ga === gb && gb === gc) continue;
+    if (ga !== gb && gb !== gc && ga !== gc) {
+      const k = node(-1 - f / 3, [(pos[a*3] + pos[b*3] + pos[c*3]) / 3, (pos[a*3+1] + pos[b*3+1] + pos[c*3+1]) / 3, (pos[a*3+2] + pos[b*3+2] + pos[c*3+2]) / 3]);
+      fixed.add(k);
+      for (const [x, y] of [[a, b], [b, c], [c, a]]) link(k, mid(x, y));
+      continue;
+    }
+    const odd = ga === gb ? c : gb === gc ? a : b, [x, y] = odd === a ? [b, c] : odd === b ? [c, a] : [a, b];
+    link(mid(odd, x), mid(odd, y));
+  }
+  for (let it = 0; it < 10; it++) {
+    const next = new Map();
+    for (const [k, nb] of adj) {
+      if (fixed.has(k) || nb.length !== 2) continue;
+      const p = P.get(k), q = P.get(nb[0]), r = P.get(nb[1]);
+      next.set(k, [p[0] * 0.5 + (q[0] + r[0]) * 0.25, p[1] * 0.5 + (q[1] + r[1]) * 0.25, p[2] * 0.5 + (q[2] + r[2]) * 0.25]);
+    }
+    for (const [k, p] of next) P.set(k, p);
+  }
+  const segs = [], corners = [];
+  for (const [k, nb] of adj) for (const j of nb) if (k < j) segs.push(...P.get(k), ...P.get(j));
+  for (const k of fixed) corners.push(...P.get(k));
+  return { segs, corners };
+}
 // spatial hash over segments / points for nearest queries
 class FeatureIndex {
   constructor(F, cell) {
@@ -376,6 +412,16 @@ export function fieldRetopo(src, opt) {
   const con = { fq: new Uint8Array(n), fo: new Uint8Array(n), fx: new Uint8Array(n), q: new Float32Array(n * 3), o: new Float32Array(n * 3) };
   const angle = opt.sharpAngle ?? 40;
   const F = angle > 0 ? sharpFeatures(sp, si, angle) : { segs: new Float32Array(0), corners: new Float32Array(0) };
+  // polygroup borders (smoothed) and guide lines steer the direction of the loops; they are not snapped to like
+  // sharp edges, because borders are usually soft curves and pinning to them makes the loops jagged.
+  // Guides are mirrored in symmetric mode.
+  let GI = null;
+  {
+    let g = opt.guides && opt.guides.length >= 6 ? Array.from(opt.guides) : [];
+    if (sym) for (let o = 0, n0 = g.length; o + 5 < n0; o += 6) g.push(-g[o], g[o+1], g[o+2], -g[o+3], g[o+4], g[o+5]);
+    if (opt.groups && opt.groups.length === sp.length / 3) g = g.concat(groupFeatures(sp, si, opt.groups).segs);
+    if (g.length) GI = new FeatureIndex({ segs: new Float32Array(g), corners: new Float32Array(0) }, s);
+  }
   if (sym && F.segs.length) {   // where a crease crosses the mirror plane there must be a vertex: treat it as a corner
     const S = F.segs, extra = [];
     for (let o = 0; o < S.length; o += 6) {
@@ -399,6 +445,10 @@ export function fieldRetopo(src, opt) {
         if (c) { con.fo[v] = 1; set3(con.o, v, c.point); }
         continue;
       }
+    }
+    if (GI) {
+      const g = GI.closestSeg(p, s * 1.2);
+      if (g) { const q = tangentOf(g.dir, nn), l = Math.hypot(q[0], q[1], q[2]); if (l > 0.3) { con.fq[v] = 1; set3(con.q, v, [q[0]/l, q[1]/l, q[2]/l]); } }
     }
     if (!FI) continue;
     const c = FI.closestCorner(p, s * 0.6);
