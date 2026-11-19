@@ -177,7 +177,7 @@ export function insertLoop(P, polys, a, b, t = 0.5) {
   const pos = new Float32Array(P.length + extra.length); pos.set(P); pos.set(extra, P.length);
   const src = new Int32Array(pos.length / 3); for (let v = 0; v < nV; v++) src[v] = v;
   for (const [k, id] of newOn) src[id] = Math.floor(k / 0x200000);
-  return { pos, polys: out, src, loop: split.size, segs, ring: [...split.keys()] };
+  return { pos, polys: out, src, loop: split.size, segs, ring: [...split.keys()], at: newOn.get(ek(a, b)) };
 }
 
 // drop vertices no face uses; returns { pos, polys, src }
@@ -504,4 +504,80 @@ export function flatten(P, polys, sel) {
 export function splitOff(P, polys, sel) {
   const S = new Set(sel);
   return { part: compact(P, polys.filter((_, i) => S.has(i))), rest: compact(P, polys.filter((_, i) => !S.has(i))) };
+}
+
+// ---------------- QMesh, several loops, spin, relax ----------------
+// after an extrude (walls appended after the first nOld faces, each starting with its border edge (a, b)): a wall
+// that ends up in the plane of the face on the other side of (a, b) merges with it, so the extrusion continues
+// that face instead of adding an edge (ZBrush's QMesh)
+export function qmeshWeld(P, polys, nOld, deg = 3) {
+  const byEdge = adjacency(polys), c = Math.cos(deg * Math.PI / 180), keys = new Set(), drop = new Set();
+  for (let w = nOld; w < polys.length; w++) {
+    const g = polys[w], a = g[0], b = g[1], k = ek(a, b), fs = byEdge.get(k) || [];
+    const o = fs.find(f => f !== w); if (o === undefined || o >= nOld || fs.length !== 2) continue;
+    const nw = polyNormal(P, g), no = polyNormal(P, polys[o]);
+    // a wall of zero area (no drag) has no direction: leave it
+    const ar = Math.hypot(...cross(sub(P, g[1], g[0]), sub(P, g[3], g[0]))); if (ar < 1e-12) continue;
+    if (dot(nw, no) >= c) { keys.add(k); drop.add(a); drop.add(b); }
+  }
+  if (!keys.size) return null;
+  const r = mergeAcross(P, polys, keys, drop);
+  return r && { ...r, merged: keys.size };
+}
+// `count` evenly spaced loops across the strip through edge (a, b)
+export function insertLoops(P, polys, a, b, count) {
+  let cur = { pos: P, polys, src: null }, u = a, total = 0;
+  const nV0 = P.length / 3;
+  for (let i = 0; i < count; i++) {
+    const r = insertLoop(cur.pos, cur.polys, u, b, 1 / (count + 1 - i));
+    if (!r) return i ? cur : null;
+    const src = new Int32Array(r.pos.length / 3);
+    for (let v = 0; v < src.length; v++) { const o = r.src[v]; src[v] = cur.src ? cur.src[o] ?? o : (o < nV0 ? o : o); }
+    cur = { pos: r.pos, polys: r.polys, src }; u = r.at; total += r.loop;
+  }
+  return { ...cur, loop: total };
+}
+// turn the edge (a, b) between two faces to the next pair of corners of the polygon they form together
+export function spinEdge(P, polys, a, b) {
+  const byEdge = adjacency(polys), fs = byEdge.get(ek(a, b)); if (!fs || fs.length !== 2) return null;
+  const [f1, f2] = fs, g1 = polys[f1], g2 = polys[f2];
+  // ring around both faces: f1 holds the edge as x -> y; walk f1 from y round to x, then f2 (which holds y -> x)
+  // from just after x round to just before y
+  const i1 = g1.indexOf(a), m1 = g1.length, m2 = g2.length;
+  const xI = g1[(i1 + 1) % m1] === b ? i1 : (i1 + m1 - 1) % m1, x = g1[xI], ring = [];
+  for (let k = 1; k <= m1; k++) ring.push(g1[(xI + k) % m1]);
+  const i2 = g2.indexOf(x);
+  for (let k = 1; k <= m2 - 2; k++) ring.push(g2[(i2 + k) % m2]);
+  const L = ring.length; if (L < 4 || new Set(ring).size !== L) return null;
+  // the old edge joins ring[0] (y) and ring[m1 - 1] (x); move both ends one step on
+  const p = 1, q = m1 % L;
+  const nf1 = [], nf2 = [];
+  for (let k = p; ; k = (k + 1) % L) { nf1.push(ring[k]); if (k === q) break; }
+  for (let k = q; ; k = (k + 1) % L) { nf2.push(ring[k]); if (k === p) break; }
+  if (nf1.length < 3 || nf2.length < 3) return null;
+  const out = polys.map((g, i) => i === f1 ? nf1 : i === f2 ? nf2 : g.slice());
+  const pos = new Float32Array(P), src = new Int32Array(P.length / 3).map((_, i) => i);
+  return { pos, polys: out, src, edge: [ring[p], ring[q]] };
+}
+// even out the vertices of the faces along the surface (inner vertices move to their neighbours' average,
+// keeping to the faces' plane; border vertices of the selection stay)
+export function relax(P, polys, sel, iters = 6) {
+  const S = new Set(sel), inner = new Map(), nb = new Map();
+  const vf = new Map(); polys.forEach((g, i) => { for (const v of g) (vf.get(v) || vf.set(v, []).get(v)).push(i); });
+  for (const f of S) for (const v of polys[f]) if (vf.get(v).every(i => S.has(i))) inner.set(v, true);
+  for (const v of inner.keys()) { const s = new Set(); for (const f of vf.get(v)) { const g = polys[f], k = g.indexOf(v); s.add(g[(k + 1) % g.length]); s.add(g[(k + g.length - 1) % g.length]); } nb.set(v, [...s]); }
+  const pos = new Float32Array(P);
+  for (let it = 0; it < iters; it++) {
+    const nxt = new Map();
+    for (const [v, list] of nb) {
+      let x = 0, y = 0, z = 0; for (const u of list) { x += pos[u*3]; y += pos[u*3+1]; z += pos[u*3+2]; }
+      x /= list.length; y /= list.length; z /= list.length;
+      // keep the vertex on its own tangent plane
+      let nx = 0, ny = 0, nz = 0; for (const f of vf.get(v)) { const n = polyNormal(pos, polys[f]); nx += n[0]; ny += n[1]; nz += n[2]; }
+      const n = norm([nx, ny, nz]), d = (x - pos[v*3]) * n[0] + (y - pos[v*3+1]) * n[1] + (z - pos[v*3+2]) * n[2];
+      nxt.set(v, [x - n[0] * d, y - n[1] * d, z - n[2] * d]);
+    }
+    for (const [v, p] of nxt) { pos[v*3] = p[0]; pos[v*3+1] = p[1]; pos[v*3+2] = p[2]; }
+  }
+  return { pos, count: nb.size };
 }
