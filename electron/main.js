@@ -40,9 +40,10 @@ function fileArg(argv) {
 // Big project files are not sent whole (a page buffer can't exceed 2 GB): the page reads them in pieces
 // with bp:open-read, which only serves the file opened last.
 let openReadPath = null;
+const BIG_OPEN = (+process.env.BP_BIG_OPEN_MB || 256) * 1024 * 1024;   // testing can lower it
 async function readModel(p) {
   const st = await fs.stat(p);
-  if (path.extname(p).toLowerCase() === '.bpp' && st.size > 256 * 1024 * 1024) { openReadPath = p; return { name: path.basename(p), path: p, size: st.size, big: true }; }
+  if (path.extname(p).toLowerCase() === '.bpp' && st.size > BIG_OPEN) { openReadPath = p; return { name: path.basename(p), path: p, size: st.size, big: true }; }
   const data = await fs.readFile(p);
   return { name: path.basename(p), path: p, data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) };
 }

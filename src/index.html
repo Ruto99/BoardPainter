@@ -4279,6 +4279,17 @@ const levelVerts = L => (L.pos || L.det).length / 3;
 function restoreLv(e) {
   // bring the current state to the level that the snapshot had active (levels are identified by vertex count)
   const want0 = levelVerts(e.levels[e.lv]), at = active.levels.findIndex(L => levelVerts(L) === want0);
+  if (at < 0) {
+    // the snapshot's level isn't in the current list (redo of "subdivide", undo of "delete higher"): the current
+    // level is in the snapshot's list, so switch to that list and step up through the stored details
+    const cur = active.levels[active.lv], k = e.levels.indexOf(cur);
+    if (k >= 0 && e.levels.slice(k + 1, e.lv + 1).every(L => L.det && L.det.length)) {
+      active.levels = e.levels; active.lv = k;
+      if (e.lv !== k) setLevel(e.lv, true);
+      syncScene(); if (gizmoOn) attachGizmo();
+      return;
+    }
+  }
   setLevel(at >= 0 ? at : 0, true);
   const cur = active.levels[active.lv];
   active.levels = e.levels; active.lv = e.lv;
@@ -4289,7 +4300,6 @@ function restoreLv(e) {
   setMesh(want.pos, want.idx, mask, want.mirror, paint);
   syncScene(); if (gizmoOn) attachGizmo();
 }
-// polygon limit for subdivision, by installed memory (desktop): 16 GB+ -> 24 million, 8 GB+ -> 6 million
 // polygons a part may be subdivided to, from the PC's memory (measured ~180 bytes per polygon in the page plus the
 // GPU copy, and room for the level below and the history). Without the native module the JavaScript BVH builder
 // needs a 96-byte-per-triangle buffer, which can't exceed 2 GB.
