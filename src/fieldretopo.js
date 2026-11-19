@@ -418,7 +418,7 @@ export function fieldRetopo(src, opt) {
   let GI = null;
   {
     let g = opt.guides && opt.guides.length >= 6 ? Array.from(opt.guides) : [];
-    if (sym) for (let o = 0; o + 5 < g.length; o += 6) g.push(-g[o], g[o+1], g[o+2], -g[o+3], g[o+4], g[o+5]);
+    if (sym) for (let o = 0, n0 = g.length; o + 5 < n0; o += 6) g.push(-g[o], g[o+1], g[o+2], -g[o+3], g[o+4], g[o+5]);
     if (opt.groups && opt.groups.length === sp.length / 3) g = g.concat(groupFeatures(sp, si, opt.groups).segs);
     if (g.length) GI = new FeatureIndex({ segs: new Float32Array(g), corners: new Float32Array(0) }, s);
   }
