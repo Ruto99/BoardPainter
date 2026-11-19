@@ -27,7 +27,7 @@ function resolveAppPath(urlPath) {
   return path.join(SRC, ...(parts.length ? parts : ['index.html']));
 }
 
-const MODEL_EXT = new Set(['.obj', '.stl', '.bpp']);
+const MODEL_EXT = new Set(['.obj', '.stl', '.bpp', '.fbx', '.glb', '.gltf']);
 let win = null;
 let pendingOpen = null; // file passed on the command line / via "open with"
 let allowClose = false;
@@ -89,6 +89,9 @@ const FILTERS = {
   obj: { name: 'Wavefront OBJ', extensions: ['obj'] },
   stl: { name: 'STL (3Dプリント)', extensions: ['stl'] },
   glb: { name: 'glTF Binary (GLB)', extensions: ['glb'] },
+  fbx: { name: 'FBX', extensions: ['fbx'] },
+  exr: { name: 'OpenEXR (32bit)', extensions: ['exr'] },
+  bpbrush: { name: 'BoardPainter ブラシ', extensions: ['bpbrush'] },
 };
 
 ipcMain.handle('bp:open-model', async () => {
@@ -97,9 +100,9 @@ ipcMain.handle('bp:open-model', async () => {
     defaultPath: lastDir(),
     properties: ['openFile'],
     filters: [
-      { name: 'BoardPainter プロジェクト / 3Dモデル', extensions: ['bpp', 'obj', 'stl'] },
+      { name: 'BoardPainter プロジェクト / 3Dモデル', extensions: ['bpp', 'obj', 'stl', 'fbx', 'glb', 'gltf'] },
       { name: 'BoardPainter プロジェクト (.bpp)', extensions: ['bpp'] },
-      { name: '3Dモデル (OBJ / STL)', extensions: ['obj', 'stl'] },
+      { name: '3Dモデル (OBJ / STL / FBX / GLB)', extensions: ['obj', 'stl', 'fbx', 'glb', 'gltf'] },
       { name: 'すべてのファイル', extensions: ['*'] },
     ],
   });

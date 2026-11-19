@@ -160,7 +160,7 @@ dl.keys dd{margin:0;color:var(--muted)}
     <button class="btn" id="btnNewProj" title="Ctrl+N">新規</button>
     <button class="btn" id="btnOpen" title="Ctrl+O（.bpp プロジェクト / OBJ / STL）">開く <small>Ctrl+O</small></button>
     <button class="btn" id="btnSave" title="Ctrl+S（Ctrl+Shift+S で名前を付けて保存）">保存 <small>Ctrl+S</small></button>
-    <input id="fileIn" type="file" accept=".bpp,.obj,.stl" hidden>
+    <input id="fileIn" type="file" accept=".bpp,.obj,.stl,.fbx,.glb,.gltf" hidden>
     <div class="sep"></div>
     <button class="btn" id="btnUndo" title="Ctrl+Z">元に戻す</button>
     <button class="btn" id="btnRedo" title="Ctrl+Y">やり直し</button>
@@ -168,6 +168,7 @@ dl.keys dd{margin:0;color:var(--muted)}
     <button class="btn" id="btnDivide" title="Ctrl+D（細分化レベルを追加）">細分化 <small>Ctrl+D</small></button>
     <div class="spacer"></div>
     <button class="btn" id="expOBJ">OBJ</button>
+    <button class="btn" id="expFBX" title="Blender・Maya・Unity などへ（四角ポリゴン・UV・頂点カラー・クリース付き）">FBX</button>
     <button class="btn" id="expGLB">GLB <small>ゲーム</small></button>
     <button class="btn primary" id="expSTL">STL <small>3Dプリント</small></button>
     <button class="btn" id="btnPanel">設定</button>
@@ -624,7 +625,10 @@ dl.keys dd{margin:0;color:var(--muted)}
       <button class="btn primary full" id="bakeGo">法線マップと色を焼き付け</button>
       <div class="row"><input type="checkbox" id="texPreview"><label for="texPreview">焼き付けたテクスチャで表示</label></div>
       <button class="btn full" id="texSave">テクスチャを PNG で保存</button>
-      <p class="note">リトポした軽いパーツで使います：UV を展開 → 「焼き付け元」に元の細かいパーツ（または同じパーツの一番上の細分化レベル）を選んで焼き付け。細部と色がテクスチャになり、GLB にはテクスチャ込み、OBJ には UV 付きで書き出されます。</p>
+      <div class="row" style="margin-top:10px"><label for="dmRef">基準の面</label><select id="dmRef" style="width:150px"><option value="smooth">なめらか（細分化した面）</option><option value="flat">平ら（今のレベルの面）</option></select></div>
+      <div class="row"><label for="dmSize">マップの大きさ</label><select id="dmSize"><option value="1024">1024</option><option value="2048" selected>2048</option><option value="4096">4096</option></select></div>
+      <div class="grid2"><button class="btn" id="dmDisp" title="一番上の細分化レベルの細部を、法線方向の距離（32bit 浮動小数）として書き出します">ディスプレイスメント（EXR）</button><button class="btn" id="dmVec" title="一番上の細分化レベルの細部を、接空間のベクトル（X=U方向・Y=V方向・Z=法線）として書き出します">ベクターディスプレイスメント</button></div>
+      <p class="note">リトポした軽いパーツで使います：UV を展開 → 「焼き付け元」に元の細かいパーツ（または同じパーツの一番上の細分化レベル）を選んで焼き付け。細部と色がテクスチャになり、GLB にはテクスチャ込み、OBJ には UV 付きで書き出されます。ディスプレイスメント（EXR・32bit）は、UV のあるレベルから一番上の細分化レベルまでの細部を、レイを飛ばさずに正確に写します（単位はモデルの座標＝FBX / OBJ と同じ）。</p>
     </section>
 
     <section>
@@ -699,6 +703,11 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { STLLoader } from 'three/addons/loaders/STLLoader.js';
+import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { encodeFBX } from './fbx.js';
+import { encodeEXR } from './exr.js';
+import { levelDisplacement } from './vdm.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { mergeVertices, mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { computeBoundsTree, acceleratedRaycast, MeshBVH, INTERSECTED, NOT_INTERSECTED } from 'three-mesh-bvh';
@@ -4632,6 +4641,35 @@ async function setTexPreview(on) {
   previewMesh = new THREE.Mesh(uvGeometry(pos, L, nrm), m); previewMesh.raycast = () => {}; previewMesh.frustumCulled = false;
   scene.add(previewMesh); mesh.visible = false;
 }
+// 32-bit displacement / vector displacement (EXR) from the subdivision levels above the current (UV) level
+async function exportDisplacement(vector) {
+  const L = curLevel();
+  if (!hasUV(L)) { toast('先にこのレベルで UV を展開してください（リトポした軽いパーツ → UV 展開 → 細分化して彫る → 一番下のレベルに戻して書き出し）'); return; }
+  if (active.lv >= active.levels.length - 1) { toast('上の細分化レベルがありません（細分化して彫ってから、UV のあるレベルに戻して書き出します）'); return; }
+  const S = +$('dmSize').value, smooth = $('dmRef').value === 'smooth';
+  const top = active.levels.length - 1, topF = active.levels[top].idx.length / 3;
+  if (topF > 12_000_000) { toast('一番上のレベルが大きすぎます（1,200万ポリゴンまで）'); return; }
+  let res, t0 = performance.now();
+  await busy(() => { res = computeDisplacement(S, smooth); });
+  if (!res) { toast('ディスプレイスメントを作れませんでした（レベルのつながりが読み取れません）'); return; }
+  const blob = vector ? encodeEXR(S, S, { R: res.vec.filter((_, i) => i % 3 === 0), G: res.vec.filter((_, i) => i % 3 === 1), B: res.vec.filter((_, i) => i % 3 === 2) })
+                      : encodeEXR(S, S, { R: res.disp, G: res.disp, B: res.disp });
+  const name = `${fileBase()}_${vector ? 'vdm' : 'displacement'}.exr`;
+  lastDisp = { vector, res, S };
+  await saveOne(async () => ({ blob, name }));
+  toast(`${vector ? 'ベクター' : ''}ディスプレイスメントを書き出しました（${S}px・最大 ${res.range.toFixed(4)}・UV の使用率 ${Math.round(res.coverage * 100)}%・${((performance.now() - t0) / 1000).toFixed(1)}秒）`);
+}
+let lastDisp = null;
+function computeDisplacement(S, smooth) {
+  const L = curLevel(), top = active.levels.length - 1;
+  flushNormals();
+  const high = materializeLevel(top).pos;
+  // smooth reference: the levels' subdivision of the current level with no details
+  let ref = null;
+  if (smooth) { ref = pos; for (let j = active.lv + 1; j <= top; j++) ref = subdivPositions(ref, active.levels[j - 1], active.levels[j]); }
+  const chain = active.levels.slice(active.lv + 1, top + 1).map(x => ({ idx: x.idx, ev: x.ev }));
+  return levelDisplacement({ pos, idx: L.uvIdx, uv: L.uv }, chain, high, ref, S);
+}
 async function saveTextures() {
   const L = curLevel(); if (!hasUV(L) || !L.bake) return;
   const base = fileBase(), files = [{ name: `${base}_normal.png`, data: L.bake.normalPng.slice().buffer }];
@@ -4695,7 +4733,15 @@ async function importFile(file) {
     const group = new OBJLoader().parse(new TextDecoder().decode(await bytes()));
     group.updateMatrixWorld(true);
     group.traverse(o => { if (o.isMesh) { const g = o.geometry.clone(); g.applyMatrix4(o.matrixWorld); parts.push({ name: o.name || name, g }); } });
-  } else { toast('.bpp / OBJ / STL を選んでください'); return; }
+  } else if (ext === 'fbx' || ext === 'glb' || ext === 'gltf') {
+    let root;
+    try {
+      if (ext === 'fbx') root = new FBXLoader().parse(await bytes(), '');
+      else { const data = await bytes(); root = (await new Promise((res, rej) => new GLTFLoader().parse(ext === 'gltf' ? new TextDecoder().decode(data) : data, '', res, rej))).scene; }
+    } catch (err) { console.error(err); toast(`${file.name} を読み込めませんでした: ${err.message || err}`); return; }
+    root.updateMatrixWorld(true);
+    root.traverse(o => { if (o.isMesh) { const g = o.geometry.clone(); g.applyMatrix4(o.matrixWorld); parts.push({ name: o.name || name, g }); } });
+  } else { toast('.bpp / OBJ / STL / FBX / GLB を選んでください'); return; }
   if (!parts.length) { toast('メッシュが見つかりませんでした'); return; }
   await busy(() => {
     // one transform for every part, so their relative placement is kept (fit to ~2.2 units, centered)
@@ -4868,6 +4914,32 @@ function makeSTL() {
     }
   }
   return { blob: new Blob([buf], { type:'model/stl' }), name: `${fileBase()}_${hmm}mm.stl` };
+}
+// FBX: each shown part at its current level; polygon faces when it has them (triangles when it has UVs),
+// vertex colors (sRGB), smooth normals and crease edges
+async function makeFBX() {
+  flushNormals();
+  const meshes = [];
+  for (const r of shownRecs()) {
+    const L = r.levels[r.lv], P = r.pos, normals = r === active ? nrm : computeNormals(P, r.idx);
+    let polys, uv = null;
+    if (hasUV(L)) {
+      polys = []; for (let f = 0; f < L.uvIdx.length; f += 3) polys.push([L.uvIdx[f], L.uvIdx[f+1], L.uvIdx[f+2]]);
+      uv = { idx: Int32Array.from({ length: L.uvIdx.length }, (_, i) => i), uv: L.uv };
+    } else {
+      const PL = levelPolys(L);
+      polys = PL ? PE.toPolys(PL.start, PL.idx) : Array.from({ length: r.idx.length / 3 }, (_, f) => [r.idx[f*3], r.idx[f*3+1], r.idx[f*3+2]]);
+    }
+    let colors = null;
+    if (r.paint && r.paint.length === P.length) { colors = new Float32Array(P.length); for (let i = 0; i < P.length; i++) colors[i] = lin2srgb(r.paint[i]); }
+    let crease = null;
+    const cs = L.crease && creaseSet(L, P.length / 3) ? L.crease : null;
+    if (cs) { crease = new Set(); for (let i = 0; i < cs.length; i += 2) { const a = cs[i], b = cs[i + 1]; crease.add(a < b ? a + ',' + b : b + ',' + a); } }
+    meshes.push({ name: r.name.replace(/[\0\x01]/g, '') || 'mesh', pos: P, polys, normals, colors, uv, crease });
+  }
+  if (!meshes.length) { toast('書き出すパーツがありません（表示中のパーツが対象です）'); return null; }
+  const blob = await encodeFBX(meshes, { unit: 1 });
+  return { blob, name: fileBase() + '.fbx' };
 }
 async function makeGLB() {
   flushNormals();
@@ -5192,6 +5264,9 @@ $('opMaskInv').onclick = maskInvert; $('opMaskClear').onclick = maskClear;
 $('expOBJ').onclick = () => saveOne(() => busy(makeOBJ));
 $('expSTL').onclick = () => saveOne(() => busy(makeSTL));
 $('expGLB').onclick = () => saveOne(makeGLB);
+$('expFBX').onclick = () => saveOne(makeFBX);
+$('dmDisp').onclick = () => exportDisplacement(false);
+$('dmVec').onclick = () => exportDisplacement(true);
 $('expAll').onclick = () => saveAll();
 $('btnOpen').onclick = () => openModel();
 $('fileIn').onchange = e => { const f = e.target.files[0]; if (f) importFile(f); e.target.value = ''; };
@@ -5472,6 +5547,24 @@ renderer.setAnimationLoop(() => {
       const rec = newRec('箱', P, PE.triangulate(P, polys), null); rec.levels[0].polys = PE.fromPolys(polys);
       subtools = [rec]; activate(rec, true); frame(); return nV;
     },
+    async fbxRoundTrip() {
+      const f = await makeFBX(), buf = await f.blob.arrayBuffer(), root = new FBXLoader().parse(buf, ''), out = [];
+      root.traverse(o => { if (o.isMesh) { const g = o.geometry, p = g.attributes.position; g.computeBoundingBox(); out.push({ name: o.name, verts: p.count, colors: !!g.attributes.color, uv: !!g.attributes.uv, min: g.boundingBox.min.toArray(), max: g.boundingBox.max.toArray() }); } });
+      return { bytes: buf.byteLength, meshes: out, head: new TextDecoder().decode(new Uint8Array(buf, 0, 18)) };
+    },
+    async importFBXBack() { const f = await makeFBX(); await importFile({ name: 'rt.fbx', data: await f.blob.arrayBuffer() }); return subtools.length; },
+    dispTest(smooth, S = 256) {
+      const r = computeDisplacement(S, smooth); if (!r) return null;
+      // the largest per-vertex offset from the reference, to compare with the map
+      const top = active.levels.length - 1, high = materializeLevel(top).pos;
+      let ref = pos; for (let j = active.lv + 1; j <= top; j++) ref = subdivPositions(ref, active.levels[j - 1], active.levels[j]);
+      let mx = 0; for (let i = 0; i < high.length; i += 3) mx = Math.max(mx, Math.hypot(high[i] - ref[i], high[i+1] - ref[i+1], high[i+2] - ref[i+2]));
+      let vmx = 0; for (let k = 0; k < r.vec.length; k += 3) vmx = Math.max(vmx, Math.hypot(r.vec[k], r.vec[k+1], r.vec[k+2]));
+      const exr = encodeEXR(S, S, { R: r.disp });
+      return { range: r.range, coverage: r.coverage, vecMax: vmx, vertMax: mx, exrBytes: exr.size };
+    },
+    unwrapNow() { return unwrapUV(); },
+    setLv(k) { setLevel(k, true); return active.lv; },
     get crease() { const c = active.levels[0].crease; return c ? Array.from(c) : null; },
     pePolys() { const M = peMeshOf(); return { polys: M.polys, pos: Array.from(pos) }; },
     peSetAction(a) { document.querySelector(`[data-pe="${a}"]`).click(); return pe.action; },
