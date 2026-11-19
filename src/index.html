@@ -318,6 +318,13 @@ dl.keys dd{margin:0;color:var(--muted)}
         <button class="btn" data-pe="bevel" title="辺をクリックしてドラッグ：辺の輪を斜めに面取りする（上へドラッグで幅が広がる）">面取り</button>
         <button class="btn" data-pe="bridge" title="穴のふちの辺を2つ順にクリック：2つの穴を四角の帯でつなぐ">穴をつなぐ</button>
         <button class="btn" data-pe="crease" title="辺をクリック：辺の輪にクリースを付ける／外す（細分化しても角が丸くならない）">クリース</button>
+        <button class="btn" data-pe="slide" title="辺をクリックしてドラッグ：辺の輪を隣の辺に沿って滑らせる（上下で向き）">辺をスライド</button>
+        <button class="btn" data-pe="dissolve" title="辺をクリック：辺の輪を消して、両側の面を1枚にまとめる">辺の輪を消す</button>
+        <button class="btn" data-pe="collapse" title="辺をクリック：辺の両端を真ん中で1点にまとめる">辺を縮める</button>
+        <button class="btn" data-pe="vmove" title="面の角の近くをクリックしてドラッグ：その頂点を画面に沿って動かす">点を動かす</button>
+        <button class="btn" data-pe="flatten" title="面をクリック：対象の面を平均の平面にそろえて平らにする">平らにする</button>
+        <button class="btn" data-pe="group" title="面をクリック：対象の面を新しいポリグループにする">グループにする</button>
+        <button class="btn" data-pe="split" title="面をクリック：対象の面を別のパーツとして切り離す">切り離す</button>
       </div>
       <div class="grid2" style="margin-top:6px">
         <button class="btn" id="peCreaseAngle" title="面と面の角度が30°以上の辺すべてにクリースを付けます">角の辺をクリース</button>
@@ -325,7 +332,7 @@ dl.keys dd{margin:0;color:var(--muted)}
       </div>
       <div class="row" style="margin-top:6px"><label for="dsLevel">なめらか表示</label><select id="dsLevel" style="width:150px"><option value="0">オフ</option><option value="1">細分化 1 回分</option><option value="2">細分化 2 回分</option><option value="3">細分化 3 回分</option></select></div>
       <button class="btn full" id="dsApply" disabled title="表示している なめらかな形を、細分化レベルとして確定します">なめらか表示を細分化レベルにする</button>
-      <div class="row" style="margin-top:6px"><label for="peTarget">対象</label><select id="peTarget"><option value="poly">ポリゴン1枚</option><option value="flat">つながった平らな面</option></select></div>
+      <div class="row" style="margin-top:6px"><label for="peTarget">対象</label><select id="peTarget"><option value="poly">ポリゴン1枚</option><option value="flat">つながった平らな面</option><option value="ring" title="カーソルに近い辺を横切って一周する四角の帯">面の輪</option><option value="group">同じポリグループ</option></select></div>
       <p class="note">低ポリゴンのパーツを、面と辺の単位で直接作り変えます。カーソルの下の対象が光り、クリック（押し出す・はめ込む・面を動かすはドラッグ）で実行します。背景のドラッグで視点は回せます。細分化レベルがないパーツで使えます（三角形のパーツは自動で四角にまとめます）。「なめらか表示」は細分化した仕上がりを低ポリゴンのまま見せます（ダイナミック細分化）。クリースした辺（水色）は細分化しても丸くなりません。</p>
     </section>
 
@@ -4978,9 +4985,12 @@ function peHit() {
   }
   return { f, edge, point: p };
 }
-function peSelection(f) {
-  const M = peMeshOf();
-  return $('peTarget').value === 'flat' ? PE.flatIsland(pos, M.polys, f) : [f];
+function peSelection(f, h) {
+  const M = peMeshOf(), t = $('peTarget').value;
+  if (t === 'flat') return PE.flatIsland(pos, M.polys, f);
+  if (t === 'ring' && h) return PE.faceRing(pos, M.polys, h.edge[0], h.edge[1]) || [f];
+  if (t === 'group' && pg) return PE.groupFaces(M.polys, pg, f);
+  return [f];
 }
 // highlight: polygon outlines, a loop preview, or one edge
 function peShow(segs) {
@@ -5012,7 +5022,11 @@ function peHover(e) {
   } else if (a === 'close') {
     const fs = M.vf[h.edge[0]].filter(i => M.polys[i].includes(h.edge[1]));
     if (fs.length === 1) for (const [u, w] of PE.borderEdges(M.polys)) segs.push(...pePt(pos, u), ...pePt(pos, w));
-  } else for (const f of peSelection(h.f)) outline(f);
+  } else if (a === 'slide' || a === 'dissolve') {
+    for (const [u, w] of PE.edgeLoop(M.polys, nV, h.edge[0], h.edge[1], M.vf).edges) segs.push(...pePt(pos, u), ...pePt(pos, w));
+  } else if (a === 'collapse') segs.push(...pePt(pos, h.edge[0]), ...pePt(pos, h.edge[1]));
+  else if (a === 'vmove') { const v = peVertex(h); for (const f of M.vf[v]) { const g = M.polys[f], k = g.indexOf(v); segs.push(...pePt(pos, v), ...pePt(pos, g[(k + 1) % g.length]), ...pePt(pos, v), ...pePt(pos, g[(k + g.length - 1) % g.length])); } }
+  else for (const f of peSelection(h.f, h)) outline(f);
   peShow(segs);
 }
 // replace the active part with an edited polygon mesh; per-vertex mask / color / group follow `src`
@@ -5030,6 +5044,13 @@ function peReplace(res) {
   activate(rec, true); scheduleSave();
   return rec;
 }
+// the corner of the hovered face nearest to the cursor's hit point
+function peVertex(h) {
+  const g = peMeshOf().polys[h.f], p = h.point; let best = Infinity, v = g[0];
+  for (const u of g) { const d = (pos[u*3] - p.x) ** 2 + (pos[u*3+1] - p.y) ** 2 + (pos[u*3+2] - p.z) ** 2; if (d < best) { best = d; v = u; } }
+  return v;
+}
+function peGeomChanged() { computeAllNormals(); geo.computeBoundingSphere(); geo.computeBoundingBox(); bvhDirty = true; mirror = active.mirror = active.levels[0].mirror = computeMirror(pos); dsDirty = true; scheduleSave(); }
 function peDown(e) {
   setNDC(e);
   const h = peHit(); if (!h) return false;   // background: let the view rotate
@@ -5040,7 +5061,7 @@ function peDown(e) {
     if (!r) { toast('四角の面の辺をクリックしてください'); return true; }
     peReplace(r); toast(`ループを入れました（${r.loop} 枚の四角を分割）`);
   } else if (a === 'delete') {
-    const sel = peSelection(h.f);
+    const sel = peSelection(h.f, h);
     if (sel.length >= M.polys.length) { toast('すべての面は消せません'); return true; }
     peReplace(PE.deleteFaces(pos, M.polys, sel)); toast(`${sel.length} 枚の面を消しました`);
   } else if (a === 'crease') {
@@ -5068,13 +5089,58 @@ function peDown(e) {
     pe.drag = { id: e.pointerId, y0: e.clientY, kind: 'bevel', base, polys, edges: loop.edges, t: t0, rec, amt: t0, nOut: r.pos.length };
     controls.enabled = false; canvas.setPointerCapture(e.pointerId); peShow(null);
     toast(`${loop.edges.length} 本の辺を面取りします（上下にドラッグで幅）`);
+  } else if (a === 'slide') {
+    const loop = PE.edgeLoop(M.polys, nV, h.edge[0], h.edge[1], M.vf);
+    pushUndo();
+    pe.drag = { id: e.pointerId, y0: e.clientY, kind: 'slide', base: pos.slice(), polys: M.polys, edges: loop.edges, rec: active, amt: 0 };
+    controls.enabled = false; canvas.setPointerCapture(e.pointerId); peShow(null);
+    toast(`${loop.edges.length} 本の辺の輪を滑らせます（上下にドラッグ）`);
+  } else if (a === 'dissolve') {
+    const loop = PE.edgeLoop(M.polys, nV, h.edge[0], h.edge[1], M.vf);
+    const r = PE.dissolveLoop(pos, M.polys, loop.edges);
+    if (!r) { toast('この辺の輪は消せません（穴のふちや、消すと面がつながらなくなる所）'); return true; }
+    peReplace(r); toast(`辺の輪を消しました（${r.removed} 本・${r.polys.length.toLocaleString()} 面）`);
+  } else if (a === 'collapse') {
+    const r = PE.collapseEdge(pos, M.polys, h.edge[0], h.edge[1]);
+    if (!r) { toast('この辺は縮められません（縮めると面が重なります）'); return true; }
+    peReplace(r); toast('辺を縮めて1点にしました');
+  } else if (a === 'vmove') {
+    const v = peVertex(h), p = new V3(pos[v*3], pos[v*3+1], pos[v*3+2]), n = new V3(); camera.getWorldDirection(n);
+    pushUndo();
+    pe.drag = { id: e.pointerId, kind: 'vmove', v, plane: new THREE.Plane().setFromNormalAndCoplanarPoint(n, p), rec: active, amt: 0, p0: p.clone() };
+    controls.enabled = false; canvas.setPointerCapture(e.pointerId); peShow(null);
+  } else if (a === 'flatten') {
+    const sel = peSelection(h.f, h), r = PE.flatten(pos, M.polys, sel);
+    pushUndo(); pos.set(r.pos); peGeomChanged();
+    toast(`${sel.length} 枚の面を平らにしました（${r.count} 頂点）`);
+  } else if (a === 'group') {
+    const sel = peSelection(h.f, h);
+    pushUndo();
+    if (!pg) pg = new Int32Array(nV);
+    let mx = 0; for (let v = 0; v < nV; v++) mx = Math.max(mx, pg[v]);
+    for (const f of sel) for (const v of M.polys[f]) pg[v] = mx + 1;
+    if (!S.showPG) setShowPG(true);
+    pgUpdated(`${sel.length} 枚の面を新しいポリグループにしました`);
+  } else if (a === 'split') {
+    const sel = peSelection(h.f, h);
+    if (sel.length >= M.polys.length) { toast('すべての面は切り離せません（パーツの複製を使ってください）'); return true; }
+    const r = PE.splitOff(pos, M.polys, sel), part = r.part, n = part.pos.length / 3;
+    const m = new Float32Array(n), pt = paint ? new Float32Array(n * 3) : null, g = pg ? new Int32Array(n) : null;
+    for (let v = 0; v < n; v++) { const o = part.src[v]; m[v] = mask[o]; if (pt) for (let k = 0; k < 3; k++) pt[v*3+k] = paint[o*3+k]; if (g) g[v] = pg[o]; }
+    const name = active.name;
+    peReplace(r.rest);
+    const rec = newRec(uniqueName(name + ' 切り離し'), part.pos, PE.triangulate(part.pos, part.polys), m);
+    rec.paint = pt; rec.pg = g; rec.levels[0].polys = PE.fromPolys(part.polys);
+    subtools.splice(subtools.indexOf(active) + 1, 0, rec);
+    syncScene(); scheduleSave();
+    toast(`${sel.length} 枚の面を「${rec.name}」として切り離しました`);
   } else if (a === 'close') {
     const r = PE.closeHole(pos, M.polys, h.edge[0], h.edge[1]);
     if (!r) { toast('穴のふちの辺をクリックしてください'); return true; }
     peReplace(r); toast(`穴を閉じました（${r.size} 角形）`);
   } else {
     // extrude / inset / move: build the topology now, then the drag moves the new (or selected) vertices
-    const sel = peSelection(h.f), P0 = pos.slice();
+    const sel = peSelection(h.f, h), P0 = pos.slice();
     let moved, rec;
     if (a === 'move') {
       const vn = new Map();
@@ -5104,6 +5170,17 @@ function peDragTo(e) {
     if (r && r.pos.length === pos.length) pos.set(r.pos);
     computeAllNormals(); geo.computeBoundingSphere(); dsDirty = true; return;
   }
+  if (d.kind === 'slide') {
+    const t = Math.max(-0.95, Math.min(0.95, dy * 2)); d.amt = t;
+    pos.set(PE.slideLoop(B, d.polys, d.edges, t));
+    computeAllNormals(); geo.computeBoundingSphere(); dsDirty = true; return;
+  }
+  if (d.kind === 'vmove') {
+    setNDC(e); camera.updateMatrixWorld(); raycaster.setFromCamera(ndc, camera);
+    const q = new V3(); if (!raycaster.ray.intersectPlane(d.plane, q)) return;
+    pos[d.v*3] = q.x; pos[d.v*3+1] = q.y; pos[d.v*3+2] = q.z; d.amt = q.distanceTo(d.p0);
+    computeAllNormals(); geo.computeBoundingSphere(); dsDirty = true; return;
+  }
   if (d.kind === 'inset') {
     const t = Math.max(0, Math.min(0.95, dy * 2)); d.amt = t;
     for (const [c, v] of d.moved) for (let k = 0; k < 3; k++) pos[c*3+k] = B[v*3+k] + (d.center[k] - B[v*3+k]) * t;
@@ -5118,7 +5195,8 @@ function peUp() {
   if (!d) return;
   geo.computeBoundingBox(); mirror = active.mirror = active.levels[0].mirror = computeMirror(pos);
   scheduleSave();
-  const what = { extrude: '押し出しました', inset: 'はめ込みました', move: '面を動かしました', bevel: '面取りしました' }[d.kind];
+  const what = { extrude: '押し出しました', inset: 'はめ込みました', move: '面を動かしました', bevel: '面取りしました', slide: '辺の輪を滑らせました', vmove: '頂点を動かしました' }[d.kind];
+  bvhDirty = true;
   toast(Math.abs(d.amt) < 1e-6 ? `${what}（ドラッグで量を決めます。元に戻すで取り消せます）` : what);
 }
 function peSet(on) {

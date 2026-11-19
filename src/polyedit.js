@@ -8,6 +8,12 @@
 //   deleteFaces         remove faces (leaves a hole) and the vertices nothing uses any more
 //   closeHole           fill the border loop through an edge with one polygon
 //   triangulate         polygons -> triangles for display / sculpting
+//   faceRing / groupFaces    selections: the strip of quads across an edge, the faces of a polygroup
+//   slideLoop           move an edge loop along its neighbouring edges
+//   dissolveLoop        remove an edge loop (its two sides become one face each, straight-through vertices go)
+//   collapseEdge        merge an edge's two ends at its middle
+//   flatten             press faces onto their average plane
+//   splitOff            the selected faces as a separate mesh, and the rest
 
 const ek = (a, b) => a < b ? a * 0x200000 + b : b * 0x200000 + a;   // undirected edge key (vertices < 2M)
 const sub = (P, a, b) => [P[a*3] - P[b*3], P[a*3+1] - P[b*3+1], P[a*3+2] - P[b*3+2]];
@@ -171,7 +177,7 @@ export function insertLoop(P, polys, a, b, t = 0.5) {
   const pos = new Float32Array(P.length + extra.length); pos.set(P); pos.set(extra, P.length);
   const src = new Int32Array(pos.length / 3); for (let v = 0; v < nV; v++) src[v] = v;
   for (const [k, id] of newOn) src[id] = Math.floor(k / 0x200000);
-  return { pos, polys: out, src, loop: split.size, segs };
+  return { pos, polys: out, src, loop: split.size, segs, ring: [...split.keys()] };
 }
 
 // drop vertices no face uses; returns { pos, polys, src }
@@ -386,4 +392,116 @@ export function bridge(P, polys, a1, b1, a2, b2) {
   for (let i = 0; i < n; i++) out.push([A[i], A[(i + 1) % n], bi(i + 1), bi(i)]);
   const pos = new Float32Array(P), src = new Int32Array(P.length / 3).map((_, i) => i);
   return { pos, polys: out, src, size: n };
+}
+
+// ---------------- more ZModeler-like actions ----------------
+// the strip of quads crossing edge (a, b) (the faces "insert loop" would cut)
+export function faceRing(P, polys, a, b) { const r = insertLoop(P, polys, a, b, 0.5); return r ? r.ring : null; }
+// faces of polygroup `g` (per-vertex groups: a face takes the group most of its corners have, ties -> first corner)
+export function faceGroupOf(f, grp) {
+  const c = new Map(); let best = grp[f[0]], bn = 0;
+  for (const v of f) { const n = (c.get(grp[v]) || 0) + 1; c.set(grp[v], n); if (n > bn) { bn = n; best = grp[v]; } }
+  return best;
+}
+export function groupFaces(polys, grp, f) {
+  const g = faceGroupOf(polys[f], grp), out = [];
+  polys.forEach((q, i) => { if (faceGroupOf(q, grp) === g) out.push(i); });
+  return out;
+}
+
+// for each vertex of an edge loop (edges chained in order), the neighbours along the edges leaving it on the
+// left and right side of the loop. Returns { verts, left, right } (-1 where there is no such edge)
+function loopSides(polys, edges) {
+  const byEdge = adjacency(polys), verts = [], left = new Map(), right = new Map();
+  const add = v => { if (!left.has(v)) { verts.push(v); left.set(v, -1); right.set(v, -1); } };
+  for (const [u, w] of edges) {
+    add(u); add(w);
+    for (const f of byEdge.get(ek(u, w)) || []) {
+      const g = polys[f], n = g.length, i = g.indexOf(u), fw = g[(i + 1) % n] === w;   // u -> w runs along f: f is left
+      const side = fw ? left : right;
+      // the other edge of f at u and at w
+      const nu = fw ? g[(i + n - 1) % n] : g[(i + 1) % n], j = g.indexOf(w), nw = fw ? g[(j + 1) % n] : g[(j + n - 1) % n];
+      if (side.get(u) < 0 && nu !== w) side.set(u, nu);
+      if (side.get(w) < 0 && nw !== u) side.set(w, nw);
+    }
+  }
+  return { verts, left, right };
+}
+// slide the loop's vertices along their side edges: t in -1..1 (negative = towards the right side)
+export function slideLoop(P, polys, edges, t) {
+  const { verts, left, right } = loopSides(polys, edges), pos = new Float32Array(P);
+  for (const v of verts) {
+    const nb = t >= 0 ? left.get(v) : right.get(v); if (nb < 0) continue;
+    const s = Math.abs(t);
+    for (let k = 0; k < 3; k++) pos[v*3+k] = P[v*3+k] + (P[nb*3+k] - P[v*3+k]) * s;
+  }
+  return pos;
+}
+
+// merge faces across the given edges (each group of faces joined by them becomes one polygon), then drop the
+// vertices of those edges that are left in the middle of a straight side (2 edges). null if a merged region is not
+// a simple disc
+function mergeAcross(P, polys, keys, drop) {
+  const byEdge = adjacency(polys), uf = polys.map((_, i) => i);
+  const find = x => { while (uf[x] !== x) { uf[x] = uf[uf[x]]; x = uf[x]; } return x; };
+  for (const k of keys) { const fs = byEdge.get(k); if (!fs || fs.length !== 2) return null; const a = find(fs[0]), b = find(fs[1]); if (a === b) return null; uf[a] = b; }
+  const groups = new Map();
+  polys.forEach((_, i) => { const r = find(i); (groups.get(r) || groups.set(r, []).get(r)).push(i); });
+  const out = [];
+  for (const fs of groups.values()) {
+    if (fs.length === 1) { out.push(polys[fs[0]].slice()); continue; }
+    // boundary half-edges of the region: those whose reverse is not in it
+    const he = new Map(), inR = new Set();
+    for (const f of fs) { const g = polys[f]; for (let k = 0; k < g.length; k++) inR.add(g[k] + ',' + g[(k + 1) % g.length]); }
+    for (const f of fs) { const g = polys[f]; for (let k = 0; k < g.length; k++) { const a = g[k], b = g[(k + 1) % g.length]; if (!inR.has(b + ',' + a)) { if (he.has(a)) return null; he.set(a, b); } } }
+    const st = he.keys().next().value, ring = [st];
+    for (let v = he.get(st); v !== st; v = he.get(v)) { if (v === undefined || ring.length > he.size) return null; ring.push(v); }
+    if (ring.length !== he.size) return null;
+    out.push(ring);
+  }
+  // vertex valence (distinct edges) after merging
+  const nb = new Map();
+  for (const g of out) for (let k = 0; k < g.length; k++) { const a = g[k], b = g[(k + 1) % g.length]; (nb.get(a) || nb.set(a, new Set()).get(a)).add(b); (nb.get(b) || nb.set(b, new Set()).get(b)).add(a); }
+  const gone = new Set(); for (const v of drop) if (nb.get(v) && nb.get(v).size === 2) gone.add(v);
+  const polys2 = out.map(g => g.filter(v => !gone.has(v)));
+  if (polys2.some(g => g.length < 3)) return null;
+  return compact(P, polys2);
+}
+// remove an edge loop: the faces on its two sides merge (two quads -> one quad on a quad strip)
+export function dissolveLoop(P, polys, edges) {
+  const keys = new Set(edges.map(([u, w]) => ek(u, w))), drop = new Set();
+  for (const [u, w] of edges) { drop.add(u); drop.add(w); }
+  const r = mergeAcross(P, polys, keys, drop);
+  return r && { ...r, removed: edges.length };
+}
+// merge the ends of edge (a, b) at its middle; faces that become degenerate disappear
+export function collapseEdge(P, polys, a, b) {
+  const pos = new Float32Array(P);
+  for (let k = 0; k < 3; k++) pos[a*3+k] = (P[a*3+k] + P[b*3+k]) / 2;
+  const out = [];
+  for (const f of polys) {
+    const g = [];
+    for (const v of f) { const x = v === b ? a : v; if (g[g.length - 1] !== x) g.push(x); }
+    while (g.length > 1 && g[0] === g[g.length - 1]) g.pop();
+    if (g.length >= 3) out.push(g);
+  }
+  // two faces that now cover the same edge pair twice (a sliver) would make the surface non-manifold
+  const byEdge = adjacency(out); for (const fs of byEdge.values()) if (fs.length > 2) return null;
+  return compact(pos, out);
+}
+// press the faces' vertices onto the plane through their centre, facing their average normal
+export function flatten(P, polys, sel) {
+  const vs = new Set(); let nx = 0, ny = 0, nz = 0;
+  for (const f of sel) { const n = polyNormal(P, polys[f]); nx += n[0]; ny += n[1]; nz += n[2]; for (const v of polys[f]) vs.add(v); }
+  const n = norm([nx, ny, nz]); let cx = 0, cy = 0, cz = 0;
+  for (const v of vs) { cx += P[v*3]; cy += P[v*3+1]; cz += P[v*3+2]; }
+  cx /= vs.size; cy /= vs.size; cz /= vs.size;
+  const pos = new Float32Array(P);
+  for (const v of vs) { const d = (P[v*3] - cx) * n[0] + (P[v*3+1] - cy) * n[1] + (P[v*3+2] - cz) * n[2]; pos[v*3] -= n[0] * d; pos[v*3+1] -= n[1] * d; pos[v*3+2] -= n[2] * d; }
+  return { pos, count: vs.size };
+}
+// the selected faces as their own mesh, and the remaining faces
+export function splitOff(P, polys, sel) {
+  const S = new Set(sel);
+  return { part: compact(P, polys.filter((_, i) => S.has(i))), rest: compact(P, polys.filter((_, i) => !S.has(i))) };
 }
