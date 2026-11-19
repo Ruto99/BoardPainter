@@ -267,6 +267,21 @@ dl.keys dd{margin:0;color:var(--muted)}
       <p class="note">強さ・減衰カーブ・ストローク・アルファはブラシごとに記憶されます。ペンタブレットの筆圧で強さが変わります。よく使う組み合わせ（ブラシ・サイズ・アルファなど）は名前を付けて保存できます。</p>
     </section>
 
+    <section>
+      <h2>ポリゴン編集（ZModeler 風）</h2>
+      <div class="row"><input type="checkbox" id="peOn"><label for="peOn">ポリゴン編集モード <span class="note">Q</span></label></div>
+      <div class="grid3" id="peActs">
+        <button class="btn on" data-pe="extrude" title="面をクリックしてドラッグ：上で外へ、下で内へ">押し出す</button>
+        <button class="btn" data-pe="inset" title="面をクリックしてドラッグ：内側に一回り小さい面を作る">はめ込む</button>
+        <button class="btn" data-pe="loop" title="辺をクリック：四角の帯を横切る辺の輪を入れる">ループを入れる</button>
+        <button class="btn" data-pe="delete" title="面をクリック：面を消して穴にする">面を消す</button>
+        <button class="btn" data-pe="close" title="穴のふちの辺をクリック：穴を1枚の面でふさぐ">穴を閉じる</button>
+        <button class="btn" data-pe="move" title="面をクリックしてドラッグ：面を法線の方向に動かす（形はそのまま）">面を動かす</button>
+      </div>
+      <div class="row" style="margin-top:6px"><label for="peTarget">対象</label><select id="peTarget"><option value="poly">ポリゴン1枚</option><option value="flat">つながった平らな面</option></select></div>
+      <p class="note">低ポリゴンのパーツを、面と辺の単位で直接作り変えます。カーソルの下の対象が光り、クリック（押し出す・はめ込む・面を動かすはドラッグ）で実行します。背景のドラッグで視点は回せます。細分化レベルがないパーツで使えます（三角形のパーツは自動で四角にまとめます）。</p>
+    </section>
+
     <section id="defSec">
       <h2>変形・モーフ・抜き出し・クリップ</h2>
       <div class="row"><label for="dfAxis">軸</label><select id="dfAxis"><option value="1">Y（縦）</option><option value="0">X（横）</option><option value="2">Z（奥）</option></select></div>
@@ -675,6 +690,7 @@ import { unwrap, drawUV } from './uv.js';
 import { bakeMaps } from './bake.js';
 import { MeshoptSimplifier } from 'meshopt-simplifier';
 import { fieldRetopo } from './fieldretopo.js';
+import * as PE from './polyedit.js';
 import { BUILTIN, builtinAlpha, imageToAlpha, sampleAlpha, drawAlpha, alphaRGBA, RES as ALPHA_RES } from './alphas.js';
 
 // native (C++) processing from the desktop app; null when unavailable (then the JavaScript versions run)
@@ -1532,6 +1548,7 @@ function dabSym(P, N, r, ref, reps = 1) {
 
 function onDown(e) {
   if (zs) { zsDown(e); return; }
+  if (pe.on && e.button === 0) { if (peAvailable()) peSet(false); else { peDown(e); return; } }   // a miss leaves the background to the view controls
   if (nz && e.button === 0) noiseCancel();   // sculpting ends a noise preview
   if (clipArmed && e.button === 0) { startClip(e); return; }
   if (e.button !== 0 || !mesh || gizmoOn) return;
@@ -1683,6 +1700,7 @@ canvas.addEventListener('pointermove', e => {
   if (zs) { if (zs.drag) zsMove(e); return; }
   if (clip) { if (e.pointerId === clip.id) clipMove(e); return; }
   if (lasso) { if (e.pointerId === lasso.id) lassoMove(e); return; }
+  if (pe.on) { if (pe.drag) { if (e.pointerId === pe.drag.id) peDragTo(e); } else if (!e.buttons) peHover(e); return; }
   setNDC(e);
   if (stroke) {
     if (e.pointerId !== stroke.id) return;
@@ -1721,6 +1739,7 @@ canvas.addEventListener('dblclick', e => {
 });
 function endStroke() {
   if (zs) { zsUp(); return; }
+  if (pe.drag) { peUp(); return; }
   if (clip) { finishClip(); return; }
   if (lasso) { finishLasso(); return; }
   controls.enabled = true;
@@ -3911,6 +3930,151 @@ function runBoolean(op) {
   });
 }
 
+// ---------------- polygon editing (ZModeler-like) ----------------
+// Works on the polygon faces of a single-level part (flow / grid retopo keep theirs; triangle parts are paired
+// into quads first). Every operation rebuilds the part (one undo step); extrude / inset / move then follow the drag.
+var pe = { on: false, action: 'extrude', hover: null, drag: null, cache: null, line: null };
+function peAvailable() {
+  if (!active || active.levels.length !== 1) return 'ポリゴン編集は細分化レベルがないパーツで使えます（上か下のレベルを削除してください）';
+  if (nV > 1_000_000) return 'ポリゴンが多すぎます。リトポかポリゴン削減で軽くしてから使ってください';
+  return null;
+}
+// polygon faces of the active part (+ vertex -> faces), cached until its triangles change
+function peMeshOf() {
+  if (pe.cache && pe.cache.idx === idx && pe.cache.rec === active) return pe.cache;
+  const L = active.levels[0], lp = levelPolys(L);
+  const polys = lp ? PE.toPolys(lp.start, lp.idx) : PE.quadsFromTriangles(pos, idx);
+  const vf = Array.from({ length: nV }, () => []);
+  polys.forEach((f, i) => { for (const v of f) vf[v].push(i); });
+  return pe.cache = { idx, rec: active, polys, vf };
+}
+// face under the cursor (and the nearest of its edges to the hit point)
+function peHit() {
+  const h = pick(); if (!h) return null;
+  const M = peMeshOf(), t = h.faceIndex * 3, a = idx[t], b = idx[t + 1], c = idx[t + 2];
+  const f = M.vf[a].find(i => M.polys[i].includes(b) && M.polys[i].includes(c));
+  if (f === undefined) return null;
+  const g = M.polys[f], p = h.point;
+  let best = Infinity, edge = null;
+  for (let k = 0; k < g.length; k++) {
+    const u = g[k], w = g[(k + 1) % g.length];
+    const ax = pos[u*3], ay = pos[u*3+1], az = pos[u*3+2], dx = pos[w*3] - ax, dy = pos[w*3+1] - ay, dz = pos[w*3+2] - az;
+    const L2 = dx*dx + dy*dy + dz*dz || 1, s = Math.max(0, Math.min(1, ((p.x - ax) * dx + (p.y - ay) * dy + (p.z - az) * dz) / L2));
+    const d = Math.hypot(ax + dx * s - p.x, ay + dy * s - p.y, az + dz * s - p.z);
+    if (d < best) { best = d; edge = [u, w, s]; }
+  }
+  return { f, edge, point: p };
+}
+function peSelection(f) {
+  const M = peMeshOf();
+  return $('peTarget').value === 'flat' ? PE.flatIsland(pos, M.polys, f) : [f];
+}
+// highlight: polygon outlines, a loop preview, or one edge
+function peShow(segs) {
+  if (!pe.line) {
+    pe.line = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0xffb347, depthTest: false, transparent: true }));
+    pe.line.renderOrder = 10; pe.line.frustumCulled = false; scene.add(pe.line);
+  }
+  pe.line.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(segs || []), 3));
+  pe.line.visible = !!(segs && segs.length);
+}
+const pePt = (P, v) => [P[v*3], P[v*3+1], P[v*3+2]];
+function peHover(e) {
+  setNDC(e);
+  const h = peHit(); pe.hover = h;
+  if (!h) { peShow(null); return; }
+  const M = peMeshOf(), segs = [];
+  const outline = f => { const g = M.polys[f]; for (let k = 0; k < g.length; k++) segs.push(...pePt(pos, g[k]), ...pePt(pos, g[(k + 1) % g.length])); };
+  const a = pe.action;
+  if (a === 'loop') {
+    const r = PE.insertLoop(pos, M.polys, h.edge[0], h.edge[1], 0.5);
+    if (r) for (let i = 0; i < r.segs.length; i += 2) segs.push(...pePt(r.pos, r.segs[i]), ...pePt(r.pos, r.segs[i + 1]));
+  } else if (a === 'close') {
+    const fs = M.vf[h.edge[0]].filter(i => M.polys[i].includes(h.edge[1]));
+    if (fs.length === 1) for (const [u, w] of PE.borderEdges(M.polys)) segs.push(...pePt(pos, u), ...pePt(pos, w));
+  } else for (const f of peSelection(h.f)) outline(f);
+  peShow(segs);
+}
+// replace the active part with an edited polygon mesh; per-vertex mask / color / group follow `src`
+function peReplace(res) {
+  const old = active, tri = PE.triangulate(res.pos, res.polys), n = res.pos.length / 3, src = res.src;
+  const m = new Float32Array(n), pt = paint ? new Float32Array(n * 3) : null, g = pg ? new Int32Array(n) : null;
+  for (let v = 0; v < n; v++) { const o = src[v]; m[v] = mask[o]; if (pt) { pt[v*3] = paint[o*3]; pt[v*3+1] = paint[o*3+1]; pt[v*3+2] = paint[o*3+2]; } if (g) g[v] = pg[o]; }
+  pushStruct();
+  const rec = newRec(old.name, res.pos, tri, m);
+  rec.paint = pt; rec.pg = g; rec.visible = old.visible;
+  rec.levels[0].polys = PE.fromPolys(res.polys);
+  subtools.splice(subtools.indexOf(old), 1, rec);
+  activate(rec, true); scheduleSave();
+  return rec;
+}
+function peDown(e) {
+  setNDC(e);
+  const h = peHit(); if (!h) return false;   // background: let the view rotate
+  const M = peMeshOf(), a = pe.action;
+  e.preventDefault();
+  if (a === 'loop') {
+    const r = PE.insertLoop(pos, M.polys, h.edge[0], h.edge[1], h.edge[2]);
+    if (!r) { toast('四角の面の辺をクリックしてください'); return true; }
+    peReplace(r); toast(`ループを入れました（${r.loop} 枚の四角を分割）`);
+  } else if (a === 'delete') {
+    const sel = peSelection(h.f);
+    if (sel.length >= M.polys.length) { toast('すべての面は消せません'); return true; }
+    peReplace(PE.deleteFaces(pos, M.polys, sel)); toast(`${sel.length} 枚の面を消しました`);
+  } else if (a === 'close') {
+    const r = PE.closeHole(pos, M.polys, h.edge[0], h.edge[1]);
+    if (!r) { toast('穴のふちの辺をクリックしてください'); return true; }
+    peReplace(r); toast(`穴を閉じました（${r.size} 角形）`);
+  } else {
+    // extrude / inset / move: build the topology now, then the drag moves the new (or selected) vertices
+    const sel = peSelection(h.f), P0 = pos.slice();
+    let moved, rec;
+    if (a === 'move') {
+      const vn = new Map();
+      for (const f of sel) { const n = PE.polyNormal(pos, M.polys[f]); for (const v of M.polys[f]) { const s0 = vn.get(v) || [0, 0, 0]; vn.set(v, [s0[0] + n[0], s0[1] + n[1], s0[2] + n[2]]); } }
+      moved = [...vn].map(([v, n]) => { const l = Math.hypot(...n) || 1; return [v, v, [n[0] / l, n[1] / l, n[2] / l]]; });
+      pushUndo(); rec = active;
+    } else {
+      const r = PE.extrude(pos, M.polys, sel);
+      moved = r.moved; rec = peReplace(r);
+    }
+    let cx = 0, cy = 0, cz = 0; for (const [, v] of moved) { cx += P0[v*3]; cy += P0[v*3+1]; cz += P0[v*3+2]; }
+    const k = moved.length || 1, size = sceneBounds([active]).getSize(new V3()).length();
+    pe.drag = { id: e.pointerId, y0: e.clientY, moved, base: P0, center: [cx / k, cy / k, cz / k], size, rec, amt: 0, kind: a };
+    controls.enabled = false; canvas.setPointerCapture(e.pointerId);
+    peShow(null);
+  }
+  pe.cache = null;
+  return true;
+}
+function peDragTo(e) {
+  const d = pe.drag; if (!d || active !== d.rec) return;
+  const dy = (d.y0 - e.clientY) / Math.max(200, view.clientHeight);   // fraction of the view height
+  const B = d.base;
+  if (d.kind === 'inset') {
+    const t = Math.max(0, Math.min(0.95, dy * 2)); d.amt = t;
+    for (const [c, v] of d.moved) for (let k = 0; k < 3; k++) pos[c*3+k] = B[v*3+k] + (d.center[k] - B[v*3+k]) * t;
+  } else {
+    const off = dy * d.size * 0.6; d.amt = off;
+    for (const [c, v, n] of d.moved) for (let k = 0; k < 3; k++) pos[c*3+k] = B[v*3+k] + n[k] * off;
+  }
+  computeAllNormals(); geo.computeBoundingSphere();
+}
+function peUp() {
+  const d = pe.drag; pe.drag = null; controls.enabled = true;
+  if (!d) return;
+  geo.computeBoundingBox(); mirror = active.mirror = active.levels[0].mirror = computeMirror(pos);
+  scheduleSave();
+  const what = { extrude: '押し出しました', inset: 'はめ込みました', move: '面を動かしました' }[d.kind];
+  toast(Math.abs(d.amt) < 1e-6 ? `${what}（ドラッグで量を決めます。元に戻すで取り消せます）` : what);
+}
+function peSet(on) {
+  if (on) { const why = peAvailable(); if (why) { toast(why); $('peOn').checked = false; return; } if (gizmoOn) setGizmo(false); }
+  pe.on = on; $('peOn').checked = on; pe.cache = null; pe.hover = null; peShow(null);
+  ring.visible = ring2.visible = quad.visible = quad2.visible = false;
+  if (on) { const L = active.levels[0]; if (!levelPolys(L)) { L.polys = PE.fromPolys(peMeshOf().polys); setMesh(pos, idx, mask, mirror, paint); } toast('ポリゴン編集モード：面や辺にカーソルを合わせてクリック'); }
+}
+
 // ---------------- live boolean ----------------
 // The pair chosen when it is switched on (a = the part that was selected, b = the other one) is shown as its
 // boolean result at a light resolution, recomputed whenever either part changes (strokes, gizmo, undo).
@@ -4645,6 +4809,12 @@ for (const id of ['nzType', 'nzScale', 'nzAmt', 'nzSeed']) $(id).addEventListene
 $('nzPreview').onclick = () => noisePreview();
 $('nzApply').onclick = () => noiseApply();
 $('nzCancel').onclick = () => noiseCancel();
+$('peOn').onchange = e => peSet(e.target.checked);
+for (const b of $('peActs').querySelectorAll('[data-pe]')) b.onclick = () => {
+  pe.action = b.dataset.pe;
+  for (const x of $('peActs').children) x.classList.toggle('on', x === b);
+  if (!pe.on) peSet(true);
+};
 $('rtGo').onclick = () => retopo();
 $('decRatio').addEventListener('input', updateDecEstimate);
 $('decGo').onclick = () => decimate();
@@ -4868,7 +5038,9 @@ window.addEventListener('keydown', e => {
   else if (k === 'w') setWire(!S.wire);
   else if (k === 'f' && e.shiftKey) setShowPG(!S.showPG);
   else if (k === 'f') frame();
-  else if (k === 'g') setGizmo(!gizmoOn);
+  else if (k === 'g') { if (pe.on) peSet(false); setGizmo(!gizmoOn); }
+  else if (k === 'q') peSet(!pe.on);
+  else if (e.key === 'Escape' && pe.on) peSet(false);
   else if (k === 'd') busy(() => setLevel(active.lv + (e.shiftKey ? -1 : 1)));
   else if (e.key === 'Escape' && gizmoOn) setGizmo(false);
   syncHeld(e);
@@ -4957,6 +5129,9 @@ renderer.setAnimationLoop(() => {
     get retopoStats() { return lastRetopoStats; },
     get accelTimes() { return { ...accelTimes }; },
     get liveState() { if (!live) return null; const b = live.view ? new THREE.Box3().setFromBufferAttribute(live.view.geometry.attributes.position) : null; return { a: live.a.name, b: live.b.name, view: !!live.view, inScene: !!(live.view && live.view.parent), viewVisible: live.view ? live.view.visible : null, meshVisible: mesh.visible, aView: live.a.view ? live.a.view.visible : null, bView: live.b.view ? live.b.view.visible : null, box: b && [b.min.toArray().map(x => +x.toFixed(2)), b.max.toArray().map(x => +x.toFixed(2))], boxes: subtools.map(r => { const bb = new THREE.Box3().setFromArray(r.pos); return [r.name, bb.min.toArray().map(x => +x.toFixed(2)), bb.max.toArray().map(x => +x.toFixed(2))]; }) }; },
+    get peInfo() { if (!active) return null; const L = active.levels[0], lp = levelPolys(L); const ps = lp ? PE.toPolys(lp.start, lp.idx) : []; const hist = {}; for (const f of ps) hist[f.length] = (hist[f.length] || 0) + 1; return { on: pe.on, action: pe.action, polys: ps.length, sizes: hist, borders: PE.borderEdges(ps).length, hover: pe.hover ? pe.hover.f : null }; },
+    peCloseAnyHole() { const M = peMeshOf(), b = PE.borderEdges(M.polys)[0]; if (!b) return null; const r = PE.closeHole(pos, M.polys, b[0], b[1]); if (r) { peReplace(r); pe.cache = null; } return r && r.size; },
+    toScreen(x, y, z) { const v = new V3(x, y, z).project(camera), b = canvas.getBoundingClientRect(); return [b.left + (v.x + 1) / 2 * b.width, b.top + (1 - v.y) / 2 * b.height]; },
     get gpuStats() { return { ...gpuStats, nChunks: chunkMark.length }; },
     useNative(on) { setAccel(on && ACCEL ? window.bp.accel : null); return !!(on && ACCEL); },
     get gizmoState() { return { axis: gizmo.axis, dragging: gizmo.dragging, enabled: gizmo.enabled, attached: !!gizmo.object, mode: gizmo.mode }; },
