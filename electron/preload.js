@@ -37,6 +37,7 @@ contextBridge.exposeInMainWorld('bp', {
     fitSurface: (pos, idx, srcPos, srcIdx, buried, maxSnap, smooth, project) => nativeCall('fitSurface', { pos, idx, srcPos, srcIdx, buried, maxSnap, smooth, project }),
     smoothOrient: (N, Q, start, list, fq, iters, shuffle, parallel) => nativeCall('smoothOrient', { N, Q, start, list, fq, iters, shuffle, parallel }),
     smoothPos: (V, N, Q, O, start, list, fo, fx, s, iters, shuffle, parallel) => nativeCall('smoothPos', { V, N, Q, O, start, list, fo, fx, s, iters, shuffle, parallel }),
+    smoothPosScaled: (V, N, Q, O, start, list, fo, fx, s, iters, shuffle, parallel, scale) => nativeCall('smoothPosScaled', { V, N, Q, O, start, list, fo, fx, s, iters, shuffle, parallel, scale }),
     mirrorPairs: (pos, o, cell, tol2) => nativeCall('mirrorPairs', { pos, o, cell, tol2 }),
     buildBVH: (pos, idx) => nativeCall('buildBVH', { pos, idx }),
     bake: (lowPos, uvIdx, uv, highPos, highIdx, paint, size, maxDist, dilate) => nativeCall('bake', { lowPos, uvIdx, uv, highPos, highIdx, paint, size, maxDist, dilate }),

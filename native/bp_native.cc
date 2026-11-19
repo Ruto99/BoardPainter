@@ -7,6 +7,7 @@
 //   fitSurface(pos, idx, srcPos, srcIdx, buried: Uint8Array|null, maxSnap, smooth, project) -> { pos, face, bary }
 //   smoothOrient(N, Q, start, list, fq, iters, shuffle, parallel?) -> Float32Array            (fieldretopo.js)
 //   smoothPos(V, N, Q, O, start, list, fo, fx, s, iters, shuffle, parallel?) -> Float32Array  (fieldretopo.js)
+//   smoothPosScaled(..., parallel, scale)                      the same with a per-vertex spacing multiplier
 //   bake(lowPos, uvIdx, uv, highPos, highIdx, paint|null, size, maxDist, dilate) -> { normal, color, height, heightRange, hits, misses }  (bake.js)
 //   mirrorPairs(pos, origin, cell, tol2) -> Int32Array  (computeMirror in index.html)
 //   buildBVH(pos, idx) -> { index: Uint32Array (triangles reordered), nodes: Uint32Array }  three-mesh-bvh packed tree
@@ -27,7 +28,7 @@
 
 namespace {
 
-const char* kVersion = "1.4.0";
+const char* kVersion = "1.5.0";
 
 unsigned hwThreads() {
   unsigned t = std::thread::hardware_concurrency();
@@ -431,7 +432,7 @@ void smoothOrient(size_t n, const float* N, float* Q, const uint32_t* st, const 
   });
 }
 void smoothPos(size_t n, const float* V, const float* N, const float* Q, float* O, const uint32_t* st, const uint32_t* list,
-               const uint8_t* fo, const uint8_t* fx, double s, int iters, bool shuffle, bool parallel) {
+               const uint8_t* fo, const uint8_t* fx, double s, int iters, bool shuffle, bool parallel, const float* sc = nullptr) {
   const std::vector<uint32_t> ord = shuffle ? visitOrder(n, 13) : std::vector<uint32_t>();
   sweep(n, st, list, ord, shuffle, parallel, iters, [&](size_t i) {
     if (fo[i]) return;
@@ -439,13 +440,13 @@ void smoothPos(size_t n, const float* V, const float* N, const float* Q, float* 
     V3 o = getf(O, i); double ws = 0;
     for (uint32_t j = st[i]; j < st[i + 1]; j++) {
       const uint32_t u = list[j]; const double w = fo[u] ? 4 : 1;
-      V3 a, b; compatPos(vi, ni, qi, o, getf(V, u), getf(N, u), getf(Q, u), getf(O, u), s, a, b);
+      V3 a, b; compatPos(vi, ni, qi, o, getf(V, u), getf(N, u), getf(Q, u), getf(O, u), sc ? s * ((double)sc[i] + (double)sc[u]) / 2 : s, a, b);
       o = {(a.x*ws + b.x*w) / (ws + w), (a.y*ws + b.y*w) / (ws + w), (a.z*ws + b.z*w) / (ws + w)};
       ws += w;
       const double d = (o.x-vi.x)*ni.x + (o.y-vi.y)*ni.y + (o.z-vi.z)*ni.z;
       o = {o.x - ni.x*d, o.y - ni.y*d, o.z - ni.z*d};
     }
-    o = lattice(o, qi, ni, vi, s, true);
+    o = lattice(o, qi, ni, vi, sc ? s * (double)sc[i] : s, true);
     if (fx[i]) o = onPlane(o, qi, crossv(ni, qi));
     setf(O, i, o);
   });
@@ -911,8 +912,9 @@ napi_value SmoothOrient(napi_env env, napi_callback_info info) {
 }
 
 // smoothPos(V, N, Q, O, start, list, fo, fx, s, iters, shuffle, parallel?) -> Float32Array (smoothed O)
+// smoothPosScaled(..., parallel, scale): the same with a per-vertex spacing multiplier (Float32Array, one per vertex)
 napi_value SmoothPos(napi_env env, napi_callback_info info) {
-  size_t argc = 12; napi_value argv[12];
+  size_t argc = 13; napi_value argv[13];
   CHECK(napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr));
   float *V, *N, *Q, *O0; uint32_t *st, *list; uint8_t *fo, *fx; size_t nV, nN, nQ, nO, nSt, nL, nFo, nFx; double s = 0, iters = 0; bool shuffle = false;
   if (argc < 11 || !typedArg(env, argv[0], napi_float32_array, (void**)&V, &nV) || !typedArg(env, argv[1], napi_float32_array, (void**)&N, &nN)
@@ -929,7 +931,14 @@ napi_value SmoothPos(napi_env env, napi_callback_info info) {
   }
   std::vector<float> O(O0, O0 + nO);
   bool parallel = false; if (argc > 11) napi_get_value_bool(env, argv[11], &parallel);
-  smoothPos(n, V, N, Q, O.data(), st, list, fo, fx, s, (int)std::min(1000.0, std::max(0.0, iters)), shuffle, parallel);
+  float* sc = nullptr; size_t nSc = 0;
+  if (argc > 12) {
+    napi_valuetype t; napi_typeof(env, argv[12], &t);
+    if (t != napi_null && t != napi_undefined && (!typedArg(env, argv[12], napi_float32_array, (void**)&sc, &nSc) || nSc < n)) {
+      napi_throw_range_error(env, nullptr, "smoothPosScaled: scale must be a Float32Array with one value per vertex"); return nullptr;
+    }
+  }
+  smoothPos(n, V, N, Q, O.data(), st, list, fo, fx, s, (int)std::min(1000.0, std::max(0.0, iters)), shuffle, parallel, sc);
   napi_value r = makeTyped(env, napi_float32_array, O.data(), O.size());
   if (!r) { napi_throw_error(env, nullptr, "smoothPos: out of memory"); return nullptr; }
   return r;
@@ -1027,6 +1036,7 @@ NAPI_MODULE_INIT() {
     {"fitSurface", nullptr, FitSurface, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"smoothOrient", nullptr, SmoothOrient, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"smoothPos", nullptr, SmoothPos, nullptr, nullptr, nullptr, napi_default, nullptr},
+    {"smoothPosScaled", nullptr, SmoothPos, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"bake", nullptr, Bake, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"mirrorPairs", nullptr, MirrorPairs, nullptr, nullptr, nullptr, napi_default, nullptr},
     {"buildBVH", nullptr, BuildBVH, nullptr, nullptr, nullptr, napi_default, nullptr},
