@@ -294,6 +294,22 @@ dl.keys dd{margin:0;color:var(--muted)}
       <p class="note">変形は選択中のパーツ全体にかかります（マスクした所は動きません）。「モーフ」ブラシで塗ると、塗った所だけ保存した形に戻ります。クリップは、ボタンを押してから画面上をドラッグして線を引くと、線から出ている短い印の側（Alt で反対側）が線の位置で平らになります。</p>
     </section>
 
+    <section>
+      <h2>表面ノイズ</h2>
+      <div class="row"><label for="nzType">種類</label><select id="nzType"><option value="smooth">なめらか（凹凸）</option><option value="rock">岩肌（尾根）</option><option value="cell">細胞（ウロコ・石畳）</option><option value="pore">細かい粒（肌・鋳物）</option></select></div>
+      <div class="row"><label for="nzScale">模様の大きさ</label><output id="nzScaleOut">0.10</output></div>
+      <input type="range" id="nzScale" min="0.01" max="0.5" step="0.005" value="0.1">
+      <div class="row"><label for="nzAmt">強さ</label><output id="nzAmtOut">0.010</output></div>
+      <input type="range" id="nzAmt" min="-0.05" max="0.05" step="0.001" value="0.01">
+      <div class="row"><label for="nzSeed">模様の番号</label><input type="number" id="nzSeed" min="1" max="9999" step="1" value="1" style="width:80px"></div>
+      <div class="grid3">
+        <button class="btn" id="nzPreview" title="今の設定で表示します（まだ確定しません）">プレビュー</button>
+        <button class="btn" id="nzApply">適用</button>
+        <button class="btn" id="nzCancel" disabled>やめる</button>
+      </div>
+      <p class="note">選択中のパーツの表面を、法線の方向にノイズで凹凸にします（NoiseMaker 風）。大きさと強さはモデルの大きさに対する割合です。プレビュー中にスライダーを動かすと表示が変わります。マスクした所は変わりません。</p>
+    </section>
+
     <section id="refSec">
       <h2>下絵（参考画像）</h2>
       <div class="grid2"><button class="btn" id="refLoad">画像を読み込む…</button><button class="btn" id="refClear" disabled>下絵を消す</button></div>
@@ -556,6 +572,10 @@ dl.keys dd{margin:0;color:var(--muted)}
         <button class="btn" id="boolInt">重なりだけ</button>
       </div>
       <p class="note">選択中のパーツと相手のパーツを演算した結果で、選択中のパーツを置き換えます（相手は非表示にします）。精度はリメッシュの「細かさ」を使います。</p>
+      <div class="row" style="margin-top:8px"><input type="checkbox" id="boolLive"><label for="boolLive">ライブブーリアン（動かしながら結果を見る）</label></div>
+      <div class="row"><label for="boolLiveOp">ライブの演算</label><select id="boolLiveOp"><option value="union">足す</option><option value="subtract" selected>くり抜く</option><option value="intersect">重なりだけ</option></select></div>
+      <button class="btn full" id="boolLiveGo" disabled>ライブの結果を確定</button>
+      <p class="note" id="boolLiveInfo">オンにした時の「選択中のパーツ」と「相手のパーツ」の演算結果を、軽い精度で表示し続けます。どちらかをギズモで動かしたり彫ったりすると、すぐに結果が変わります。「確定」で、リメッシュの「細かさ」の精度で作り直します。</p>
     </section>
 
     <section id="texSec">
@@ -963,6 +983,7 @@ function syncScene() {
     m.visible = rec.visible && !S.solo;
   }
   renderSubtoolList(); updateStats();
+  liveVisibility();
 }
 const shownRecs = () => subtools.filter(r => r === active || r.visible);
 const visibleViews = () => subtools.filter(r => r !== active && r.view && r.view.visible).map(r => r.view);
@@ -1511,6 +1532,7 @@ function dabSym(P, N, r, ref, reps = 1) {
 
 function onDown(e) {
   if (zs) { zsDown(e); return; }
+  if (nz && e.button === 0) noiseCancel();   // sculpting ends a noise preview
   if (clipArmed && e.button === 0) { startClip(e); return; }
   if (e.button !== 0 || !mesh || gizmoOn) return;
   setNDC(e);
@@ -1746,6 +1768,8 @@ function updateCursor(hit) {
 function quadMat(b) { const c = b === 'mask' ? 0x9fc0f0 : b === 'paint' ? S.paintHex : 0xffd49a; quad.material.color.set(c); quad2.material.color.set(c); }
 
 // ---------------- one-click operations ----------------
+// the busy overlay with a message of its own (null hides it again)
+function busyText(t) { const b = $('busy'); if (t == null) { b.hidden = true; b.textContent = '処理中…'; } else { b.hidden = false; b.textContent = t; } }
 function busy(fn) {
   $('busy').hidden = false;
   return new Promise(res => setTimeout(() => { try { res(fn()); } catch (err) { console.error(err); toast('処理に失敗しました: ' + err.message); res(); } finally { $('busy').hidden = true; } }, 30));
@@ -3488,6 +3512,7 @@ gizmo.addEventListener('objectChange', () => {
   if (!gizmo.dragging) return;
   pivot.updateMatrix(); gzM.multiplyMatrices(pivot.matrix, gzInv);
   mesh.matrix.copy(gzM); wireMesh.matrix.copy(gzM); mesh.matrixWorldNeedsUpdate = wireMesh.matrixWorldNeedsUpdate = true;
+  if (live && (live.a === active || live.b === active)) liveSoon(120);
 });
 function bakeGizmo() {
   const v = new V3();
@@ -3760,6 +3785,21 @@ function deleteLower() {
 }
 
 // Project the active subtool's surface onto another subtool (e.g. after retopology + subdividing)
+// all visible parts except the selected one, as one mesh (ProjectAll); parts without color get the base color
+function visibleOthersMerged() {
+  const rs = subtools.filter(r => r !== active && r.visible);
+  if (!rs.length) return null;
+  let nv = 0, ni = 0; for (const r of rs) { nv += r.pos.length / 3; ni += r.idx.length; }
+  const p = new Float32Array(nv * 3), ix = new Uint32Array(ni), painted = rs.some(r => r.paint), pt = painted ? new Float32Array(nv * 3) : null;
+  let ov = 0, oi = 0;
+  for (const r of rs) {
+    p.set(r.pos, ov * 3);
+    for (let i = 0; i < r.idx.length; i++) ix[oi + i] = r.idx[i] + ov;
+    if (pt) { if (r.paint) pt.set(r.paint, ov * 3); else for (let i = ov * 3; i < (ov + r.pos.length / 3) * 3; i += 3) { pt[i] = BASE_COL.r; pt[i+1] = BASE_COL.g; pt[i+2] = BASE_COL.b; } }
+    ov += r.pos.length / 3; oi += r.idx.length;
+  }
+  return { name: `表示中の ${rs.length} 個のパーツ`, pos: p, idx: ix, paint: pt };
+}
 function projectFrom(src) {
   if (!src || src === active) { toast('投影元のパーツを選んでください'); return; }
   return busy(() => {
@@ -3868,6 +3908,141 @@ function runBoolean(op) {
     activate(rec, true); scheduleSave();
     const label = { union: '足しました', subtract: 'くり抜きました', intersect: '重なりだけ残しました' }[op];
     toast(`「${other.name}」を${label}（${nF.toLocaleString()} ポリゴン・${((performance.now() - t0) / 1000).toFixed(1)}秒）。「${other.name}」は非表示にしました`);
+  });
+}
+
+// ---------------- live boolean ----------------
+// The pair chosen when it is switched on (a = the part that was selected, b = the other one) is shown as its
+// boolean result at a light resolution, recomputed whenever either part changes (strokes, gizmo, undo).
+var live = null;   // { a, b, view, timer, last }  (var: read by scheduleSave, which may run before this line)
+const LIVE_RES = 112;
+function liveSource(rec) {
+  if (rec !== active) return { pos: rec.pos, idx: rec.idx, paint: rec.paint };
+  let p = pos;
+  if (gizmo.dragging) { p = new Float32Array(pos.length); const v = new V3(); for (let i = 0; i < p.length; i += 3) { v.set(pos[i], pos[i+1], pos[i+2]).applyMatrix4(gzM); p[i] = v.x; p[i+1] = v.y; p[i+2] = v.z; } }
+  return { pos: p, idx, paint };
+}
+function liveVisibility() {
+  if (!live) return;
+  for (const r of [live.a, live.b]) {
+    if (r === active) { if (mesh) mesh.visible = false; if (wireMesh) wireMesh.visible = false; }
+    else if (r.view) r.view.visible = false;
+  }
+}
+function liveStop() {
+  if (!live) return;
+  clearTimeout(live.timer);
+  if (live.view) { scene.remove(live.view); live.view.geometry.dispose(); }
+  live = null;
+  $('boolLive').checked = false; $('boolLiveGo').disabled = true;
+  if (mesh) { mesh.visible = true; wireMesh.visible = S.wire; }
+  syncScene();
+}
+function liveUpdate() {
+  if (!live) return;
+  if (!subtools.includes(live.a) || !subtools.includes(live.b)) { liveStop(); toast('ライブブーリアンのパーツが無くなったので終了しました'); return; }
+  const t0 = performance.now(), op = $('boolLiveOp').value;
+  const r = booleanMesh(liveSource(live.a), liveSource(live.b), op, { res: Math.min(LIVE_RES, +$('rmRes').value), smooth: 1, project: true, base: [BASE_COL.r, BASE_COL.g, BASE_COL.b], voxelLimit: VOXEL_LIMIT });
+  if (live.view) { scene.remove(live.view); live.view.geometry.dispose(); live.view = null; }
+  if (r) {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(r.pos, 3));
+    g.setAttribute('normal', new THREE.BufferAttribute(computeNormals(r.pos, r.idx), 3));
+    g.setIndex(new THREE.BufferAttribute(r.idx, 1));
+    if (r.paint) g.setAttribute('color', new THREE.BufferAttribute(r.paint, 3));
+    live.view = new THREE.Mesh(g, r.paint ? viewMatPaint : viewMat); live.view.frustumCulled = false; live.view.raycast = () => {};
+    scene.add(live.view);
+  }
+  liveVisibility();
+  live.last = performance.now() - t0;
+  const opName = { union: '足し算', subtract: 'くり抜き', intersect: '重なり' }[op];
+  $('boolLiveInfo').textContent = r ? `「${live.a.name}」と「${live.b.name}」の${opName}を表示中（${(r.idx.length / 3).toLocaleString()} ポリゴン・${Math.round(live.last)}ms）。「確定」で細かく作り直します。`
+    : '結果が空です（重なっていないか、演算できませんでした）';
+}
+function liveSoon(delay = 60) {
+  if (!live) return;
+  clearTimeout(live.timer);
+  live.timer = setTimeout(liveUpdate, Math.max(delay, Math.min(400, live.last || 0)));   // slow updates space themselves out
+}
+function liveStart() {
+  const other = subtools.find(r => String(r.id) === $('boolOther').value);
+  if (!other || other === active) { $('boolLive').checked = false; toast('相手のパーツを選んでください'); return; }
+  live = { a: active, b: other, view: null, timer: 0, last: 0 };
+  $('boolLiveGo').disabled = false;
+  liveUpdate();
+}
+function liveCommit() {
+  if (!live) return;
+  const { a, b } = live, op = $('boolLiveOp').value;
+  liveStop();
+  if (active !== a) activate(a);
+  $('boolOther').value = String(b.id);
+  return runBoolean(op);
+}
+
+// ---------------- surface noise (NoiseMaker-like) ----------------
+function cellNoise(x, y, z) {   // distances to the nearest and second-nearest feature points (one per unit cell)
+  const xi = Math.floor(x), yi = Math.floor(y), zi = Math.floor(z);
+  let f1 = 9, f2 = 9;
+  for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) for (let c = -1; c <= 1; c++) {
+    const cx = xi + a, cy = yi + b, cz = zi + c;
+    const dx = cx + hash3(cx, cy, cz) - x, dy = cy + hash3(cx + 31, cy, cz) - y, dz = cz + hash3(cx, cy + 57, cz) - z;
+    const d = Math.sqrt(dx*dx + dy*dy + dz*dz);
+    if (d < f1) { f2 = f1; f1 = d; } else if (d < f2) f2 = d;
+  }
+  return [f1, f2];
+}
+// height in about [-1, 1] at a point already divided by the pattern size
+const NOISE = {
+  smooth: (x, y, z) => (fbm3(x, y, z) - 0.5) * 2.4,
+  rock: (x, y, z) => { let r = 0, a = 0.6, f = 1; for (let o = 0; o < 4; o++) { r += (1 - Math.abs(vnoise3(x * f + o * 7, y * f, z * f) * 2 - 1)) * a; a *= 0.5; f *= 2.03; } return (r - 0.75) * 1.6; },
+  cell: (x, y, z) => { const [f1, f2] = cellNoise(x, y, z); return Math.min(1, (f2 - f1) * 3) * 2 - 1; },
+  pore: (x, y, z) => { const [f1] = cellNoise(x * 3, y * 3, z * 3); const t = Math.max(0, 1 - f1 * 2.2); return -t * t * 1.5 + (vnoise3(x * 9, y * 9, z * 9) - 0.5) * 0.3; },
+};
+var nz = null;   // preview: { rec, base: positions before, nb: normals before, size }
+function noiseValid() { return nz && nz.rec === active && nz.base.length === pos.length; }
+function noiseApplyTo(target) {
+  const f = NOISE[$('nzType').value] || NOISE.smooth, sc = +$('nzScale').value * nz.size, amt = +$('nzAmt').value * nz.size;
+  const seed = (+$('nzSeed').value | 0) || 1, ox = seed * 17.31, oy = seed * 5.77, oz = seed * 11.13;
+  const B = nz.base, N = nz.nb;
+  for (let v = 0; v < nV; v++) {
+    const i = v * 3, w = 1 - mask[v];
+    if (w <= 0) { target[i] = B[i]; target[i+1] = B[i+1]; target[i+2] = B[i+2]; continue; }
+    const d = f(B[i] / sc + ox, B[i+1] / sc + oy, B[i+2] / sc + oz) * amt * w;
+    target[i] = B[i] + N[i] * d; target[i+1] = B[i+1] + N[i+1] * d; target[i+2] = B[i+2] + N[i+2] * d;
+  }
+  computeAllNormals(); geo.computeBoundingSphere();
+}
+function noiseBegin() {
+  if (noiseValid()) return true;
+  if (stroke || gizmo.dragging) return false;
+  flushNormals();
+  const b = sceneBounds([active]);
+  nz = { rec: active, base: pos.slice(), nb: nrm.slice(), size: b.getSize(new V3()).length() || 1 };
+  $('nzCancel').disabled = false;
+  return true;
+}
+let nzRaf = 0;
+function noisePreview() {
+  if (!noiseBegin()) return;
+  cancelAnimationFrame(nzRaf);
+  nzRaf = requestAnimationFrame(() => { if (noiseValid()) noiseApplyTo(pos); });
+}
+function noiseCancel() {
+  cancelAnimationFrame(nzRaf);
+  if (noiseValid()) { pos.set(nz.base); computeAllNormals(); geo.computeBoundingSphere(); }
+  nz = null; $('nzCancel').disabled = true;
+}
+function noiseApply() {
+  if (!noiseBegin()) return;
+  cancelAnimationFrame(nzRaf);
+  return busy(() => {
+    pos.set(nz.base);
+    pushUndo();
+    noiseApplyTo(pos);
+    nz = null; $('nzCancel').disabled = true;
+    scheduleSave();
+    toast('表面ノイズを適用しました');
   });
 }
 
@@ -4237,7 +4412,7 @@ let saveTimer = 0;
 function autosaveSoon() { clearTimeout(saveTimer); saveTimer = setTimeout(() => stroke ? autosaveSoon() : saveNow(), nF > 2_000_000 ? 3000 : 1200); }
 // called after every change to the model
 let estT = 0;
-function scheduleSave() { setDirty(true); autosaveSoon(); clearTimeout(estT); estT = setTimeout(updateRemeshEstimate, 400); }
+function scheduleSave() { setDirty(true); autosaveSoon(); liveSoon(); clearTimeout(estT); estT = setTimeout(updateRemeshEstimate, 400); }
 // One save at a time; a request while saving queues exactly one more (with the newest state).
 let saveChain = Promise.resolve(), saveQueued = false, idbCleared = false;
 function saveNow() {
@@ -4276,8 +4451,11 @@ async function writeAutosave() {
 async function readAutosaveFile() {
   if (!native || !native.autoInfo) return null;
   const info = await native.autoInfo(); if (!info) return null;
-  const buf = new Uint8Array(info.bytes), CH = 32 << 20;
-  for (let o = 0; o < info.bytes; o += CH) { const c = await native.autoRead(o, Math.min(CH, info.bytes - o)); if (!c || !c.length) return null; buf.set(c, o); }
+  const buf = new Uint8Array(info.bytes), CH = 32 << 20, big = info.bytes > 64 << 20;
+  for (let o = 0; o < info.bytes; o += CH) {
+    if (big) busyText(`前回の作業を読み込み中… ${Math.round(o / info.bytes * 100)}%（${Math.round(info.bytes / 1048576).toLocaleString()} MB）`);
+    const c = await native.autoRead(o, Math.min(CH, info.bytes - o)); if (!c || !c.length) return null; buf.set(c, o);
+  }
   const TYPES = { Float32Array, Uint32Array, Int32Array, Uint8Array, Uint16Array, Int16Array, Int8Array, Float64Array, Uint8ClampedArray };
   const walk = x => {
     if (x && typeof x === 'object' && !Array.isArray(x) && '$a' in x) { const T = TYPES[x.$a]; if (!T || x.o + x.n * T.BYTES_PER_ELEMENT > buf.length) throw new Error('bad autosave'); return new T(buf.buffer, x.o, x.n).slice(); }   // own buffer each (IPC would copy a shared one whole)
@@ -4456,7 +4634,17 @@ $('lvUp').onclick = () => busy(() => setLevel(active.lv + 1));
 $('lvDown').onclick = () => busy(() => setLevel(active.lv - 1));
 $('lvDelHigh').onclick = () => deleteHigher();
 $('lvDelLow').onclick = () => deleteLower();
-$('projGo').onclick = () => projectFrom(subtools.find(r => String(r.id) === $('projSrc').value));
+$('projGo').onclick = () => projectFrom($('projSrc').value === 'all' ? visibleOthersMerged() : subtools.find(r => String(r.id) === $('projSrc').value));
+$('boolLive').onchange = e => e.target.checked ? liveStart() : liveStop();
+$('boolLiveOp').onchange = () => liveSoon(0);
+$('boolLiveGo').onclick = () => liveCommit();
+for (const id of ['nzType', 'nzScale', 'nzAmt', 'nzSeed']) $(id).addEventListener('input', () => {
+  $('nzScaleOut').textContent = (+$('nzScale').value).toFixed(3); $('nzAmtOut').textContent = (+$('nzAmt').value).toFixed(3);
+  if (nz) noisePreview();
+});
+$('nzPreview').onclick = () => noisePreview();
+$('nzApply').onclick = () => noiseApply();
+$('nzCancel').onclick = () => noiseCancel();
 $('rtGo').onclick = () => retopo();
 $('decRatio').addEventListener('input', updateDecEstimate);
 $('decGo').onclick = () => decimate();
@@ -4548,6 +4736,7 @@ function renderSubtoolList() {
   const ps = $('projSrc'), prev = ps.value;
   ps.textContent = '';
   for (const r of subtools) if (r !== active) { const o = document.createElement('option'); o.value = r.id; o.textContent = r.name + (r.visible ? '' : '（非表示）'); ps.appendChild(o); }
+  if (subtools.filter(r => r !== active && r.visible).length > 1) { const o = document.createElement('option'); o.value = 'all'; o.textContent = '表示中のすべてのパーツ'; ps.appendChild(o); }
   if ([...ps.options].some(o => o.value === prev)) ps.value = prev;
   else { const hidden = subtools.find(r => r !== active && !r.visible); if (hidden) ps.value = hidden.id; }
   ps.disabled = $('projGo').disabled = !ps.options.length;
@@ -4735,10 +4924,14 @@ renderer.setAnimationLoop(() => {
   const saved = await loadAuto();
   if (saved) {
     try {
+      // big models take a while to set up (adjacency, BVH): say so before the page goes busy
+      const polys = saved.subtools.reduce((n, r) => n + (r.idx ? r.idx.length / 3 : 0), 0);
+      if (polys > 2_000_000) { busyText(`前回の作業を復元中…（${Math.round(polys / 1e4).toLocaleString()}万ポリゴン）`); await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))); }
       applyProject(saved.meta || {}, saved.subtools, { path: saved.projectPath, name: saved.projectName, dirty: saved.dirty });
       toast('前回の作業を復元しました');
     } catch (err) { console.error(err); }
   }
+  busyText(null);
   if (native) {
     native.onOpenModel(m => importFile(m));
     native.onBeforeClose(async () => {
@@ -4763,6 +4956,7 @@ renderer.setAnimationLoop(() => {
     centerOnScreen() { const v = sceneBounds([active]).getCenter(new V3()).project(camera), b = canvas.getBoundingClientRect(); return [b.left + (v.x + 1) / 2 * b.width, b.top + (1 - v.y) / 2 * b.height]; },
     get retopoStats() { return lastRetopoStats; },
     get accelTimes() { return { ...accelTimes }; },
+    get liveState() { if (!live) return null; const b = live.view ? new THREE.Box3().setFromBufferAttribute(live.view.geometry.attributes.position) : null; return { a: live.a.name, b: live.b.name, view: !!live.view, inScene: !!(live.view && live.view.parent), viewVisible: live.view ? live.view.visible : null, meshVisible: mesh.visible, aView: live.a.view ? live.a.view.visible : null, bView: live.b.view ? live.b.view.visible : null, box: b && [b.min.toArray().map(x => +x.toFixed(2)), b.max.toArray().map(x => +x.toFixed(2))], boxes: subtools.map(r => { const bb = new THREE.Box3().setFromArray(r.pos); return [r.name, bb.min.toArray().map(x => +x.toFixed(2)), bb.max.toArray().map(x => +x.toFixed(2))]; }) }; },
     get gpuStats() { return { ...gpuStats, nChunks: chunkMark.length }; },
     useNative(on) { setAccel(on && ACCEL ? window.bp.accel : null); return !!(on && ACCEL); },
     get gizmoState() { return { axis: gizmo.axis, dragging: gizmo.dragging, enabled: gizmo.enabled, attached: !!gizmo.object, mode: gizmo.mode }; },
