@@ -37,7 +37,12 @@ function fileArg(argv) {
   return argv.slice(1).find(a => !a.startsWith('-') && MODEL_EXT.has(path.extname(a).toLowerCase())) || null;
 }
 
+// Big project files are not sent whole (a page buffer can't exceed 2 GB): the page reads them in pieces
+// with bp:open-read, which only serves the file opened last.
+let openReadPath = null;
 async function readModel(p) {
+  const st = await fs.stat(p);
+  if (path.extname(p).toLowerCase() === '.bpp' && st.size > 256 * 1024 * 1024) { openReadPath = p; return { name: path.basename(p), path: p, size: st.size, big: true }; }
   const data = await fs.readFile(p);
   return { name: path.basename(p), path: p, data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) };
 }
@@ -211,6 +216,45 @@ ipcMain.on('bp:native', async (e, op, args) => {
   const transfer = [];
   for (const v of Object.values(args || {})) if (ArrayBuffer.isView(v) && !transfer.includes(v.buffer)) transfer.push(v.buffer);
   nativeWorker.postMessage({ id, op, args }, transfer);
+});
+
+ipcMain.handle('bp:open-read', async (_e, offset, length) => {
+  if (!openReadPath || !(offset >= 0) || !(length > 0 && length <= 64 * 1024 * 1024)) return null;
+  const fh = await fs.open(openReadPath, 'r');
+  try { const b = Buffer.alloc(length); const { bytesRead } = await fh.read(b, 0, length, offset); return b.subarray(0, bytesRead); }
+  finally { await fh.close(); }
+});
+
+// Project save in pieces (for models whose file doesn't fit in one buffer): written to <file>.tmp, renamed at the end
+let projJob = null;
+ipcMain.handle('bp:proj-begin', async (_e, { filePath, name, saveAs }) => {
+  let target = !saveAs && typeof filePath === 'string' && filePath ? filePath : null;
+  if (!target) {
+    const r = await dialog.showSaveDialog(win, {
+      title: saveAs ? '名前を付けて保存' : 'プロジェクトを保存',
+      defaultPath: filePath || path.join(lastDir(), `${name || 'sculpt'}.bpp`),
+      filters: [{ name: 'BoardPainter プロジェクト (.bpp)', extensions: ['bpp'] }],
+    });
+    if (r.canceled || !r.filePath) return null;
+    target = r.filePath;
+  }
+  if (projJob) { await projJob.fh.close().catch(() => {}); await fs.rm(projJob.tmp, { force: true }).catch(() => {}); }
+  const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, tmp = target + '.tmp';
+  projJob = { id, target, tmp, fh: await fs.open(tmp, 'w') };
+  return id;
+});
+ipcMain.handle('bp:proj-write', async (_e, id, chunk) => {
+  if (!projJob || projJob.id !== id || !ArrayBuffer.isView(chunk)) return false;
+  await projJob.fh.write(chunk); return true;
+});
+ipcMain.handle('bp:proj-end', async (_e, id, ok) => {
+  if (!projJob || projJob.id !== id) return null;
+  const j = projJob; projJob = null;
+  await j.fh.close();
+  if (!ok) { await fs.rm(j.tmp, { force: true }).catch(() => {}); return null; }
+  await fs.rename(j.tmp, j.target);
+  rememberDir(path.dirname(j.target));
+  return j.target;
 });
 
 // ---------------- autosave (crash recovery) ----------------
