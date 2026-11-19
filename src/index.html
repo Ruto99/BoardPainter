@@ -325,7 +325,13 @@ dl.keys dd{margin:0;color:var(--muted)}
       <div class="grid2">
         <button class="btn" id="exGo" title="マスクした所を、厚みのある別のパーツとして抜き出します（服・鎧・ベルト）">マスクから抜き出す</button>
         <button class="btn" id="clipGo" title="画面に線を引いて、線の片側を平らに切り落とします">クリップ（線で切る）</button>
+        <button class="btn" id="sliceGo" title="画面に線を引くと、線の位置に辺の輪を入れて、片側を新しいポリグループにします（SliceCurve 風）">スライス（線で分ける）</button>
+        <button class="btn" id="panelGo" title="ポリグループごとに、厚みのある別々の板にします（Panel Loops 風）">パネル化</button>
       </div>
+      <div class="row"><label for="panelThick">パネルの厚さ</label><output id="panelThickOut">0.020</output></div>
+      <input type="range" id="panelThick" min="0.002" max="0.1" step="0.001" value="0.02">
+      <div class="row"><label for="panelGap">パネルのすき間</label><output id="panelGapOut">0.006</output></div>
+      <input type="range" id="panelGap" min="0" max="0.05" step="0.001" value="0.006">
       <p class="note">変形は選択中のパーツ全体にかかります（マスクした所は動きません）。「モーフ」ブラシで塗ると、塗った所だけ保存した形に戻ります。クリップは、ボタンを押してから画面上をドラッグして線を引くと、線から出ている短い印の側（Alt で反対側）が線の位置で平らになります。</p>
     </section>
 
@@ -584,6 +590,9 @@ dl.keys dd{margin:0;color:var(--muted)}
       <div class="row"><input type="checkbox" id="rtSym" checked><label for="rtSym">左右対称（X）</label></div>
       <div class="row"><input type="checkbox" id="rtPure" checked><label for="rtPure">四角ポリゴンだけにする（形に沿う）</label></div>
       <div class="row"><input type="checkbox" id="rtSharp" checked><label for="rtSharp">角やエッジを保つ（形に沿う）</label></div>
+      <div class="row"><input type="checkbox" id="rtGroups" checked><label for="rtGroups">ポリグループの境目に沿わせる（形に沿う）</label></div>
+      <div class="row"><input type="checkbox" id="rtGuides" checked><label for="rtGuides">ガイド線の向きに並べる（形に沿う）</label></div>
+      <div class="grid2"><button class="btn" id="rtGuideDraw" title="ガイド線ブラシに切り替えます。表面をなぞると線が引けます">ガイド線を引く</button><button class="btn" id="rtGuideClear">ガイド線を消す</button></div>
       <button class="btn primary full" id="rtGo">自動リトポ</button>
       <p class="note">選択中のパーツを、指定した数前後の四角ポリゴンで作り直した新しいサブツールを作ります（元のパーツは非表示で残ります）。四角ポリゴンは OBJ 書き出しでも四角のまま出力されます。「形に沿う」は面の向きに沿って四角を並べ、角やエッジに沿ってループを通します。左右対称にすると X=0 の面にループが乗り、左右がぴったり同じになります。「格子状」は流れが格子に沿う、より単純な方式です。</p>
     </section>
@@ -708,6 +717,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { encodeFBX } from './fbx.js';
 import { encodeEXR } from './exr.js';
 import { levelDisplacement } from './vdm.js';
+import { slicePlane, panelLoops } from './hardsurface.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { mergeVertices, mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { computeBoundsTree, acceleratedRaycast, MeshBVH, INTERSECTED, NOT_INTERSECTED } from 'three-mesh-bvh';
@@ -766,6 +776,7 @@ const BRUSHES = [
   { id:'snake',     key:'0', short:'Sh', name:'引き伸ばし',   desc:'ドラッグした方向へ伸ばす（角・触手）', alpha:false, def:{ strength:0.8 } },
   { id:'tube',      key:'',  short:'Tb', name:'チューブ',     desc:'なぞった線に沿ってチューブ（ロープ・ホース・ツノ）を作る', alpha:false, curve:true, sep:true },
   { id:'insert',    key:'',  short:'Im', name:'並べる',       desc:'なぞった線に沿って形を並べる（鋲・数珠・チェーン）', alpha:false, curve:true },
+  { id:'guide',     key:'',  short:'Gd', name:'ガイド線',   desc:'自動リトポ（形に沿う）のループの向きを決める線を、表面をなぞって引く', alpha:false, curve:true },
   { id:'mask',      key:'9', short:'Mk', name:'マスク',       desc:'塗った所を保護する', alpha:true, sep:true },
   { id:'paint',     key:'',  short:'Pt', name:'ペイント',     desc:'色を塗る（Altで元の色に戻す）', alpha:true, def:{ strength:0.7 } },
 ];
@@ -944,6 +955,7 @@ function recData(r) {
     name: r.name, visible: r.visible, pos: r.pos, idx: r.idx, mask: r.mask, mirror: r.mirror, paint: r.paint || null, lv: r.lv,
     pg: r.pg && r.pg.length === r.pos.length / 3 ? r.pg : null,
     morph: r.morph && r.morph.length === r.pos.length ? r.morph : null,
+    guides: r.guides && r.guides.length ? r.guides : null,
     layers: (r.layers || []).filter(l => l.delta.length === r.pos.length).map(l => ({ name: l.name, I: l.I, on: l.on, delta: l.delta })),
     levels: r.levels.map((L, k) => k === r.lv
       ? { current: true, ev: L.ev || null, quads: L.quads || null, ref0: L.ref0 || null, ...texData(L), ...polyData(L) }
@@ -965,6 +977,7 @@ function recFromData(s) {
   r.paint = s.paint instanceof Float32Array && s.paint.length === s.pos.length ? s.paint : null;
   r.pg = s.pg instanceof Int32Array && s.pg.length === s.pos.length / 3 ? s.pg : null;
   r.morph = s.morph instanceof Float32Array && s.morph.length === s.pos.length ? s.morph : null;
+  r.guides = s.guides instanceof Float32Array && s.guides.length % 6 === 0 ? s.guides : null;
   r.layers = Array.isArray(s.layers) ? s.layers.filter(l => l && l.delta instanceof Float32Array && l.delta.length === s.pos.length)
     .map((l, k) => ({ name: String(l.name || `レイヤー ${k + 1}`), delta: l.delta, I: Number.isFinite(l.I) ? l.I : 1, on: l.on !== false, rec: false })) : [];
   const Ls = Array.isArray(s.levels) ? s.levels : null, lv = s.lv | 0;
@@ -1093,7 +1106,7 @@ function setMesh(p, ix, m, mir, pt) {
   wireMesh.frustumCulled = false; wireMesh.visible = S.wire || S.dynSub > 0; wireMesh.raycast = () => {};
   mesh.matrixAutoUpdate = wireMesh.matrixAutoUpdate = false;
   scene.add(mesh, wireMesh);
-  buildCreaseLines();
+  buildCreaseLines(); buildGuideLines();
   dsDirty = true;
   if (active) active.hid = hid;
   applyHidden();
@@ -2631,6 +2644,14 @@ function finishCurve(st) {
   curveLine.visible = false;
   const c = st.curve;
   if (c.pts.length < 2) { toast('線が短すぎます。モデルの表面をなぞってください'); return; }
+  if (st.brush === 'guide') {   // retopology guide: kept on the part as line segments
+    const old = active.guides || new Float32Array(0), add = [];
+    for (let i = 1; i < c.pts.length; i++) add.push(c.pts[i-1].x, c.pts[i-1].y, c.pts[i-1].z, c.pts[i].x, c.pts[i].y, c.pts[i].z);
+    const g = new Float32Array(old.length + add.length); g.set(old); g.set(add, old.length);
+    active.guides = g; buildGuideLines(); scheduleSave();
+    toast(`ガイド線を引きました（${Math.round(g.length / 6)} 区間）。自動リトポ（形に沿う）でループがこの向きに並びます`);
+    return;
+  }
   const rad = c.r * +$('cvThick').value, taper = +$('cvTaper').value;
   const { P, N } = resampleCurve(c.pts, c.nrm, Math.max(rad * 0.35, 1e-4));
   if (P.length < 2) return;
@@ -2878,13 +2899,17 @@ function extractShell() {
 }
 
 // ---------------- clip: draw a line; everything on its right (Alt: left) is flattened onto the line's plane ----------------
-let clipArmed = false, clip = null;
-function armClip() { clipArmed = true; $('clipGo').classList.add('primary'); toast('画面上をドラッグして切る線を引いてください（Esc でやめる）'); }
-function disarmClip() { clipArmed = false; $('clipGo').classList.remove('primary'); }
+let clipArmed = false, clip = null;   // clipArmed: false | 'clip' | 'slice'
+function armClip(kind = 'clip') {
+  if (kind === 'slice' && active.levels.length > 1) { toast('スライスは細分化レベルがないパーツで使えます（上か下のレベルを削除してください）'); return; }
+  clipArmed = kind; $('clipGo').classList.toggle('primary', kind === 'clip'); $('sliceGo').classList.toggle('primary', kind === 'slice');
+  toast(kind === 'slice' ? '画面上をドラッグして分ける線を引いてください（線の片側が新しいグループになります・Esc でやめる）' : '画面上をドラッグして切る線を引いてください（Esc でやめる）');
+}
+function disarmClip() { clipArmed = false; $('clipGo').classList.remove('primary'); $('sliceGo').classList.remove('primary'); }
 function startClip(e) {
   controls.enabled = false; e.preventDefault(); canvas.setPointerCapture(e.pointerId);
   const b = canvas.getBoundingClientRect();
-  clip = { id: e.pointerId, a: [e.clientX - b.left, e.clientY - b.top], b: [e.clientX - b.left, e.clientY - b.top], flip: e.altKey };
+  clip = { id: e.pointerId, kind: clipArmed, a: [e.clientX - b.left, e.clientY - b.top], b: [e.clientX - b.left, e.clientY - b.top], flip: e.altKey };
   lassoPoly.classList.remove('un');
 }
 function clipMove(e) {
@@ -2910,6 +2935,7 @@ function finishClip() {
   const nrmP = new V3().subVectors(p2, p1).cross(r1.direction).normalize();
   if (C.flip) nrmP.negate();
   const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(nrmP, p1);
+  if (C.kind === 'slice') { busy(() => sliceWith(plane)); return; }
   pushUndo();
   let n = 0;
   for (let v = 0; v < nV; v++) {
@@ -2920,6 +2946,53 @@ function finishClip() {
   }
   afterBulkEdit();
   toast(n ? `${n.toLocaleString()} 頂点を線の位置で平らにしました` : '線の片側に頂点がありません（Alt を押しながら引くと反対側）');
+}
+
+// replace the active single-level part's triangles; per-vertex attributes come from `pick(v)` -> old vertex (or a blend)
+function replaceTopology(P, ix, attrs) {
+  const old = active;
+  pushStruct();
+  const rec = newRec(old.name, P, ix, attrs.mask);
+  rec.paint = attrs.paint || null; rec.pg = attrs.pg || null; rec.visible = old.visible; rec.guides = old.guides || null;
+  subtools.splice(subtools.indexOf(old), 1, rec);
+  activate(rec, true); scheduleSave();
+  return rec;
+}
+// Slice: an exact edge loop along the plane; the far side (normal side) becomes a new polygroup
+function sliceWith(plane) {
+  if (active.levels.length > 1) { toast('スライスは細分化レベルがないパーツで使えます'); return; }
+  flushNormals();
+  const r = slicePlane(pos, idx, [plane.normal.x, plane.normal.y, plane.normal.z], plane.constant);
+  if (!r.side.includes(1) || !r.side.includes(-1)) { toast('線がモデルを横切っていません'); return; }
+  const n = r.pos.length / 3, SR = r.src, m = new Float32Array(n), pt = paint ? new Float32Array(n * 3) : null, g = new Int32Array(n);
+  let mx = 0; if (pg) for (let v = 0; v < nV; v++) mx = Math.max(mx, pg[v]);
+  const g0 = v => pg ? pg[v] : 0;
+  for (let v = 0; v < n; v++) {
+    const a = SR[v*3], b = SR[v*3+1], t = SR[v*3+2];
+    m[v] = mask[a] + (mask[b] - mask[a]) * t;
+    if (pt) for (let k = 0; k < 3; k++) pt[v*3+k] = paint[a*3+k] + (paint[b*3+k] - paint[a*3+k]) * t;
+    // the cut loop stays with the near side; the far side gets a fresh group (one per old group it crosses)
+    g[v] = r.side[v] > 0 ? g0(t < 0.5 ? a : b) + mx + 1 : g0(r.side[a] <= 0 ? a : b);
+  }
+  replaceTopology(r.pos, r.idx, { mask: m, paint: pt, pg: g });
+  if (!S.showPG) setShowPG(true);
+  toast(`スライスしました（${r.cuts.toLocaleString()} 本の辺を切って、線の片側を新しいグループに）`);
+}
+// Panel loops: one thick, closed panel per polygroup with a gap between them
+function makePanels() {
+  if (!pg || pgCountGroups() < 2) { toast('ポリグループが2つ以上必要です（スライスや「マスクからグループ」で作れます）'); return; }
+  if (active.levels.length > 1) { toast('パネル化は細分化レベルがないパーツで使えます'); return; }
+  return busy(() => {
+    flushNormals();
+    const size = sceneBounds([active]).getSize(new V3()).length() / Math.sqrt(3);
+    const fg = new Int32Array(nF);
+    for (let f = 0; f < nF; f++) { const a = pg[idx[f*3]], b = pg[idx[f*3+1]], c = pg[idx[f*3+2]]; fg[f] = b === c ? b : a; }   // majority of the corners
+    const r = panelLoops(pos, idx, fg, +$('panelThick').value * size, +$('panelGap').value * size);
+    const n = r.pos.length / 3, m = new Float32Array(n), pt = paint ? new Float32Array(n * 3) : null;
+    for (let v = 0; v < n; v++) { const o = r.src[v]; m[v] = mask[o]; if (pt) { pt[v*3] = paint[o*3]; pt[v*3+1] = paint[o*3+1]; pt[v*3+2] = paint[o*3+2]; } }
+    replaceTopology(r.pos, r.idx, { mask: m, paint: pt, pg: r.group });
+    toast(`${r.panels} 枚のパネルにしました（厚さ ${(+$('panelThick').value * size * mmPerUnit()).toFixed(2)} mm 相当）`);
+  });
 }
 
 // ---------------- reference image (下絵) + Spotlight-style projection into polypaint ----------------
@@ -4142,6 +4215,17 @@ function runBoolean(op) {
   });
 }
 
+// ---------------- retopology guide lines (per part, line segments on its surface) ----------------
+let guideLines = null;
+function buildGuideLines() {
+  if (guideLines) { scene.remove(guideLines); guideLines.geometry.dispose(); guideLines = null; }
+  const g = active && active.guides; if (!g || !g.length) return;
+  const geo2 = new THREE.BufferGeometry(); geo2.setAttribute('position', new THREE.BufferAttribute(g.slice(), 3));
+  guideLines = new THREE.LineSegments(geo2, new THREE.LineBasicMaterial({ color: 0x9be36b, depthTest: false, transparent: true, opacity: 0.9 }));
+  guideLines.renderOrder = 6; guideLines.frustumCulled = false; guideLines.raycast = () => {};
+  scene.add(guideLines);
+}
+
 // ---------------- creases + dynamic subdivision preview ----------------
 let creaseLines = null;
 const creaseMat = new THREE.LineBasicMaterial({ color: 0x5ad1e6, depthTest: true, transparent: true, opacity: 0.95 });
@@ -4688,7 +4772,8 @@ function retopo() {
   return busy(() => {
     flushNormals();
     const t0 = performance.now(), flow = $('rtMode').value === 'flow';
-    const r = flow ? fieldRetopo({ pos, idx }, { target, smooth: Math.min(12, +$('rtSmooth').value), sym: $('rtSym').checked, pureQuad: $('rtPure').checked, sharpAngle: $('rtSharp').checked ? 60 : 0 })
+    const groups = $('rtGroups').checked && pg && pgCountGroups() > 1 ? pg : null, guides = $('rtGuides').checked && active.guides && active.guides.length ? active.guides : null;
+    const r = flow ? fieldRetopo({ pos, idx }, { target, smooth: Math.min(12, +$('rtSmooth').value), sym: $('rtSym').checked, pureQuad: $('rtPure').checked, sharpAngle: $('rtSharp').checked ? 60 : 0, groups, guides })
                    : quadRemesh({ pos, idx }, { target, smooth: +$('rtSmooth').value, sym: $('rtSym').checked, voxelLimit: VOXEL_LIMIT });
     if (!r) { toast('リトポできませんでした。目標ポリゴン数を変えてみてください'); return; }
     pushStruct();
@@ -5226,6 +5311,8 @@ for (const b of $('peActs').querySelectorAll('[data-pe]')) b.onclick = () => {
   if (!pe.on) peSet(true);
 };
 $('rtGo').onclick = () => retopo();
+$('rtGuideDraw').onclick = () => { selectBrush('guide'); toast('ガイド線：モデルの表面をなぞって線を引きます'); };
+$('rtGuideClear').onclick = () => { if (!active.guides) { toast('ガイド線はありません'); return; } active.guides = null; buildGuideLines(); scheduleSave(); toast('ガイド線を消しました'); };
 $('decRatio').addEventListener('input', updateDecEstimate);
 $('decGo').onclick = () => decimate();
 $('boolUnion').onclick = () => runBoolean('union');
@@ -5384,7 +5471,10 @@ document.querySelectorAll('[data-def]').forEach(b => b.onclick = () => busy(() =
 $('dfAmt').addEventListener('input', e => { $('dfAmtOut').textContent = (+e.target.value).toFixed(2); });
 $('exThick').addEventListener('input', e => { $('exThickOut').textContent = (+e.target.value).toFixed(3); });
 $('mfStore').onclick = morphStore; $('mfRestore').onclick = morphRestore; $('mfDel').onclick = morphDelete;
-$('exGo').onclick = extractShell; $('clipGo').onclick = () => clipArmed ? disarmClip() : armClip();
+$('exGo').onclick = extractShell; $('clipGo').onclick = () => clipArmed === 'clip' ? disarmClip() : armClip('clip');
+$('sliceGo').onclick = () => clipArmed === 'slice' ? disarmClip() : armClip('slice');
+$('panelGo').onclick = () => makePanels();
+for (const [id, d] of [['panelThick', 3], ['panelGap', 3]]) $(id).addEventListener('input', () => { $(id + 'Out').textContent = (+$(id).value).toFixed(d); });
 $('refLoad').onclick = () => $('refFile').click();
 $('refFile').onchange = e => { const f = e.target.files[0]; if (f) loadRef(f); e.target.value = ''; };
 $('refClear').onclick = () => clearRef(false);
@@ -5501,10 +5591,10 @@ renderer.setAnimationLoop(() => {
   }
   if (!stroke) ensureBVH();
   if (S.dynSub && (dsDirty || (!stroke && !pe.drag && dsAge++ > 30))) { if (dsDirty || dsCheck()) dsUpdate(); }
-  const hideCage = !!(dsMesh && mesh && S.dynSub);
+  const hideCage = !!(dsMesh && mesh && S.dynSub), wasVis = mesh && mesh.visible;
   if (hideCage) mesh.visible = false;
   renderer.render(scene, camera);
-  if (hideCage) mesh.visible = true;
+  if (hideCage) mesh.visible = wasVis;
 });
 
 // ---------------- boot ----------------
@@ -5565,6 +5655,7 @@ renderer.setAnimationLoop(() => {
     },
     unwrapNow() { return unwrapUV(); },
     setLv(k) { setLevel(k, true); return active.lv; },
+    get retopoGroupsTest() { return { groups: pg ? pgCountGroups() : 0, guides: active.guides ? active.guides.length / 6 : 0 }; },
     get crease() { const c = active.levels[0].crease; return c ? Array.from(c) : null; },
     pePolys() { const M = peMeshOf(); return { polys: M.polys, pos: Array.from(pos) }; },
     peSetAction(a) { document.querySelector(`[data-pe="${a}"]`).click(); return pe.action; },
