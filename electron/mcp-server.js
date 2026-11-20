@@ -47,7 +47,7 @@ async function handle(msg) {
       protocolVersion: params && params.protocolVersion || '2025-06-18',
       capabilities: { tools: {} },
       serverInfo: { name: 'boardpainter', title: 'BoardPainter', version: VERSION },
-      instructions: 'BoardPainter is a 3D modelling app. Build game assets from primitive parts (add_shape), shape them (edit_faces, bevel_edges, insert_loops, deform, boolean, subdivide), colour them, and check your work with render (look at it from several views and fix what looks wrong) before export. Y is up, the front faces +Z, 1 unit = 1 metre.',
+      instructions: 'BoardPainter is a 3D modelling app. Build game assets from primitive parts (add_shape), shape them (edit_faces, bevel_edges, insert_loops, deform, boolean, subdivide), colour them, and check your work with render (look at it from several views and fix what looks wrong) before export. For a textured game asset (low-poly + baked maps): keep a copy of each finished part before subdividing (duplicate_part), combine the copies into one low-poly part, remove_hidden_faces and unwrap_uv on it, subdivide the originals for the high-poly, then export the low-poly (obj, level base) and the high-poly parts (obj or glb, level top) for a texture painter to bake. Y is up, the front faces +Z, 1 unit = 1 metre.',
     });
   } else if (method === 'ping') reply(id, {});
   else if (method === 'tools/list') reply(id, { tools: TOOLS });

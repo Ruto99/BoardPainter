@@ -5175,9 +5175,9 @@ async function agentCall(tool, a) {
       const g = agentGeom(r), by = PE.adjacency(g.polys), c = Math.cos(num(a.min_angle, 40) * Math.PI / 180), fn = g.polys.map(f => PE.polyNormal(g.P, f)), edges = [];
       for (const [k, fs] of by) if (fs.length === 2) { const x = fn[fs[0]], y = fn[fs[1]]; if (x[0]*y[0] + x[1]*y[1] + x[2]*y[2] < c) edges.push([Math.floor(k / 0x200000), k % 0x200000]); }
       if (!edges.length) throw new Error('No edges are that sharp.');
-      const res = PE.bevel(g.P, g.polys, edges, Math.max(0.02, Math.min(0.45, num(a.width, 0.12))));
+      const res = PE.bevel(g.P, g.polys, edges, Math.max(0.02, Math.min(0.45, num(a.width, 0.12))), { distance: Math.max(0, num(a.size, 0)) });
       if (!res) throw new Error('These edges could not be bevelled (open borders or more than 2 faces on an edge).');
-      const rec = agentReplace(r, res); return { text: `Bevelled ${edges.length} edges: ${agentSummary(rec)}` };
+      const rec = agentReplace(r, res); return { text: `Bevelled ${edges.length} edges ${(res.width * 1000).toFixed(1)} mm wide: ${agentSummary(rec)}` };
     }
     case 'insert_loops': {
       const r = agentPart(a.name); agentSingle(r);
@@ -5239,6 +5239,28 @@ async function agentCall(tool, a) {
       for (let i = 0; i < k; i++) { if (nF * 4 > maxPolys()) break; addLevel(); }
       return { text: `Subdivided: ${agentSummary(active)}` };
     }
+    case 'remove_hidden_faces': {
+      const r = agentPart(a.name); agentSingle(r);
+      const g = agentGeom(r), others = a.against_parts === false ? [] : shownRecs().filter(x => x !== r).map(x => agentGeom(x)).map(x => ({ pos: x.P, idx: x.I }));
+      if (g.I.length / 3 + others.reduce((n, o) => n + o.idx.length / 3, 0) > 400000) throw new Error('Too many triangles: use this on low-poly parts.');
+      const faces = PE.hiddenFaces(g.P, g.polys, others);
+      if (!faces.length) return { text: `No hidden faces in "${r.name}" (only faces lying completely inside another closed piece are removed).` };
+      if (faces.length >= g.polys.length) throw new Error('Every face is hidden.');
+      const rec = agentReplace(r, PE.deleteFaces(g.P, g.polys, faces));
+      return { text: `Removed ${faces.length} hidden faces: ${agentSummary(rec)}. The part now has holes there: do bevels / booleans before this, and keep it as the low-poly (bake target).` };
+    }
+    case 'unwrap_uv': {
+      const r = agentPart(a.name); if (r !== active) activate(r);
+      if (nF > 300000) throw new Error('Too many polygons to unwrap: unwrap the low-poly part (before subdividing).');
+      flushNormals();
+      const size = [512, 1024, 2048, 4096].includes(a.texture_size | 0) ? a.texture_size | 0 : 2048;
+      const u = unwrap(pos, idx, { angle: Math.max(20, Math.min(80, num(a.angle, 45))), size, padding: 4 });
+      pushEntry(lvSnap());
+      const L = { ...curLevel(), uvIdx: u.uvIdx, uv: u.uv, uvCharts: u.charts, bake: null };
+      active.levels = active.levels.slice(); active.levels[active.lv] = L;
+      updateTexUI(); scheduleSave();
+      return { text: `Unwrapped "${r.name}" (level ${active.lv + 1}/${active.levels.length}): ${u.charts} UV islands, ${Math.round(u.coverage * 100)}% of the texture used.` };
+    }
     case 'render': {
       const views = a.views && a.views.length ? a.views : ['persp'], size = Math.max(128, Math.min(1024, a.size | 0 || 384));
       return agentRender(views, size, !!a.wireframe);
@@ -5246,10 +5268,25 @@ async function agentCall(tool, a) {
     case 'export': {
       const make = { glb: makeGLB, fbx: makeFBX, obj: makeOBJ }[a.format]; if (!make) throw new Error('format must be glb, fbx or obj');
       if (agentFresh) throw new Error('The scene is empty.');
-      const prevActiveVisible = active.visible, f = await make(); if (!f) throw new Error('Nothing to export.');
+      const level = a.level || 'current'; if (!['current', 'base', 'top'].includes(level)) throw new Error('level must be current, base or top');
+      const parts = a.parts && a.parts.length ? a.parts.map(agentPart) : null;
+      // parts: export only those (shown for the export, everything restored afterwards); level: base / top subdivision level
+      const prevActive = active, vis = subtools.map(r => r.visible), lvs = new Map();
+      let f, names;
+      try {
+        if (parts) { subtools.forEach(r => { r.visible = parts.includes(r); }); if (!parts.includes(active)) activate(parts[0]); }
+        if (level !== 'current') for (const r of shownRecs()) { const k = level === 'base' ? 0 : r.levels.length - 1; if (r.lv !== k) { if (r !== active) activate(r); lvs.set(r, r.lv); setLevel(k, true); } }
+        names = shownRecs().map(r => `${r.name}${r.levels.length > 1 ? ` (level ${r.lv + 1}/${r.levels.length})` : ''}`);
+        f = await make();
+      } finally {
+        for (const [r, k] of lvs) { if (r !== active) activate(r); setLevel(k, true); }
+        subtools.forEach((r, i) => { r.visible = vis[i]; });
+        if (active !== prevActive && subtools.includes(prevActive)) activate(prevActive); else syncScene();
+        renderSubtoolList();
+      }
+      if (!f) throw new Error('Nothing to export.');
       const base = String(a.file_name || 'asset').replace(/\.(glb|fbx|obj)$/i, ''), p = await window.bp.agentSave(`${base}.${a.format}`, await f.blob.arrayBuffer());
-      active.visible = prevActiveVisible;
-      return { text: `Saved ${p} (${(f.blob.size / 1024).toFixed(1)} KB, visible parts: ${shownRecs().map(r => r.name).join(', ')})` };
+      return { text: `Saved ${p} (${(f.blob.size / 1024).toFixed(1)} KB, parts: ${names.join(', ')})` };
     }
     case 'undo': { const k = Math.max(1, Math.min(50, a.steps | 0 || 1)); for (let i = 0; i < k; i++) undo(); return { text: `Undid ${k} step(s). ${subtools.filter(r => r.visible).map(agentSummary).join('; ')}` }; }
   }
@@ -6311,7 +6348,7 @@ function makeOBJ() {
   const flush = () => { if (chunk.length > 1e6) { out.push(chunk); chunk = ''; } };
   for (const r of recs) {
     const p = r.pos, ix = r.idx, n = r === active ? nrm : computeNormals(p, ix), vn = p.length / 3;
-    chunk += `o ${r.name.replace(/\s+/g, '_')}\n`;
+    chunk += `o ${r.name.replace(/\s+/g, '_')}\nusemtl ${r.name.replace(/\s+/g, '_')}\n`;   // one material per part (ID maps in bakers)
     const pc = r.paint && r.paint.length === p.length ? r.paint : null;   // vertex colors as "v x y z r g b" (sRGB)
     for (let i = 0; i < p.length; i += 3) { chunk += `v ${p[i].toFixed(6)} ${p[i+1].toFixed(6)} ${p[i+2].toFixed(6)}${pc ? ` ${lin2srgb(pc[i]).toFixed(4)} ${lin2srgb(pc[i+1]).toFixed(4)} ${lin2srgb(pc[i+2]).toFixed(4)}` : ''}\n`; flush(); }
     for (let i = 0; i < n.length; i += 3) { chunk += `vn ${n[i].toFixed(4)} ${n[i+1].toFixed(4)} ${n[i+2].toFixed(4)}\n`; flush(); }

@@ -286,10 +286,13 @@ export function carryCreases(Pold, polysOut, Pnew, src, crease) {
   return out.length ? Uint32Array.from(out) : null;
 }
 
-// Chamfer the edges (an edge loop or any chain): every edge becomes a strip of quads `t` wide (fraction of the
-// neighbouring edges). Chain ends get a small corner face (or, at a 3-face corner, the third face takes both new
-// vertices). Needs closed (manifold) surroundings. Returns { pos, polys, src, strip: [new strip face indices] } or null.
-export function bevel(P, polys, edges, t = 0.2) {
+// Chamfer the edges (an edge loop or any chain): every edge becomes a strip of quads of one width everywhere:
+// `t` x the median length of the edges that meet the bevelled edges, or `opt.distance` (model units); either is
+// limited to 0.49 x the shortest of those edges so strips never overlap. The width used to be a fraction of each neighbouring edge, which made a chamfer
+// between a long and a short edge taper and flare out at the corner. Chain ends get a small corner face (or, at a
+// 3-face corner, the third face takes both new vertices). Needs closed (manifold) surroundings.
+// Returns { pos, polys, src, strip: [new strip face indices], width } or null.
+export function bevel(P, polys, edges, t = 0.2, opt = {}) {
   const nV = P.length / 3, vf = vertFaces(polys, nV), byEdge = adjacency(polys);
   const E = new Set(); for (const [u, w] of edges) { const k = ek(u, w); if ((byEdge.get(k) || []).length !== 2) return null; E.add(k); }
   if (!E.size) return null;
@@ -301,13 +304,22 @@ export function bevel(P, polys, edges, t = 0.2) {
   const corner3 = new Set();    // end vertices with 3 faces: dissolved into the third face
   const T = Math.max(0.01, Math.min(0.49, t));
   const at = (v, x, s) => [P[v*3] + (P[x*3] - P[v*3]) * s, P[v*3+1] + (P[x*3+1] - P[v*3+1]) * s, P[v*3+2] + (P[x*3+2] - P[v*3+2]) * s];
+  const len = (v, x) => Math.hypot(...sub(P, x, v));
+  // edges at the bevelled vertices that are not bevelled themselves (all of them if every edge is bevelled):
+  // the width is t x their median length, at most 0.49 x the shortest so strips never overlap
+  const side = [], every = [];
+  for (const [v] of cnt) for (const f of vf[v]) { const g = polys[f], k = g.indexOf(v); for (const x of [g[(k + 1) % g.length], g[(k + g.length - 1) % g.length]]) {
+    const l = len(v, x); if (l < 1e-12) continue; every.push(l); if (!E.has(ek(v, x))) side.push(l); } }
+  const ls = (side.length ? side : every).sort((a, b) => a - b); if (!ls.length) return null;
+  const D = Math.min(0.49 * ls[0], opt.distance > 0 ? opt.distance : T * ls[ls.length >> 1]);
+  const along = (v, x) => at(v, x, Math.min(0.49, D / Math.max(len(v, x), 1e-12)));   // D along the edge v -> x
   for (const [v, c] of cnt) {
     const r = ringAt(polys, vf[v], v); if (!r) return null;
     const n = r.faces.length, sel = []; for (let i = 0; i < n; i++) if (E.has(ek(v, r.between[i]))) sel.push(i);
     if (c === 1) {
       const i = sel[0], A = r.faces[i], B = r.faces[(i + 1) % n];
       const xa = r.between[(i + n - 1) % n], xb = r.between[(i + 1) % n];   // A's other edge, B's other edge
-      const v1 = addV(v, ...at(v, xa, T)), v2 = addV(v, ...at(v, xb, T));
+      const v1 = addV(v, ...along(v, xa)), v2 = addV(v, ...along(v, xb));
       rep.set(A * 0x200000 + v, v1); rep.set(B * 0x200000 + v, v2);
       ins.set(ek(v, xa), { v, nv: v1 }); ins.set(ek(v, xb), { v, nv: v2 });
       if (n === 3) corner3.add(v);
@@ -318,10 +330,12 @@ export function bevel(P, polys, edges, t = 0.2) {
       const i0 = sel[s], i1 = sel[(s + 1) % sel.length], fs = [], inner = [];
       for (let j = (i0 + 1) % n; ; j = (j + 1) % n) { fs.push(r.faces[j]); if (j === i1) break; inner.push(r.between[j]); }
       let x = 0, y = 0, z = 0;
-      if (inner.length) { for (const u of inner) { const q = at(v, u, T); x += q[0]; y += q[1]; z += q[2]; } x /= inner.length; y /= inner.length; z /= inner.length; }
-      else {   // no edge to slide along: move into the face(s) of the sector
-        let cx = 0, cy = 0, cz = 0, m = 0; for (const f of fs) for (const u of polys[f]) { cx += P[u*3]; cy += P[u*3+1]; cz += P[u*3+2]; m++; }
-        cx /= m; cy /= m; cz /= m; x = P[v*3] + (cx - P[v*3]) * T * 2; y = P[v*3+1] + (cy - P[v*3+1]) * T * 2; z = P[v*3+2] + (cz - P[v*3+2]) * T * 2;
+      if (inner.length) { for (const u of inner) { const q = along(v, u); x += q[0]; y += q[1]; z += q[2]; } x /= inner.length; y /= inner.length; z /= inner.length; }
+      else {   // no edge to slide along (one face between two bevelled edges): D away from both edges, in the face
+        const a = sub(P, r.between[i0], v), b = sub(P, r.between[i1], v), la = Math.hypot(...a) || 1, lb = Math.hypot(...b) || 1;
+        const ua = a.map(q => q / la), ub = b.map(q => q / lb), sn = Math.max(0.2, Math.hypot(...cross(ua, ub)));
+        const k = Math.min(D / sn, 0.49 * Math.min(la, lb));
+        x = P[v*3] + (ua[0] + ub[0]) * k; y = P[v*3+1] + (ua[1] + ub[1]) * k; z = P[v*3+2] + (ua[2] + ub[2]) * k;
       }
       const nvx = addV(v, x, y, z); for (const f of fs) rep.set(f * 0x200000 + v, nvx);
     }
@@ -363,7 +377,7 @@ export function bevel(P, polys, edges, t = 0.2) {
   const c = compact(pos, cleaned, src);
   // the two long edges of every strip face (to keep a crease on the bevelled edge sharp)
   const rails = []; for (const f of strip) { const q = c.polys[f]; rails.push(q[0], q[1], q[2], q[3]); }
-  return { ...c, strip: strip.length, rails };
+  return { ...c, strip: strip.length, rails, width: D };
 }
 
 // Bridge two holes with a band of quads (same number of border edges). (a1, b1) and (a2, b2): one border edge of each.
@@ -580,4 +594,63 @@ export function relax(P, polys, sel, iters = 6) {
     for (const [v, p] of nxt) { pos[v*3] = p[0]; pos[v*3+1] = p[1]; pos[v*3+2] = p[2]; }
   }
   return { pos, count: nb.size };
+}
+
+// Faces hidden inside other closed pieces (a strap sunk into a box, a lid face resting on the body): every face
+// whose centre, corners and edge midpoints (pulled 0.5% toward the centre), lifted `eps` off the face, all lie inside another
+// closed piece. Pieces = the connected parts of this mesh (vertices shared) plus `others` ([{ pos, idx }]
+// triangle meshes, assumed closed). Inside = odd ray crossings for at least 2 of 3 directions.
+// Returns the face indices (for deleteFaces).
+export function hiddenFaces(P, polys, others = [], eps = 0) {
+  const nV = P.length / 3, par = Int32Array.from({ length: nV }, (_, i) => i);
+  const find = x => { while (par[x] !== x) x = par[x] = par[par[x]]; return x; };
+  for (const f of polys) for (let k = 1; k < f.length; k++) { const a = find(f[0]), b = find(f[k]); if (a !== b) par[b] = a; }
+  const comp = polys.map(f => find(f[0]));
+  // closed pieces as flat triangle arrays (+ bounds)
+  const solids = [];
+  const addSolid = (id, tri) => {
+    const mn = [Infinity, Infinity, Infinity], mx = [-Infinity, -Infinity, -Infinity];
+    for (let i = 0; i < tri.length; i += 3) for (let k = 0; k < 3; k++) { mn[k] = Math.min(mn[k], tri[i+k]); mx[k] = Math.max(mx[k], tri[i+k]); }
+    solids.push({ id, tri: Float64Array.from(tri), mn, mx });
+  };
+  const byComp = new Map(); polys.forEach((f, i) => { const c = comp[i]; if (!byComp.has(c)) byComp.set(c, []); byComp.get(c).push(i); });
+  const adj = adjacency(polys);
+  for (const [c, fs] of byComp) {
+    let closed = true; for (const i of fs) { const f = polys[i]; for (let k = 0; k < f.length; k++) if ((adj.get(ek(f[k], f[(k + 1) % f.length])) || []).length !== 2) closed = false; }
+    if (!closed) continue;
+    const tri = []; for (const i of fs) { const f = polys[i]; for (let k = 1; k + 1 < f.length; k++) for (const v of [f[0], f[k], f[k + 1]]) tri.push(P[v*3], P[v*3+1], P[v*3+2]); }
+    addSolid(c, tri);
+  }
+  others.forEach((o, j) => { const tri = []; for (const v of o.idx) tri.push(o.pos[v*3], o.pos[v*3+1], o.pos[v*3+2]); addSolid(-1 - j, tri); });
+  if (!solids.length) return [];
+  if (!(eps > 0)) { let mn = Infinity, mx = -Infinity; for (let i = 0; i < P.length; i++) { mn = Math.min(mn, P[i]); mx = Math.max(mx, P[i]); } eps = Math.max(1e-6, (mx - mn) * 1e-3); }
+  const dirs = [[0.5773, 0.5791, 0.5753], [-0.7071, 0.0123, 0.7071], [0.0157, -0.9998, 0.0091]];
+  const crossings = (s, o, d) => {   // Moller-Trumbore, count hits with t > 0
+    let n = 0; const T = s.tri;
+    for (let i = 0; i < T.length; i += 9) {
+      const e1x = T[i+3] - T[i], e1y = T[i+4] - T[i+1], e1z = T[i+5] - T[i+2], e2x = T[i+6] - T[i], e2y = T[i+7] - T[i+1], e2z = T[i+8] - T[i+2];
+      const px = d[1]*e2z - d[2]*e2y, py = d[2]*e2x - d[0]*e2z, pz = d[0]*e2y - d[1]*e2x, det = e1x*px + e1y*py + e1z*pz;
+      if (Math.abs(det) < 1e-14) continue;
+      const inv = 1 / det, tx = o[0] - T[i], ty = o[1] - T[i+1], tz = o[2] - T[i+2], u = (tx*px + ty*py + tz*pz) * inv; if (u < 0 || u > 1) continue;
+      const qx = ty*e1z - tz*e1y, qy = tz*e1x - tx*e1z, qz = tx*e1y - ty*e1x, v = (d[0]*qx + d[1]*qy + d[2]*qz) * inv; if (v < 0 || u + v > 1) continue;
+      if ((e2x*qx + e2y*qy + e2z*qz) * inv > 0) n++;
+    }
+    return n;
+  };
+  const inside = (o, own) => solids.some(s => {
+    if (s.id === own) return false;
+    for (let k = 0; k < 3; k++) if (o[k] < s.mn[k] - 1e-9 || o[k] > s.mx[k] + 1e-9) return false;
+    let odd = 0; for (const d of dirs) if (crossings(s, o, d) & 1) odd++;
+    return odd >= 2;
+  });
+  const out = [];
+  polys.forEach((f, i) => {
+    const n = norm(polyNormal(P, f)), c = polyCenter(P, f), pts = [c];
+    for (let j = 0; j < f.length; j++) {   // corners and edge midpoints, pulled 0.5% toward the centre
+      const a = f[j], b = f[(j + 1) % f.length];
+      pts.push([0, 1, 2].map(k => P[a*3+k] + (c[k] - P[a*3+k]) * 0.005), [0, 1, 2].map(k => (P[a*3+k] + P[b*3+k]) / 2 + (c[k] - (P[a*3+k] + P[b*3+k]) / 2) * 0.005));
+    }
+    if (pts.every(p => inside([p[0] + n[0] * eps, p[1] + n[1] * eps, p[2] + n[2] * eps], comp[i]))) out.push(i);
+  });
+  return out;
 }

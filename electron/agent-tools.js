@@ -57,8 +57,8 @@ module.exports = [
   },
   {
     name: 'bevel_edges',
-    description: 'Chamfer every sharp edge (faces meeting at more than min_angle degrees, default 40) of a part. width is a fraction of the neighbouring edges (0.02..0.45, default 0.12).',
-    inputSchema: { type: 'object', additionalProperties: false, required: ['name'], properties: { name, width: { type: 'number' }, min_angle: { type: 'number' } } },
+    description: 'Chamfer every sharp edge (faces meeting at more than min_angle degrees, default 40) of a part with one width everywhere. size: the width in metres (e.g. 0.01). Without size, width is a fraction of the typical neighbouring edge (0.02..0.45, default 0.12). Either is capped at half the shortest neighbouring edge so chamfers never overlap; the answer reports the width used.',
+    inputSchema: { type: 'object', additionalProperties: false, required: ['name'], properties: { name, size: { type: 'number', description: 'Chamfer width in metres' }, width: { type: 'number' }, min_angle: { type: 'number' } } },
   },
   {
     name: 'insert_loops',
@@ -91,9 +91,19 @@ module.exports = [
     inputSchema: { type: 'object', additionalProperties: false, properties: { views: { type: 'array', items: { type: 'string', enum: ['front', 'back', 'left', 'right', 'top', 'bottom', 'persp', 'persp_back'] } }, size: { type: 'integer', description: '128..1024 (default 384)' }, wireframe: { type: 'boolean' } } },
   },
   {
+    name: 'remove_hidden_faces',
+    description: 'Delete the faces of a (not subdivided) part that lie completely inside another closed piece: a lid face resting on the body, the back of a plate sunk into a box, faces between parts combined into one. Pieces = the separate pieces inside the part plus (against_parts, default true) the other visible parts. Saves texture space on a low-poly bake target. Leaves holes, so do bevels / booleans first; partly covered faces stay.',
+    inputSchema: { type: 'object', additionalProperties: false, required: ['name'], properties: { name, against_parts: { type: 'boolean' } } },
+  },
+  {
+    name: 'unwrap_uv',
+    description: 'Automatically unwrap UVs of a part at its current level (use the low-poly, not subdivided part). angle: chart split angle in degrees (20..80, default 45; smaller = more, flatter islands). texture_size: 512 / 1024 / 2048 / 4096 (default 2048), sets the island padding. OBJ / FBX / GLB exports then carry the UVs.',
+    inputSchema: { type: 'object', additionalProperties: false, required: ['name'], properties: { name, angle: { type: 'number' }, texture_size: { type: 'integer' } } },
+  },
+  {
     name: 'export',
-    description: 'Save the visible parts as a game asset file (glb, fbx or obj) in the BoardPainterLink/exports folder; returns the path.',
-    inputSchema: { type: 'object', additionalProperties: false, required: ['format', 'file_name'], properties: { format: { type: 'string', enum: ['glb', 'fbx', 'obj'] }, file_name: { type: 'string' } } },
+    description: 'Save parts as a game asset file (glb, fbx or obj) in the BoardPainterLink/exports folder; returns the path. parts: the parts to save (default: the visible parts; visibility is restored afterwards). level: "current" (default), "base" (lowest subdivision level = low-poly) or "top" (highest = high-poly). Every part is its own mesh (OBJ: o + usemtl per part), so a baker can make an ID map per part. For texture painting, export the UV-unwrapped low-poly part (obj) and the high-poly parts at level "top" (glb or obj) with matching shapes.',
+    inputSchema: { type: 'object', additionalProperties: false, required: ['format', 'file_name'], properties: { format: { type: 'string', enum: ['glb', 'fbx', 'obj'] }, file_name: { type: 'string' }, parts: { type: 'array', items: { type: 'string' } }, level: { type: 'string', enum: ['current', 'base', 'top'] } } },
   },
   { name: 'undo', description: 'Undo the last steps.', inputSchema: { type: 'object', additionalProperties: false, properties: { steps: { type: 'integer' } } } },
 ];
