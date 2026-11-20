@@ -23,7 +23,7 @@ if not exist "node_modules\electron" (
 )
 
 echo [BoardPainter] 起動しています...
-call npm start
+call npm start -- %*
 if errorlevel 1 (
   echo [BoardPainter] 起動に失敗しました。上のメッセージを確認してください。
   pause
