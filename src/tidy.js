@@ -37,6 +37,8 @@ export function tidyMesh(P0, I0, opt = {}) {
     if (minAng[f] < (opt.minAngle ?? 20) || mx > L * 2.2) { bad[f] = 1; nBad++; }
   }
   if (!nBad) return null;
+  // a low-poly mesh (long faces everywhere) has nothing to compare with: leave it as it is
+  if (!good.length || nBad > nF0 * (opt.maxBadShare ?? 0.5)) return null;
   // region = bad faces + `rings` rings of neighbours
   const vfS = new Uint32Array(nV0 + 1); for (let i = 0; i < I0.length; i++) vfS[I0[i] + 1]++;
   for (let v = 0; v < nV0; v++) vfS[v + 1] += vfS[v];

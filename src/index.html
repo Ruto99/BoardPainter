@@ -5202,7 +5202,7 @@ async function agentCall(tool, a) {
       const e = exactBoolean(W, { pos: gt.P, idx: gt.I, paint: ptT }, { pos: gu.P, idx: gu.I, paint: ptU }, a.op, { base: [BASE_COL.r, BASE_COL.g, BASE_COL.b] });
       if (e.error === 'notClosed') throw new Error('Both parts must be closed (no holes) for an exact boolean.');
       if (e.error === 'empty') throw new Error('The result is empty (do the parts overlap?).');
-      const tidy = tidyMesh(e.pos, e.idx, { mask: e.mask, paint: e.paint }), res = tidy ? { ...e, pos: tidy.pos, idx: tidy.idx, mask: tidy.mask || e.mask, paint: tidy.paint || e.paint } : e;
+      const tidy = a.tidy ? tidyMesh(e.pos, e.idx, { mask: e.mask, paint: e.paint }) : null, res = tidy ? { ...e, pos: tidy.pos, idx: tidy.idx, mask: tidy.mask || e.mask, paint: tidy.paint || e.paint } : e;
       if (t !== active) activate(t);
       pushStruct();
       const rec = newRec(t.name, res.pos, res.idx, res.mask); rec.paint = res.paint; rec.visible = true; rec._agentNew = t._agentNew;

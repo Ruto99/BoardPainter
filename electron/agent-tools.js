@@ -72,8 +72,8 @@ module.exports = [
   },
   {
     name: 'boolean',
-    description: 'Exact boolean of two closed parts: the "target" part is replaced by target union / minus / intersect "tool"; the tool part is hidden (or deleted with delete_tool). Sharp edges stay exact; the cut is tidied so it can be edited further.',
-    inputSchema: { type: 'object', additionalProperties: false, required: ['target', 'tool', 'op'], properties: { target: { type: 'string' }, tool: { type: 'string' }, op: { type: 'string', enum: ['union', 'subtract', 'intersect'] }, delete_tool: { type: 'boolean' } } },
+    description: 'Exact boolean of two closed parts: the "target" part is replaced by target union / minus / intersect "tool"; the tool part is hidden (or deleted with delete_tool). Sharp edges stay exact and the result stays low-poly (triangles). tidy: true rebuilds the thin triangles along the cut, for parts you will sculpt afterwards (makes more triangles). After a boolean the part is triangles, so polygon edits on it are limited: do edit_faces / bevel_edges before booleans.',
+    inputSchema: { type: 'object', additionalProperties: false, required: ['target', 'tool', 'op'], properties: { target: { type: 'string' }, tool: { type: 'string' }, op: { type: 'string', enum: ['union', 'subtract', 'intersect'] }, delete_tool: { type: 'boolean' }, tidy: { type: 'boolean' } } },
   },
   {
     name: 'combine_parts',
