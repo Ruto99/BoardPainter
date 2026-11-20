@@ -1,7 +1,7 @@
 {
   "name": "boardpainter",
   "productName": "BoardPainter",
-  "version": "1.17.0",
+  "version": "1.18.0",
   "description": "無料のデジタルスカルプト（3D造形）デスクトップツール",
   "main": "electron/main.js",
   "author": "BoardPainter",
@@ -17,6 +17,7 @@
     "build:native": "node scripts/build-native.js"
   },
   "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "electron": "38.8.6",
     "electron-builder": "26.18.0",
     "manifold-3d": "^3.5.5",
@@ -42,7 +43,9 @@
     ],
     "asar": true,
     "asarUnpack": [
-      "native/build/Release/bp_native.node"
+      "native/build/Release/bp_native.node",
+      "electron/mcp-server.js",
+      "electron/agent-tools.js"
     ],
     "win": {
       "target": [
