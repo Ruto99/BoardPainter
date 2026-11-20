@@ -652,16 +652,26 @@ dl.keys dd{margin:0;color:var(--muted)}
       <p class="note">形・色・マスクの境目をできるだけ保ったまま三角形を減らします（ゲームや Web 用の軽量化向け）。</p>
     </section>
 
+    <section id="linkSec">
+      <h2>Blender と連携（GoZ 風）</h2>
+      <div class="grid2"><button class="btn primary" id="linkSend" title="選択中のパーツ（今のレベル）を Blender へ送ります">Blender へ送る</button><button class="btn" id="linkSendAll" title="表示中のパーツをすべて Blender へ送ります">表示中を全部送る</button></div>
+      <div class="row" style="margin-top:6px"><input type="checkbox" id="linkOn"><label for="linkOn">Blender から受け取る（送られたらすぐ読み込む）</label></div>
+      <button class="btn full" id="linkAddon" style="margin-top:4px">Blender 用アドオンを保存</button>
+      <p class="note" id="linkInfo">Blender に付属のアドオン（boardpainter_link.py）を入れると、ボタン1つでパーツをやり取りできます（Blender の 3D ビューのサイドバー →「BoardPainter」タブ）。同じ名前で頂点の数が同じパーツが戻ってきたら、形だけを更新します（細分化レベル・色・マスクはそのまま）。受け渡しはホームの「BoardPainterLink」フォルダーで行います。</p>
+    </section>
+
     <section>
       <h2>ブーリアン（パーツ同士の演算）</h2>
       <div class="row"><label for="boolOther">相手のパーツ</label><select id="boolOther" style="width:150px"></select></div>
       <div class="row"><label for="boolMethod">方式</label><select id="boolMethod" style="width:150px"><option value="exact">正確（角を残す）</option><option value="voxel">ボクセル（穴があっても可）</option></select></div>
+      <div class="row"><input type="checkbox" id="boolTidy" checked><label for="boolTidy">切り口を整える（そのまま彫れるように・正確のとき）</label></div>
       <div class="grid3">
         <button class="btn" id="boolUnion">足す</button>
         <button class="btn" id="boolSub">くり抜く</button>
         <button class="btn" id="boolInt">重なりだけ</button>
       </div>
-      <p class="note">選択中のパーツと相手のパーツを演算した結果で、選択中のパーツを置き換えます（相手は非表示にします）。「正確」は角や平らな面をそのまま残します（穴のない閉じたパーツ同士で使えます。穴があるときは自動でボクセルにします）。切り口に細長い三角形ができるので、続けて彫るならリメッシュしてください。「ボクセル」はリメッシュの「細かさ」の精度で作り直します。</p>
+      <p class="note">選択中のパーツと相手のパーツを演算した結果で、選択中のパーツを置き換えます（相手は非表示にします）。「正確」は角や平らな面をそのまま残します（穴のない閉じたパーツ同士で使えます。穴があるときは自動でボクセルにします）。「切り口を整える」は、切り口にできる細長い三角形だけを、まわりと同じ大きさの三角形に作り直します（角はそのまま・彫った細部はさわりません）。「ボクセル」はリメッシュの「細かさ」の精度で作り直します。</p>
+      <button class="btn full" id="boolTidyNow" style="margin-top:6px" title="選択中のパーツの細長い三角形だけを作り直します（ほかのソフトのブーリアン結果や読み込んだモデルにも）">細長い三角形を整える</button>
       <div class="row" style="margin-top:8px"><input type="checkbox" id="boolLive"><label for="boolLive">ライブブーリアン（動かしながら結果を見る）</label></div>
       <div class="row"><label for="boolLiveOp">ライブの演算</label><select id="boolLiveOp"><option value="union">足す</option><option value="subtract" selected>くり抜く</option><option value="intersect">重なりだけ</option></select></div>
       <button class="btn full" id="boolLiveGo" disabled>ライブの結果を確定</button>
@@ -765,6 +775,7 @@ import { encodeEXR } from './exr.js';
 import { levelDisplacement, levelDisplacementCC } from './vdm.js';
 import { loadManifold, exactBoolean } from './exactbool.js';
 import { topologyFromStrokes } from './topobrush.js';
+import { tidyMesh, angleStats } from './tidy.js';
 import { ccTopology, ccPositions, ccAttr, ccMirror, ccGroups } from './subdiv.js';
 import { slicePlane, panelLoops } from './hardsurface.js';
 import { BUILTIN_VDM, builtinVDM, sampleVDM, vdmPreview, stampFromEXR, captureStamp } from './vdmstamp.js';
@@ -4899,7 +4910,14 @@ async function runBoolean(op, method = $('boolMethod').value) {
     if (W) {
       const ob = other.levels.length > 1 ? { pos: other.pos, idx: other.idx } : other;
       const e = exactBoolean(W, { pos, idx, mask, paint }, { pos: ob.pos, idx: ob.idx, mask: other.mask && other.mask.length === ob.pos.length / 3 ? other.mask : null, paint: other.paint && other.paint.length === ob.pos.length ? other.paint : null }, op, { base: [BASE_COL.r, BASE_COL.g, BASE_COL.b] });
-      if (!e.error) return finishBoolean(op, other, e, t0, '正確に');
+      if (!e.error) {
+        let how = '正確に', note2 = '';
+        if ($('boolTidy').checked) {
+          const t = tidyMesh(e.pos, e.idx, { mask: e.mask, paint: e.paint });
+          if (t) { const st = angleStats(t.pos, t.idx); note2 = `。切り口の ${t.region.toLocaleString()} 面を整えました（最も細い角 ${st.worst.toFixed(0)}°）`; Object.assign(e, { pos: t.pos, idx: t.idx, mask: t.mask || e.mask, paint: t.paint || e.paint }); }
+        }
+        return finishBoolean(op, other, e, t0, how, note2);
+      }
       if (e.error === 'empty') { toast(op === 'intersect' ? '重なっている部分がありません' : '結果が空になりました'); return; }
       note = '。穴や重なりのあるパーツなので、ボクセルで計算しました';
     }
@@ -4908,6 +4926,105 @@ async function runBoolean(op, method = $('boolMethod').value) {
     if (!r) { toast(op === 'intersect' ? '重なっている部分がありません' : '演算できませんでした（細かさを下げてください）'); return; }
     finishBoolean(op, other, r, t0, '', note);
   });
+}
+// ---------------- Blender link ----------------
+// A part as OBJ text in BoardPainter's coordinates: its current level, polygon faces when it has them, point colors,
+// and uv per polygon corner when the level has uv
+function partOBJ(rec) {
+  const isA = rec === active, P = isA ? pos : rec.pos, I = isA ? idx : rec.idx, pt = isA ? paint : rec.paint, n = P.length / 3;
+  const L = rec.levels[rec.lv], lp = levelPolys({ ...L, idx: I }), polys = lp ? PE.toPolys(lp.start, lp.idx) : PE.toPolys(triFaces(I).start, I);
+  const out = ['# BoardPainter link 1', 'o ' + rec.name], f7 = x => +x.toPrecision(7);
+  for (let v = 0; v < n; v++) out.push(pt ? `v ${f7(P[v*3])} ${f7(P[v*3+1])} ${f7(P[v*3+2])} ${pt[v*3].toFixed(4)} ${pt[v*3+1].toFixed(4)} ${pt[v*3+2].toFixed(4)}` : `v ${f7(P[v*3])} ${f7(P[v*3+1])} ${f7(P[v*3+2])}`);
+  let uvOf = null;
+  if (hasUV({ ...L, idx: I })) {   // corner uv: a triangle at that vertex whose corners are all in the polygon
+    const vt = Array.from({ length: n }, () => []);
+    for (let i = 0; i < I.length; i++) vt[I[i]].push(i);
+    uvOf = (g, v) => { for (const c of vt[v]) { const t = c - c % 3; if (g.includes(I[t]) && g.includes(I[t+1]) && g.includes(I[t+2])) return c; } return -1; };
+  }
+  let t = 0;
+  for (const g of polys) {
+    if (uvOf) {
+      const cs = g.map(v => uvOf(g, v));
+      if (cs.every(c => c >= 0)) { const ids = cs.map(c => { out.push(`vt ${L.uv[c*2].toFixed(6)} ${L.uv[c*2+1].toFixed(6)}`); return ++t; }); out.push('f ' + g.map((v, k) => `${v + 1}/${ids[k]}`).join(' ')); continue; }
+    }
+    out.push('f ' + g.map(v => v + 1).join(' '));
+  }
+  return out.join('\n') + '\n';
+}
+function parseLinkOBJ(text) {
+  const P = [], C = [], polys = []; let name = null;
+  for (const line of text.split('\n')) {
+    if (line.startsWith('v ')) { const p = line.trim().split(/\s+/); P.push(+p[1], +p[2], +p[3]); if (p.length >= 7) C.push(+p[4], +p[5], +p[6]); }
+    else if (line.startsWith('f ')) { const n = P.length / 3; polys.push(line.trim().split(/\s+/).slice(1).map(t => { const i = parseInt(t, 10); return i < 0 ? n + i : i - 1; })); }
+    else if (line.startsWith('o ')) name = line.slice(2).trim();
+  }
+  const pos = new Float32Array(P), n = pos.length / 3;
+  if (!n || !polys.length || polys.some(g => g.length < 3 || g.some(v => !(v >= 0 && v < n))) || pos.some(x => !Number.isFinite(x))) return null;
+  return { name, pos, polys, paint: C.length === P.length ? new Float32Array(C) : null };
+}
+async function linkSend(recs) {
+  if (!recs.length) { toast('送るパーツがありません'); return; }
+  flushNormals();
+  for (const r of recs) await window.bp.linkSend(r.name, partOBJ(r));
+  if (!S.linkOn) linkSet(true, true);
+  toast(`${recs.length === 1 ? `「${recs[0].name}」` : `${recs.length} 個のパーツ`}を Blender へ送りました（Blender のアドオンで受け取ります。戻ってきたら自動で読み込みます）`);
+}
+async function linkSet(on, quiet) {
+  S.linkOn = on; $('linkOn').checked = on;
+  await window.bp.linkWatch(on);
+  if (on && !quiet) { const i = await window.bp.linkInfo(); toast(`Blender からの受け取りを始めました（${i.dir}）`); }
+}
+let linkBusy = false;
+async function linkReceive(names) {
+  if (linkBusy) return;
+  if (stroke || gizmo.dragging || pe.drag) { setTimeout(() => linkReceive(names), 500); return; }
+  linkBusy = true;
+  try {
+    const done = [];
+    for (const fn of names) {
+      const text = await window.bp.linkTake(fn); if (!text) continue;
+      const m = parseLinkOBJ(text);
+      if (!m) { toast(`「${fn}」を読み込めませんでした`); continue; }
+      done.push(linkApply(m.name || fn.replace(/\.obj$/i, ''), m));
+    }
+    if (done.length) toast(`Blender から ${done.join('・')}`);
+  } finally { linkBusy = false; }
+}
+function linkApply(name, m) {
+  flushNormals();
+  const tri = PE.triangulate(m.pos, m.polys), rec = subtools.find(r => r.name === name);
+  if (rec) {
+    if (rec !== active) activate(rec);
+    const L = active.levels[active.lv], lp = levelPolys(L), same = m.pos.length === pos.length && (lp ? lp.start.length - 1 === m.polys.length : tri.length === idx.length);
+    if (same) {   // same topology: only the shape (and color) changes; levels, mask and groups stay
+      pushUndo();
+      pos.set(m.pos);
+      if (m.paint) { ensurePaint().set(m.paint); }
+      for (let v = 0; v < nV; v++) setColor(v);
+      mirror = active.mirror = L.mirror = computeMirror(pos);
+      computeAllNormals(); geo.computeBoundingBox(); geo.computeBoundingSphere(); bvhDirty = gpuDirty = colorDirty = true; dsDirty = true;
+      scheduleSave();
+      return `「${name}」の形を更新しました`;
+    }
+    pushStruct();
+    const r = newRec(name, m.pos, tri, null); r.paint = m.paint; r.levels[0].polys = PE.fromPolys(m.polys); r.visible = rec.visible;
+    subtools.splice(subtools.indexOf(rec), 1, r); activate(r, true); scheduleSave();
+    return `「${name}」を作り直しました（頂点や面の数が変わったため）`;
+  }
+  pushStruct();
+  const r = newRec(name, m.pos, tri, null); r.paint = m.paint; r.levels[0].polys = PE.fromPolys(m.polys);
+  subtools.push(r); activate(r, true); scheduleSave();
+  return `「${name}」を新しいパーツにしました`;
+}
+function tidyActive() {
+  if (active.levels.length > 1) { toast('細分化レベルがないパーツで使えます（下か上のレベルを削除してください）'); return; }
+  flushNormals();
+  const t0 = performance.now(), b = angleStats(pos, idx), t = tidyMesh(pos, idx, { mask, paint });
+  if (!t) { toast('細長い三角形はありません'); return; }
+  const a = angleStats(t.pos, t.idx);
+  replaceTopology(t.pos, t.idx, { mask: t.mask, paint: t.paint });
+  toast(`${t.region.toLocaleString()} 面を作り直しました（細い三角形 ${b.below.toLocaleString()} → ${a.below.toLocaleString()}・最も細い角 ${b.worst.toFixed(1)}° → ${a.worst.toFixed(1)}°・${((performance.now() - t0) / 1000).toFixed(1)}秒）`);
+  return a;
 }
 function finishBoolean(op, other, r, t0, how, note = '') {
   pushStruct();
@@ -6240,6 +6357,13 @@ $('rtGuideClear').onclick = () => { if (!active.guides) { toast('ガイド線は
 $('decRatio').addEventListener('input', updateDecEstimate);
 $('decGo').onclick = () => decimate();
 $('boolUnion').onclick = () => runBoolean('union');
+$('linkSend').onclick = () => linkSend([active]);
+$('linkSendAll').onclick = () => linkSend(subtools.filter(r => r.visible));
+$('linkOn').onchange = e => linkSet(e.target.checked);
+$('linkAddon').onclick = async () => { const f = await window.bp.linkSaveAddon(); if (f) toast(`アドオンを保存しました: ${f}。Blender の「編集 → プリファレンス → アドオン → ディスクからインストール」で入れてください`); };
+if (!(window.bp && window.bp.linkSend)) $('linkSec').hidden = true;
+else window.bp.onLinkIn(names => { if (S.linkOn) linkReceive(names); });
+$('boolTidyNow').onclick = () => busy(tidyActive);
 $('boolSub').onclick = () => runBoolean('subtract');
 $('boolInt').onclick = () => runBoolean('intersect');
 $('uvAngle').addEventListener('input', () => { $('uvAngleOut').textContent = $('uvAngle').value; });

@@ -23,6 +23,13 @@ contextBridge.exposeInMainWorld('bp', {
   openRead: (offset, length) => ipcRenderer.invoke('bp:open-read', offset, length),
   confirmClose: name => ipcRenderer.invoke('bp:confirm-close', name),
   reveal: p => ipcRenderer.invoke('bp:reveal', p),
+  // Blender link (shared folder)
+  linkInfo: () => ipcRenderer.invoke('bp:link-info'),
+  linkSend: (name, text) => ipcRenderer.invoke('bp:link-send', name, text),
+  linkWatch: on => ipcRenderer.invoke('bp:link-watch', on),
+  linkTake: name => ipcRenderer.invoke('bp:link-take', name),
+  linkSaveAddon: () => ipcRenderer.invoke('bp:link-save-addon'),
+  onLinkIn: cb => ipcRenderer.on('bp:link-in', (_e, names) => cb(names)),
   // autosave on disk, streamed in chunks
   autoBegin: () => ipcRenderer.invoke('bp:auto-begin'),
   autoWrite: (id, chunk) => ipcRenderer.invoke('bp:auto-write', id, chunk),
