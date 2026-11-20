@@ -30,6 +30,12 @@ contextBridge.exposeInMainWorld('bp', {
   linkTake: name => ipcRenderer.invoke('bp:link-take', name),
   linkSaveAddon: () => ipcRenderer.invoke('bp:link-save-addon'),
   onLinkIn: cb => ipcRenderer.on('bp:link-in', (_e, names) => cb(names)),
+  // Claude link (MCP)
+  agentEnable: on => ipcRenderer.invoke('bp:agent-enable', on),
+  agentConfig: () => ipcRenderer.invoke('bp:agent-config'),
+  agentSave: (name, data) => ipcRenderer.invoke('bp:agent-save', name, data),
+  onAgentCall: cb => ipcRenderer.on('bp:agent-call', (_e, m) => cb(m)),
+  agentReply: (id, result) => ipcRenderer.send('bp:agent-reply', id, result),
   // autosave on disk, streamed in chunks
   autoBegin: () => ipcRenderer.invoke('bp:auto-begin'),
   autoWrite: (id, chunk) => ipcRenderer.invoke('bp:auto-write', id, chunk),

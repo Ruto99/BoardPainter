@@ -652,6 +652,14 @@ dl.keys dd{margin:0;color:var(--muted)}
       <p class="note">形・色・マスクの境目をできるだけ保ったまま三角形を減らします（ゲームや Web 用の軽量化向け）。</p>
     </section>
 
+    <section id="agentSec">
+      <h2>Claude と連携（MCP）</h2>
+      <div class="row"><input type="checkbox" id="agentOn"><label for="agentOn">Claude からの操作を許可</label></div>
+      <div class="grid2"><button class="btn" id="agentCopyDesktop" title="Claude Desktop の設定ファイル（claude_desktop_config.json）に貼り付ける内容をコピーします">Claude Desktop 用の設定をコピー</button><button class="btn" id="agentCopyCode" title="Claude Code のターミナルで実行するコマンドをコピーします">Claude Code 用のコマンドをコピー</button></div>
+      <p class="note" id="agentInfo"></p>
+      <p class="note">Claude Desktop や Claude Code から、チャットで頼んで BoardPainter を操作できます（形を置く・押し出す・面取り・ブーリアン・細分化・色・画面の確認・書き出し）。設定をコピーして Claude 側に追加し、ここで「許可」をオンにしてください。受け付けるのはこのパソコンの中からの接続だけです。書き出したファイルはホームの BoardPainterLink/exports に保存されます。</p>
+    </section>
+
     <section id="linkSec">
       <h2>Blender と連携（GoZ 風）</h2>
       <div class="grid2"><button class="btn primary" id="linkSend" title="選択中のパーツ（今のレベル）を Blender へ送ります">Blender へ送る</button><button class="btn" id="linkSendAll" title="表示中のパーツをすべて Blender へ送ります">表示中を全部送る</button></div>
@@ -776,6 +784,7 @@ import { levelDisplacement, levelDisplacementCC } from './vdm.js';
 import { loadManifold, exactBoolean } from './exactbool.js';
 import { topologyFromStrokes } from './topobrush.js';
 import { tidyMesh, angleStats } from './tidy.js';
+import { box, cylinder, sphere, torus, transformPoints } from './primitives.js';
 import { ccTopology, ccPositions, ccAttr, ccMirror, ccGroups } from './subdiv.js';
 import { slicePlane, panelLoops } from './hardsurface.js';
 import { BUILTIN_VDM, builtinVDM, sampleVDM, vdmPreview, stampFromEXR, captureStamp } from './vdmstamp.js';
@@ -4927,6 +4936,331 @@ async function runBoolean(op, method = $('boolMethod').value) {
     finishBoolean(op, other, r, t0, '', note);
   });
 }
+// ---------------- Claude link (MCP tools) ----------------
+// Tool calls arrive from the MCP server through the main process (only while "allow Claude" is on). Each tool works on
+// named parts; parts are edited as polygon meshes and replaced through the usual undoable paths.
+let agentFresh = false;
+const AGENT_VIEWS = { front: [0, 0, 1], back: [0, 0, -1], left: [-1, 0, 0], right: [1, 0, 0], top: [0, 1, 0.0001], bottom: [0, -1, 0.0001], persp: [0.72, 0.55, 1], persp_back: [-0.72, 0.55, -1] };
+function agentPart(name) {
+  const r = subtools.find(x => x.name === name);
+  if (!r) throw new Error(`No part named "${name}". Parts: ${subtools.filter(x => !agentFresh || x._agentNew).map(x => x.name).join(', ') || '(none)'}`);
+  return r;
+}
+function agentGeom(r) {
+  if (r === active) flushNormals();
+  const P = r === active ? pos : r.pos, I = r === active ? idx : r.idx, L = r.levels[r.lv];
+  const lp = levelPolys({ ...L, idx: I });
+  return { P, I, polys: lp ? PE.toPolys(lp.start, lp.idx) : PE.toPolys(triFaces(I).start, I) };
+}
+function agentSingle(r) { if (r.levels.length > 1) throw new Error(`"${r.name}" is subdivided; polygon edits must happen before subdivide (undo the subdivide, edit, then subdivide again).`); }
+const agentColor = hex => { if (!/^#?[0-9a-f]{6}$/i.test(String(hex || ''))) throw new Error(`Colour must be #rrggbb, got "${hex}"`); return new THREE.Color(hex[0] === '#' ? hex : '#' + hex); };
+function agentInfo(r) {
+  const P = r === active ? pos : r.pos, n = P.length / 3, mn = [Infinity, Infinity, Infinity], mx = [-Infinity, -Infinity, -Infinity];
+  for (let i = 0; i < P.length; i += 3) for (let k = 0; k < 3; k++) { mn[k] = Math.min(mn[k], P[i+k]); mx[k] = Math.max(mx[k], P[i+k]); }
+  const L = r.levels[r.lv], lp = levelPolys({ ...L, idx: r === active ? idx : r.idx }), r3 = x => +x.toFixed(3);
+  const pt = r === active ? paint : r.paint;
+  let color = null; if (pt) { const c = new THREE.Color(pt[0], pt[1], pt[2]); color = '#' + c.getHexString(); }
+  return { name: r.name, visible: r.visible, faces: lp ? lp.start.length - 1 : (r === active ? idx : r.idx).length / 3, triangles: (r === active ? idx : r.idx).length / 3, vertices: n,
+    min: mn.map(r3), max: mx.map(r3), size: mx.map((x, k) => r3(x - mn[k])), center: mx.map((x, k) => r3((x + mn[k]) / 2)), color, subdivision: `${r.lv + 1}/${r.levels.length}` };
+}
+const agentSummary = r => { const i = agentInfo(r); return `"${i.name}": ${i.faces} faces (${i.triangles} triangles), size ${i.size.join(' x ')}, centre ${i.center.join(', ')}`; };
+function agentAdd(name, P, polys, color) {
+  const tri = PE.triangulate(P, polys), rec = newRec(subtools.some(x => x.name === name && !(agentFresh && !x._agentNew)) ? uniqueName(name) : name, P, tri, null);
+  rec.levels[0].polys = PE.fromPolys(polys); rec._agentNew = true;
+  if (color) { const c = agentColor(color), pt = new Float32Array(P.length); for (let i = 0; i < pt.length; i += 3) { pt[i] = c.r; pt[i+1] = c.g; pt[i+2] = c.b; } rec.paint = pt; }
+  pushStruct();
+  if (agentFresh) { subtools = []; agentFresh = false; }
+  subtools.push(rec); activate(rec, true); scheduleSave();
+  return rec;
+}
+// replace a part's mesh: res = { pos, polys, src } (src: old vertex for each new vertex, for mask / colour / groups)
+function agentReplace(r, res) {
+  if (r !== active) activate(r);
+  const name = r.name, rec = peReplace(res);
+  rec.name = name; rec._agentNew = r._agentNew; renderSubtoolList();
+  return rec;
+}
+function agentSelect(P, polys, sel) {
+  const out = [];
+  const nrm = sel && sel.normal ? (() => { const l = Math.hypot(...sel.normal) || 1; return sel.normal.map(x => x / l); })() : null, c = Math.cos((sel && sel.max_angle != null ? sel.max_angle : 20) * Math.PI / 180);
+  polys.forEach((f, i) => {
+    if (!sel || sel.all) { out.push(i); return; }
+    if (nrm) { const n = PE.polyNormal(P, f); if (n[0]*nrm[0] + n[1]*nrm[1] + n[2]*nrm[2] < c) return; }
+    if (sel.min || sel.max) { const m = PE.polyCenter(P, f); for (let k = 0; k < 3; k++) { if (sel.min && m[k] < sel.min[k] - 1e-6) return; if (sel.max && m[k] > sel.max[k] + 1e-6) return; } }
+    out.push(i);
+  });
+  return out;
+}
+function agentPatches(polys, faces, individual) {
+  if (individual) return faces.map(f => [f]);
+  const S = new Set(faces), by = PE.adjacency(polys), seen = new Set(), out = [];
+  for (const f of faces) {
+    if (seen.has(f)) continue;
+    const patch = [], q = [f]; seen.add(f);
+    while (q.length) { const g = q.pop(); patch.push(g); const p = polys[g]; for (let k = 0; k < p.length; k++) for (const h of by.get(PE.edgeKey(p[k], p[(k + 1) % p.length])) || []) if (S.has(h) && !seen.has(h)) { seen.add(h); q.push(h); } }
+    out.push(patch);
+  }
+  return out;
+}
+function agentTransformPoints(P, { move, rotate, scale, pivot }) {
+  let c = pivot;
+  if (!c) { const mn = [Infinity, Infinity, Infinity], mx = [-Infinity, -Infinity, -Infinity]; for (let i = 0; i < P.length; i += 3) for (let k = 0; k < 3; k++) { mn[k] = Math.min(mn[k], P[i+k]); mx[k] = Math.max(mx[k], P[i+k]); } c = mn.map((x, k) => (x + mx[k]) / 2); }
+  const sc = scale == null ? [1, 1, 1] : typeof scale === 'number' ? [scale, scale, scale] : scale;
+  transformPoints(P, { move: move || [0, 0, 0], rotate: rotate || [0, 0, 0], scale: sc, pivot: c });
+  return sc[0] * sc[1] * sc[2] < 0;   // mirrored: faces must be flipped
+}
+function agentPositions(r, P) {   // new positions for a part, same topology (undoable)
+  if (r !== active) activate(r);
+  pushUndo(true);
+  pos.set(P);
+  mirror = active.mirror = active.levels[active.lv].mirror = computeMirror(pos);
+  computeAllNormals(); geo.computeBoundingBox(); geo.computeBoundingSphere(); bvhDirty = gpuDirty = true; dsDirty = true; scheduleSave();
+}
+function agentDeform(P, type, axis, toward, amount) {
+  const a = 'xyz'.indexOf(axis), mn = [Infinity, Infinity, Infinity], mx = [-Infinity, -Infinity, -Infinity];
+  for (let i = 0; i < P.length; i += 3) for (let k = 0; k < 3; k++) { mn[k] = Math.min(mn[k], P[i+k]); mx[k] = Math.max(mx[k], P[i+k]); }
+  const c = mn.map((x, k) => (x + mx[k]) / 2), L = mx[a] - mn[a] || 1, others = [0, 1, 2].filter(k => k !== a);
+  for (let i = 0; i < P.length; i += 3) {
+    const t = (P[i+a] - mn[a]) / L;
+    if (type === 'taper' || type === 'bulge') {
+      const f = type === 'taper' ? 1 + amount * t : 1 + amount * (1 - (2 * t - 1) ** 2);
+      for (const k of others) P[i+k] = c[k] + (P[i+k] - c[k]) * f;
+    } else if (type === 'twist') {
+      const ang = (t - 0.5) * amount * Math.PI / 180, [u, w] = others, x = P[i+u] - c[u], y = P[i+w] - c[w];
+      P[i+u] = c[u] + x * Math.cos(ang) - y * Math.sin(ang); P[i+w] = c[w] + x * Math.sin(ang) + y * Math.cos(ang);
+    } else if (type === 'bend') {
+      const b = 'xyz'.indexOf(toward || others[0] === 0 ? (toward || 'x') : (toward || 'xyz'[others[0]]));
+      if (b === a || b < 0) throw new Error('"toward" must be a different axis than "axis"');
+      const th = amount * Math.PI / 180; if (Math.abs(th) < 1e-9) continue;
+      const k = th / L, R = 1 / k, s = P[i+a] - c[a], w = P[i+b] - c[b], phi = s * k;
+      P[i+a] = c[a] + (R - w) * Math.sin(phi); P[i+b] = c[b] + R - (R - w) * Math.cos(phi);
+    } else throw new Error(`Unknown deform type ${type}`);
+  }
+  return P;
+}
+// views of the visible parts, rendered in the draw loop (so the GPU buffers are current)
+const agentShots = [];
+function agentRender(views, size, wire) {
+  return new Promise((resolve, reject) => { agentShots.push({ views, size, wire, resolve, reject }); });
+}
+function agentRunShots() {
+  while (agentShots.length) {
+    const job = agentShots.shift();
+    try {
+      const recs = shownRecs().filter(r => !(agentFresh && !r._agentNew) && (r.visible || r === active));
+      if (!recs.length || (agentFresh && !recs.length)) { job.resolve({ text: 'The scene is empty.', images: [] }); continue; }
+      const sph = sceneBounds(recs).getBoundingSphere(new THREE.Sphere());
+      const saved = { p: camera.position.clone(), t: controls.target.clone(), up: camera.up.clone(), near: camera.near, far: camera.far };
+      const hidden = [ring, ring2, quad, quad2, pe.line, topoView, guideLines, curveLine].filter(o => o && o.visible);
+      for (const o of hidden) o.visible = false;
+      const solo = []; for (const r of subtools) if (r.view && r.view.visible && !recs.includes(r)) { r.view.visible = false; solo.push(r.view); }
+      const wires = [], temp = [];
+      for (const r of recs) {
+        if (!isModelled(r)) continue;
+        const own = r === active ? mesh : r.view; if (!own || !own.visible) continue;
+        const g = agentGeom(r), pt = r === active ? paint : r.paint, hm = new THREE.Mesh(hardEdgeGeometry(g.P, g.I, pt), pt ? viewMatPaint : viewMat);
+        hm.frustumCulled = false; scene.add(hm); temp.push([hm, own]); own.visible = false;
+      }
+      if (job.wire) for (const r of recs) {
+        const g = agentGeom(r), seg = [];
+        for (const f of g.polys) for (let k = 0; k < f.length; k++) { const a = f[k] * 3, b = f[(k + 1) % f.length] * 3; seg.push(g.P[a], g.P[a+1], g.P[a+2], g.P[b], g.P[b+1], g.P[b+2]); }
+        const geo2 = new THREE.BufferGeometry(); geo2.setAttribute('position', new THREE.Float32BufferAttribute(seg, 3));
+        const l = new THREE.LineSegments(geo2, new THREE.LineBasicMaterial({ color: 0x1b1d22, transparent: true, opacity: 0.55 })); l.frustumCulled = false; scene.add(l); wires.push(l);
+      }
+      const W = canvas.width, H = canvas.height, side = Math.min(W, H), out = document.createElement('canvas'); out.width = out.height = job.size;
+      const ctx = out.getContext('2d'), images = [];
+      for (const v of job.views) {
+        const d = AGENT_VIEWS[v]; if (!d) throw new Error(`Unknown view ${v}`);
+        const dir = new V3(...d).normalize(), aspect = W / H, fov = THREE.MathUtils.degToRad(camera.fov) / 2;
+        const dist = sph.radius / Math.sin(Math.min(fov, Math.atan(Math.tan(fov) * aspect))) * 1.08;
+        camera.up.set(0, 1, 0); camera.position.copy(sph.center).addScaledVector(dir, dist); camera.lookAt(sph.center);
+        camera.near = dist / 100; camera.far = dist * 10; camera.updateProjectionMatrix(); camera.updateMatrixWorld();
+        renderer.render(scene, camera);
+        ctx.fillStyle = '#2b2e35'; ctx.fillRect(0, 0, job.size, job.size);
+        ctx.drawImage(canvas, (W - side) / 2, (H - side) / 2, side, side, 0, 0, job.size, job.size);
+        images.push({ data: out.toDataURL('image/png').split(',')[1], label: v });
+      }
+      for (const l of wires) { scene.remove(l); l.geometry.dispose(); }
+      for (const [hm, own] of temp) { scene.remove(hm); hm.geometry.dispose(); own.visible = true; }
+      for (const o of hidden) o.visible = true;
+      for (const m of solo) m.visible = true;
+      camera.position.copy(saved.p); controls.target.copy(saved.t); camera.up.copy(saved.up); camera.near = saved.near; camera.far = saved.far; camera.updateProjectionMatrix(); controls.update();
+      renderer.render(scene, camera);
+      job.resolve({ text: `${images.length} view(s) of ${recs.length} part(s): ${recs.map(r => r.name).join(', ')}`, images });
+    } catch (e) { job.reject(e); }
+  }
+}
+async function agentCall(tool, a) {
+  if (stroke || gizmo.dragging || pe.drag) throw new Error('The user is editing right now; try again in a moment.');
+  if (live) liveStop();
+  if (pe.on) peSet(false);
+  const num = (x, d) => Number.isFinite(+x) ? +x : d;
+  switch (tool) {
+    case 'scene_info': {
+      const parts = subtools.filter(r => !(agentFresh && !r._agentNew)).map(agentInfo);
+      return { text: JSON.stringify({ parts, up: 'y', front: '+z', units: 'metres' }, null, 1) };
+    }
+    case 'new_scene': {
+      pushStruct(); for (const r of subtools) { r.visible = false; r._agentNew = false; } agentFresh = true; syncScene(); renderSubtoolList();
+      return { text: 'New empty scene: add shapes to start.' };
+    }
+    case 'add_shape': {
+      const s = a.shape, rot = a.rotation, at = a.position || [0, 0, 0];
+      let m;
+      if (s === 'box') { const z = a.size || [1, 1, 1]; m = box(z[0], z[1], z[2], { segs: a.segments, taper: a.taper }); }
+      else if (s === 'cylinder' || s === 'cone') m = cylinder(num(a.radius, 0.5), num(a.height, 1), { sides: a.sides, rings: a.rings, rTop: s === 'cone' ? num(a.radius_top, 0) : num(a.radius_top, num(a.radius, 0.5)) });
+      else if (s === 'sphere') m = sphere(num(a.radius, 0.5), { sides: a.sides || 24, rings: a.rings || 12 });
+      else if (s === 'torus') m = torus(num(a.radius, 0.5), num(a.tube_radius, 0.12), { sides: a.sides, rings: a.rings });
+      else throw new Error(`Unknown shape ${s}`);
+      transformPoints(m.pos, { move: at, rotate: rot || [0, 0, 0] });
+      const r = agentAdd(String(a.name || s), m.pos, m.polys, a.color);
+      return { text: `Added ${agentSummary(r)}` };
+    }
+    case 'transform_part': {
+      const r = agentPart(a.name), P = (r === active ? pos : r.pos).slice();
+      if (agentTransformPoints(P, a)) throw new Error('Negative scale would turn the part inside out; use duplicate_part with mirror_x instead.');
+      agentPositions(r, P); return { text: `Moved ${agentSummary(active)}` };
+    }
+    case 'duplicate_part': {
+      const r = agentPart(a.name), g = agentGeom(r), P = g.P.slice(), polys = g.polys.map(f => f.slice());
+      if (a.mirror_x) { for (let i = 0; i < P.length; i += 3) P[i] = -P[i]; for (const f of polys) f.reverse(); }
+      if (a.move || a.rotate) agentTransformPoints(P, { move: a.move, rotate: a.rotate });
+      const pt = r === active ? paint : r.paint, rec = agentAdd(String(a.new_name), P, polys, null);
+      if (pt) { rec.paint = pt.slice(); activate(rec, true); }
+      return { text: `Copied to ${agentSummary(rec)}` };
+    }
+    case 'set_part': {
+      const r = agentPart(a.name);
+      if (a.delete) { if (r !== active) activate(r); if (subtools.length < 2) throw new Error('Cannot delete the last part.'); deleteSub(); return { text: `Deleted "${a.name}"` }; }
+      if (a.new_name) { pushStruct(); r.name = String(a.new_name); }
+      if (a.visible !== undefined) { r.visible = !!a.visible; syncScene(); }
+      if (a.color) {
+        const c = agentColor(a.color); if (r !== active) activate(r); pushUndo();
+        const pt = ensurePaint(); for (let i = 0; i < pt.length; i += 3) { pt[i] = c.r; pt[i+1] = c.g; pt[i+2] = c.b; }
+        for (let v = 0; v < nV; v++) setColor(v); colorDirty = true;
+      }
+      renderSubtoolList(); scheduleSave();
+      return { text: `Updated ${agentSummary(r)}` };
+    }
+    case 'edit_faces': {
+      const r = agentPart(a.name); agentSingle(r);
+      const g = agentGeom(r), faces = agentSelect(g.P, g.polys, a.select);
+      if (!faces.length) throw new Error('No faces match the selection.');
+      if (a.action === 'paint') {
+        const c = agentColor(a.color); if (r !== active) activate(r); pushUndo();
+        const pt = ensurePaint(), vs = new Set(); for (const f of faces) for (const v of g.polys[f]) vs.add(v);
+        for (const v of vs) { pt[v*3] = c.r; pt[v*3+1] = c.g; pt[v*3+2] = c.b; setColor(v); } colorDirty = true; scheduleSave();
+        return { text: `Painted ${faces.length} faces of "${r.name}" (colours are per vertex, so they blend into the neighbouring faces; use separate parts for a crisp colour change)` };
+      }
+      if (a.action === 'delete') { if (faces.length >= g.polys.length) throw new Error('That would delete every face.'); const rec = agentReplace(r, PE.deleteFaces(g.P, g.polys, faces)); return { text: `Deleted ${faces.length} faces: ${agentSummary(rec)}` }; }
+      if (a.action !== 'extrude' && a.action !== 'inset') throw new Error(`Unknown action ${a.action}`);
+      let cur = { pos: g.P, polys: g.polys, src: null }, n0 = g.P.length / 3;
+      const amount = num(a.amount, a.action === 'inset' ? 0.2 : 0.1);
+      for (const patch of agentPatches(g.polys, faces, a.individual)) {
+        const e = PE.extrude(cur.pos, cur.polys, patch), P = new Float32Array(e.pos);
+        let cx = 0, cy = 0, cz = 0; for (const [, v] of e.moved) { cx += P[v*3]; cy += P[v*3+1]; cz += P[v*3+2]; } const k = e.moved.length || 1; cx /= k; cy /= k; cz /= k;
+        for (const [c, v, nn] of e.moved) {
+          if (a.action === 'extrude') for (let q = 0; q < 3; q++) P[c*3+q] = P[v*3+q] + nn[q] * amount;
+          else { const t = Math.max(0, Math.min(0.95, amount)); P[c*3] = P[v*3] + (cx - P[v*3]) * t; P[c*3+1] = P[v*3+1] + (cy - P[v*3+1]) * t; P[c*3+2] = P[v*3+2] + (cz - P[v*3+2]) * t; }
+        }
+        const src = Int32Array.from(e.src, s => cur.src ? cur.src[s] ?? s : s);
+        cur = { pos: P, polys: e.polys, src };
+      }
+      if (!cur.src) cur.src = Int32Array.from({ length: cur.pos.length / 3 }, (_, i) => i < n0 ? i : 0);
+      const rec = agentReplace(r, cur);
+      return { text: `${a.action === 'extrude' ? 'Extruded' : 'Inset'} ${faces.length} faces: ${agentSummary(rec)}` };
+    }
+    case 'bevel_edges': {
+      const r = agentPart(a.name); agentSingle(r);
+      const g = agentGeom(r), by = PE.adjacency(g.polys), c = Math.cos(num(a.min_angle, 40) * Math.PI / 180), fn = g.polys.map(f => PE.polyNormal(g.P, f)), edges = [];
+      for (const [k, fs] of by) if (fs.length === 2) { const x = fn[fs[0]], y = fn[fs[1]]; if (x[0]*y[0] + x[1]*y[1] + x[2]*y[2] < c) edges.push([Math.floor(k / 0x200000), k % 0x200000]); }
+      if (!edges.length) throw new Error('No edges are that sharp.');
+      const res = PE.bevel(g.P, g.polys, edges, Math.max(0.02, Math.min(0.45, num(a.width, 0.12))));
+      if (!res) throw new Error('These edges could not be bevelled (open borders or more than 2 faces on an edge).');
+      const rec = agentReplace(r, res); return { text: `Bevelled ${edges.length} edges: ${agentSummary(rec)}` };
+    }
+    case 'insert_loops': {
+      const r = agentPart(a.name); agentSingle(r);
+      const g = agentGeom(r), ax = [0, 0, 0]; ax['xyz'.indexOf(a.axis)] = 1;
+      let best = null, bl = 0;
+      for (const f of g.polys) { if (f.length !== 4) continue; for (let k = 0; k < 4; k++) { const u = f[k], w = f[(k + 1) % 4], d = [g.P[w*3] - g.P[u*3], g.P[w*3+1] - g.P[u*3+1], g.P[w*3+2] - g.P[u*3+2]], L = Math.hypot(...d); if (L < 1e-9) continue; const al = Math.abs(d[0]*ax[0] + d[1]*ax[1] + d[2]*ax[2]) / L; if (al > 0.85 && L > bl) { bl = L; best = [u, w]; } } }
+      if (!best) throw new Error(`No quad edges run along ${a.axis}.`);
+      const res = PE.insertLoops(g.P, g.polys, best[0], best[1], Math.max(1, Math.min(9, a.count | 0 || 3)));
+      if (!res) throw new Error('Could not insert loops there.');
+      if (!res.src) res.src = Int32Array.from({ length: res.pos.length / 3 }, (_, i) => i < g.P.length / 3 ? i : 0);
+      const rec = agentReplace(r, res); return { text: `Inserted loops (${res.loop} quads cut): ${agentSummary(rec)}` };
+    }
+    case 'deform': {
+      const r = agentPart(a.name), P = (r === active ? pos : r.pos).slice();
+      agentDeform(P, a.type, a.axis, a.toward, num(a.amount, 0));
+      agentPositions(r, P); return { text: `Deformed (${a.type}) ${agentSummary(active)}` };
+    }
+    case 'boolean': {
+      const t = agentPart(a.target), u = agentPart(a.tool); if (t === u) throw new Error('target and tool must be different parts');
+      const W = await loadManifold(), gt = agentGeom(t), gu = agentGeom(u);
+      const ptT = t === active ? paint : t.paint, ptU = u === active ? paint : u.paint;
+      const e = exactBoolean(W, { pos: gt.P, idx: gt.I, paint: ptT }, { pos: gu.P, idx: gu.I, paint: ptU }, a.op, { base: [BASE_COL.r, BASE_COL.g, BASE_COL.b] });
+      if (e.error === 'notClosed') throw new Error('Both parts must be closed (no holes) for an exact boolean.');
+      if (e.error === 'empty') throw new Error('The result is empty (do the parts overlap?).');
+      const tidy = tidyMesh(e.pos, e.idx, { mask: e.mask, paint: e.paint }), res = tidy ? { ...e, pos: tidy.pos, idx: tidy.idx, mask: tidy.mask || e.mask, paint: tidy.paint || e.paint } : e;
+      if (t !== active) activate(t);
+      pushStruct();
+      const rec = newRec(t.name, res.pos, res.idx, res.mask); rec.paint = res.paint; rec.visible = true; rec._agentNew = t._agentNew;
+      subtools.splice(subtools.indexOf(t), 1, rec);
+      if (a.delete_tool) subtools.splice(subtools.indexOf(u), 1); else u.visible = false;
+      activate(rec, true); scheduleSave();
+      return { text: `${a.op} done: ${agentSummary(rec)}. "${u.name}" was ${a.delete_tool ? 'deleted' : 'hidden'}.` };
+    }
+    case 'combine_parts': {
+      const rs = (a.names || []).map(agentPart); if (rs.length < 2) throw new Error('Give at least two parts.');
+      const gs = rs.map(agentGeom), anyPaint = rs.some(r => r === active ? paint : r.paint);
+      let n = 0; for (const g of gs) n += g.P.length / 3;
+      const P = new Float32Array(n * 3), pt = anyPaint ? new Float32Array(n * 3) : null, polys = []; let o = 0;
+      rs.forEach((r, j) => {
+        const g = gs[j], m = g.P.length / 3, src = r === active ? paint : r.paint; P.set(g.P, o * 3);
+        if (pt) for (let v = 0; v < m; v++) { pt[(o+v)*3] = src ? src[v*3] : BASE_COL.r; pt[(o+v)*3+1] = src ? src[v*3+1] : BASE_COL.g; pt[(o+v)*3+2] = src ? src[v*3+2] : BASE_COL.b; }
+        for (const f of g.polys) polys.push(f.map(v => v + o)); o += m;
+      });
+      pushStruct();
+      const tri = PE.triangulate(P, polys), rec = newRec(String(a.new_name), P, tri, null);
+      rec.levels[0].polys = PE.fromPolys(polys); rec.paint = pt; rec._agentNew = true;
+      subtools = subtools.filter(r => !rs.includes(r)); subtools.push(rec); activate(rec, true); scheduleSave();
+      return { text: `Combined into ${agentSummary(rec)}` };
+    }
+    case 'subdivide': {
+      const r = agentPart(a.name); if (r !== active) activate(r);
+      if (active.lv < active.levels.length - 1) setLevel(active.levels.length - 1, true);
+      if (a.keep_sharp !== false && active.levels.length === 1) {
+        const g = agentGeom(active), by = PE.adjacency(g.polys), c = Math.cos(40 * Math.PI / 180), fn = g.polys.map(f => PE.polyNormal(g.P, f)), set = new Set();
+        for (const [k, fs] of by) if (fs.length === 2) { const x = fn[fs[0]], y = fn[fs[1]]; if (x[0]*y[0] + x[1]*y[1] + x[2]*y[2] < c) set.add(k); }
+        if (set.size) { pushCrease(); setCrease(keysToPairs(set)); }
+      }
+      const k = Math.max(1, Math.min(3, a.levels | 0 || 1));
+      for (let i = 0; i < k; i++) { if (nF * 4 > maxPolys()) break; addLevel(); }
+      return { text: `Subdivided: ${agentSummary(active)}` };
+    }
+    case 'render': {
+      const views = a.views && a.views.length ? a.views : ['persp'], size = Math.max(128, Math.min(1024, a.size | 0 || 384));
+      return agentRender(views, size, !!a.wireframe);
+    }
+    case 'export': {
+      const make = { glb: makeGLB, fbx: makeFBX, obj: makeOBJ }[a.format]; if (!make) throw new Error('format must be glb, fbx or obj');
+      if (agentFresh) throw new Error('The scene is empty.');
+      const prevActiveVisible = active.visible, f = await make(); if (!f) throw new Error('Nothing to export.');
+      const base = String(a.file_name || 'asset').replace(/\.(glb|fbx|obj)$/i, ''), p = await window.bp.agentSave(`${base}.${a.format}`, await f.blob.arrayBuffer());
+      active.visible = prevActiveVisible;
+      return { text: `Saved ${p} (${(f.blob.size / 1024).toFixed(1)} KB, visible parts: ${shownRecs().map(r => r.name).join(', ')})` };
+    }
+    case 'undo': { const k = Math.max(1, Math.min(50, a.steps | 0 || 1)); for (let i = 0; i < k; i++) undo(); return { text: `Undid ${k} step(s). ${subtools.filter(r => r.visible).map(agentSummary).join('; ')}` }; }
+  }
+  throw new Error(`Unknown tool ${tool}`);
+}
+async function agentSet(on) {
+  S.agentOn = on; $('agentOn').checked = on;
+  await window.bp.agentEnable(on);
+  $('agentInfo').textContent = on ? 'Claude からの操作を受け付けています（このパソコンの中だけ）。' : '';
+}
+
 // ---------------- Blender link ----------------
 // A part as OBJ text in BoardPainter's coordinates: its current level, polygon faces when it has them, point colors,
 // and uv per polygon corner when the level has uv
@@ -6050,6 +6384,32 @@ async function makeFBX() {
   const blob = await encodeFBX(meshes, { unit: 1 });
   return { blob, name: fileBase() + '.fbx' };
 }
+// Hard-surface look for polygon-modelled parts: per-corner normals that are averaged only across faces meeting at
+// less than `deg` degrees ("auto smooth"), so flat faces stay flat and sharp edges stay sharp. Non-indexed geometry.
+function hardEdgeGeometry(P, I, pt, deg = 40) {
+  const nF = I.length / 3, fn = new Float32Array(nF * 3), nV = P.length / 3, st = new Uint32Array(nV + 1);
+  for (let f = 0; f < nF; f++) {
+    const a = I[f*3]*3, b = I[f*3+1]*3, c = I[f*3+2]*3, ux = P[b]-P[a], uy = P[b+1]-P[a+1], uz = P[b+2]-P[a+2], wx = P[c]-P[a], wy = P[c+1]-P[a+1], wz = P[c+2]-P[a+2];
+    fn[f*3] = uy*wz - uz*wy; fn[f*3+1] = uz*wx - ux*wz; fn[f*3+2] = ux*wy - uy*wx;   // area weighted
+  }
+  for (let i = 0; i < I.length; i++) st[I[i] + 1]++;
+  for (let v = 0; v < nV; v++) st[v + 1] += st[v];
+  const vf = new Uint32Array(I.length), fill = st.slice(0, nV); for (let i = 0; i < I.length; i++) vf[fill[I[i]]++] = (i / 3) | 0;
+  const c = Math.cos(deg * Math.PI / 180), unit = f => { const x = fn[f*3], y = fn[f*3+1], z = fn[f*3+2], l = Math.hypot(x, y, z) || 1; return [x / l, y / l, z / l]; };
+  const pos2 = new Float32Array(I.length * 3), nrm2 = new Float32Array(I.length * 3), col2 = pt ? new Float32Array(I.length * 3) : null;
+  for (let i = 0; i < I.length; i++) {
+    const v = I[i], f = (i / 3) | 0, n0 = unit(f); let x = 0, y = 0, z = 0;
+    for (let j = st[v]; j < st[v + 1]; j++) { const g = vf[j], n = unit(g); if (n[0]*n0[0] + n[1]*n0[1] + n[2]*n0[2] >= c) { x += fn[g*3]; y += fn[g*3+1]; z += fn[g*3+2]; } }
+    const l = Math.hypot(x, y, z) || 1;
+    for (let k = 0; k < 3; k++) { pos2[i*3+k] = P[v*3+k]; if (col2) col2[i*3+k] = pt[v*3+k]; }
+    nrm2[i*3] = x / l; nrm2[i*3+1] = y / l; nrm2[i*3+2] = z / l;
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos2, 3)); g.setAttribute('normal', new THREE.BufferAttribute(nrm2, 3));
+  if (col2) g.setAttribute('color', new THREE.BufferAttribute(col2, 3));
+  return g;
+}
+const isModelled = r => !!levelPolys(r.levels[0]) || r._agentNew;
 async function makeGLB() {
   flushNormals();
   const tex = new Map();
@@ -6067,8 +6427,12 @@ async function makeGLB() {
       tm.name = r.name; root.add(tm); continue;
     }
     let mm = mat;
-    if (r.paint && r.paint.length === r.pos.length) { g.setAttribute('color', new THREE.BufferAttribute(r.paint.slice(), 3)); mm = new THREE.MeshStandardMaterial({ color:0xffffff, roughness:0.6, vertexColors:true }); }
-    const m = new THREE.Mesh(g, mm); m.name = r.name; root.add(m);
+    const painted = r.paint && r.paint.length === r.pos.length;
+    if (painted) mm = new THREE.MeshStandardMaterial({ color:0xffffff, roughness:0.6, vertexColors:true });
+    // polygon-modelled parts: flat faces and sharp edges (split normals); sculpted parts: smooth
+    const gg = isModelled(r) ? hardEdgeGeometry(r.pos, r.idx, painted ? r.paint : null) : g;
+    if (painted && gg === g) g.setAttribute('color', new THREE.BufferAttribute(r.paint.slice(), 3));
+    const m = new THREE.Mesh(gg, mm); m.name = r.name; root.add(m);
   }
   return new Promise(res => new GLTFExporter().parse(root, r => res({ blob: new Blob([r], { type:'model/gltf-binary' }), name: fileBase() + '.glb' }), err => { toast('GLB書き出しに失敗しました'); console.error(err); res(null); }, { binary:true }));
 }
@@ -6363,6 +6727,18 @@ $('linkOn').onchange = e => linkSet(e.target.checked);
 $('linkAddon').onclick = async () => { const f = await window.bp.linkSaveAddon(); if (f) toast(`アドオンを保存しました: ${f}。Blender の「編集 → プリファレンス → アドオン → ディスクからインストール」で入れてください`); };
 if (!(window.bp && window.bp.linkSend)) $('linkSec').hidden = true;
 else window.bp.onLinkIn(names => { if (S.linkOn) linkReceive(names); });
+if (!(window.bp && window.bp.agentEnable)) $('agentSec').hidden = true;
+else {
+  $('agentOn').onchange = e => agentSet(e.target.checked);
+  const copy = async text => { try { await navigator.clipboard.writeText(text); toast('コピーしました'); } catch { prompt('コピーしてください', text); } };
+  $('agentCopyDesktop').onclick = async () => { const c = await window.bp.agentConfig(); copy(JSON.stringify({ mcpServers: { boardpainter: c } }, null, 2)); };
+  $('agentCopyCode').onclick = async () => { const c = await window.bp.agentConfig(), q = x => `"${x}"`; copy(`claude mcp add boardpainter --env ELECTRON_RUN_AS_NODE=1 -- ${q(c.command)} ${c.args.map(q).join(' ')}`); };
+  window.bp.onAgentCall(async ({ id, tool, args }) => {
+    if (!S.agentOn) { window.bp.agentReply(id, { error: 'Claude からの操作は許可されていません（BoardPainter の「Claude と連携」でオンにしてください）' }); return; }
+    try { const r = await agentCall(tool, args); window.bp.agentReply(id, r); }
+    catch (e) { console.warn('agent', tool, e); window.bp.agentReply(id, { error: String(e && e.message || e) }); }
+  });
+}
 $('boolTidyNow').onclick = () => busy(tidyActive);
 $('boolSub').onclick = () => runBoolean('subtract');
 $('boolInt').onclick = () => runBoolean('intersect');
@@ -6680,6 +7056,7 @@ renderer.setAnimationLoop(() => {
   if (hideCage) mesh.visible = false;
   renderer.render(scene, camera);
   if (hideCage) mesh.visible = wasVis;
+  if (agentShots.length) agentRunShots();
 });
 
 // ---------------- boot ----------------

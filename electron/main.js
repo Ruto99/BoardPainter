@@ -212,6 +212,52 @@ ipcMain.handle('bp:link-take', async (_e, name) => {
   if (!f.toLowerCase().endsWith('.obj')) return null;
   try { const t = await fs.readFile(f, 'utf8'); await fs.unlink(f).catch(() => {}); linkLast = ''; return t; } catch { return null; }
 });
+// ---------------- Claude link (MCP) ----------------
+// While allowed, a small HTTP server on 127.0.0.1 (random port, random token in claude-bridge.json next to the link
+// folders) takes tool calls from the MCP server (electron/mcp-server.js) and hands them to the page.
+const http = require('node:http'), crypto = require('node:crypto');
+let agentServer = null, agentToken = '', agentSeq = 0;
+const agentWaiting = new Map();
+const bridgePath = () => path.join(linkRoot(), 'claude-bridge.json');
+async function agentStop() {
+  if (agentServer) { agentServer.close(); agentServer = null; }
+  for (const [, w] of agentWaiting) w({ error: 'BoardPainter stopped the Claude link.' });
+  agentWaiting.clear();
+  await fs.unlink(bridgePath()).catch(() => {});
+}
+async function agentStart() {
+  await agentStop();
+  await linkDirs();
+  agentToken = crypto.randomBytes(24).toString('hex');
+  agentServer = http.createServer((req, res) => {
+    if (req.method !== 'POST' || req.url !== '/call' || req.headers['x-bp-token'] !== agentToken) { res.writeHead(403); res.end(); return; }
+    const chunks = []; let size = 0;
+    req.on('data', c => { size += c.length; if (size > 4e6) req.destroy(); else chunks.push(c); });
+    req.on('end', () => {
+      let msg; try { msg = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { res.writeHead(400); res.end(); return; }
+      const id = ++agentSeq, done = r => { agentWaiting.delete(id); res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(r)); };
+      if (!win) { done({ error: 'BoardPainter has no window open.' }); return; }
+      agentWaiting.set(id, done);
+      win.webContents.send('bp:agent-call', { id, tool: String(msg.tool || ''), args: msg.args && typeof msg.args === 'object' ? msg.args : {} });
+    });
+  });
+  await new Promise(r => agentServer.listen(0, '127.0.0.1', r));
+  await fs.writeFile(bridgePath(), JSON.stringify({ port: agentServer.address().port, token: agentToken, pid: process.pid }), { mode: 0o600 });
+}
+ipcMain.on('bp:agent-reply', (_e, id, result) => { const w = agentWaiting.get(id); if (w) w(result || { error: 'no result' }); });
+ipcMain.handle('bp:agent-enable', async (_e, on) => { if (on) await agentStart(); else await agentStop(); return !!on; });
+ipcMain.handle('bp:agent-config', () => {
+  // the MCP server runs from outside the asar archive (asarUnpack), with this executable in Node mode
+  const script = path.join(__dirname, 'mcp-server.js').replace(/app\.asar([\\/])/, 'app.asar.unpacked$1');
+  return { command: process.execPath, args: [script], env: { ELECTRON_RUN_AS_NODE: '1' } };
+});
+ipcMain.handle('bp:agent-save', async (_e, name, data) => {
+  const d = path.join(await linkDirs(), 'exports'); await fs.mkdir(d, { recursive: true });
+  const f = path.join(d, linkName(path.basename(String(name))));
+  await fs.writeFile(f, Buffer.from(data));
+  return f;
+});
+app.on('will-quit', () => { if (agentServer) try { require('node:fs').unlinkSync(bridgePath()); } catch {} });
 ipcMain.handle('bp:link-save-addon', async () => {
   const r = await dialog.showSaveDialog(win, { title: 'Blender 用アドオンを保存', defaultPath: path.join(lastDir(), 'boardpainter_link.py'), filters: [{ name: 'Python', extensions: ['py'] }] });
   if (r.canceled || !r.filePath) return null;
