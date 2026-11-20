@@ -5233,7 +5233,7 @@ async function agentCall(tool, a) {
       if (a.keep_sharp !== false && active.levels.length === 1) {
         const g = agentGeom(active), by = PE.adjacency(g.polys), c = Math.cos(40 * Math.PI / 180), fn = g.polys.map(f => PE.polyNormal(g.P, f)), set = new Set();
         for (const [k, fs] of by) if (fs.length === 2) { const x = fn[fs[0]], y = fn[fs[1]]; if (x[0]*y[0] + x[1]*y[1] + x[2]*y[2] < c) set.add(k); }
-        if (set.size) { pushCrease(); setCrease(keysToPairs(set)); }
+        if (set.size) { PE.lockCreaseCorners(g.P, g.polys, set); pushCrease(); setCrease(keysToPairs(set)); }
       }
       const k = Math.max(1, Math.min(3, a.levels | 0 || 1));
       for (let i = 0; i < k; i++) { if (nF * 4 > maxPolys()) break; addLevel(); }
@@ -5522,6 +5522,7 @@ function creaseByAngle(deg = 30) {
   const M = peMeshOf(), by = PE.adjacency(M.polys), c = Math.cos(deg * Math.PI / 180), set = new Set();
   const fn = M.polys.map(f => PE.polyNormal(pos, f));
   for (const [k, fs] of by) if (fs.length === 2) { const a = fn[fs[0]], b = fn[fs[1]]; if (a[0]*b[0] + a[1]*b[1] + a[2]*b[2] < c) set.add(k); }
+  if (set.size) PE.lockCreaseCorners(pos, M.polys, set);   // corners where two creases meet stay sharp
   pushCrease(); setCrease(keysToPairs(set));
   toast(set.size ? `${set.size} 本の角の辺にクリースを付けました` : '30°以上の角はありませんでした');
 }

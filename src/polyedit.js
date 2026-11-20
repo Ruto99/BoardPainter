@@ -306,12 +306,22 @@ export function bevel(P, polys, edges, t = 0.2, opt = {}) {
   const at = (v, x, s) => [P[v*3] + (P[x*3] - P[v*3]) * s, P[v*3+1] + (P[x*3+1] - P[v*3+1]) * s, P[v*3+2] + (P[x*3+2] - P[v*3+2]) * s];
   const len = (v, x) => Math.hypot(...sub(P, x, v));
   // edges at the bevelled vertices that are not bevelled themselves (all of them if every edge is bevelled):
-  // the width is t x their median length, at most 0.49 x the shortest so strips never overlap
-  const side = [], every = [];
-  for (const [v] of cnt) for (const f of vf[v]) { const g = polys[f], k = g.indexOf(v); for (const x of [g[(k + 1) % g.length], g[(k + g.length - 1) % g.length]]) {
-    const l = len(v, x); if (l < 1e-12) continue; every.push(l); if (!E.has(ek(v, x))) side.push(l); } }
+  // the width is t x their median length. It is at most 0.49 x the shortest edge there, bevelled edges included
+  // where bevelled edges meet at an angle (their chamfers would overlap); a chain running straight through a
+  // vertex (an edge loop) does not limit it.
+  const side = [], every = [], limit = [];
+  for (const [v, c] of cnt) {
+    const nb = new Set(); for (const f of vf[v]) { const g = polys[f], k = g.indexOf(v); nb.add(g[(k + 1) % g.length]); nb.add(g[(k + g.length - 1) % g.length]); }
+    const bev = [...nb].filter(x => E.has(ek(v, x)));
+    const straight = c === 2 && bev.length === 2 && dot(norm(sub(P, bev[0], v)), norm(sub(P, bev[1], v))) < -0.9;
+    for (const x of nb) {
+      const l = len(v, x); if (l < 1e-12) continue; every.push(l);
+      const b = E.has(ek(v, x)); if (!b) side.push(l);
+      if (!b || !straight) limit.push(l);
+    }
+  }
   const ls = (side.length ? side : every).sort((a, b) => a - b); if (!ls.length) return null;
-  const D = Math.min(0.49 * ls[0], opt.distance > 0 ? opt.distance : T * ls[ls.length >> 1]);
+  const D = Math.min(0.49 * Math.min(...(limit.length ? limit : every)), opt.distance > 0 ? opt.distance : T * ls[ls.length >> 1]);
   const along = (v, x) => at(v, x, Math.min(0.49, D / Math.max(len(v, x), 1e-12)));   // D along the edge v -> x
   for (const [v, c] of cnt) {
     const r = ringAt(polys, vf[v], v); if (!r) return null;
@@ -693,4 +703,26 @@ export function creaseNormals(P, faces, isCrease) {
     corner[c] = id[r];
   }
   return { corner, normals: Float32Array.from(out) };
+}
+
+// Corners for crease sets made by angle: subdivision moves a vertex on exactly 2 crease edges along their curve,
+// which rounds off a corner where the two creases meet at an angle (the face corners of a bevelled box shrink
+// inward by ~1/8 of the edges). Every edge at such a vertex is added to `keys` (edge keys as adjacency() uses),
+// so it has 3+ creases and stays put. Creases that continue straight through (within ~25 degrees) are left alone.
+export function lockCreaseCorners(P, polys, keys) {
+  const nV = P.length / 3, at = Array.from({ length: nV }, () => []);   // vertex -> its edges' other ends
+  const seen = new Set();
+  for (const f of polys) for (let k = 0; k < f.length; k++) {
+    const a = f[k], b = f[(k + 1) % f.length], key = ek(a, b); if (seen.has(key)) continue; seen.add(key);
+    at[a].push(b); at[b].push(a);
+  }
+  const add = [];
+  for (let v = 0; v < nV; v++) {
+    const cr = at[v].filter(x => keys.has(ek(v, x))); if (cr.length !== 2) continue;
+    const d1 = norm(sub(P, cr[0], v)), d2 = norm(sub(P, cr[1], v));
+    if (dot(d1, d2) < -0.9) continue;   // a crease running through
+    for (const x of at[v]) add.push(ek(v, x));
+  }
+  for (const k of add) keys.add(k);
+  return add.length;
 }
