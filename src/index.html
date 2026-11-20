@@ -6213,6 +6213,7 @@ async function importFile(file) {
     if (!recs.length) { toast('有効なポリゴンがありませんでした'); return; }
     const replace = fresh;           // nothing done yet in this project: the import becomes the project
     pushStruct();
+    agentFresh = false;              // after the Claude link's new_scene: the imported parts are the new scene's
     if (replace) { subtools = recs; projectName = name; projectPath = null; $('fname').value = name; }
     else insertAfterActive(...recs);
     activate(recs[0], true);
