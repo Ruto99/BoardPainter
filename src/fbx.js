@@ -61,7 +61,7 @@ async function nodeBytes(node, at, out) {
   return off;
 }
 
-// meshes: [{ name, pos: Float32Array, polys: [[v...]], normals?: Float32Array (per vertex), colors?: Float32Array (sRGB rgb per vertex),
+// meshes: [{ name, pos: Float32Array, polys: [[v...]], normals?: Float32Array (per vertex), cornerNormals?: Float32Array (per face corner, overrides normals), colors?: Float32Array (sRGB rgb per vertex),
 //            uv?: { idx: per-polygon-corner uv index list, uv: Float32Array pairs } | null, crease?: Set of 'a,b' edges (a < b) }]
 export async function encodeFBX(meshes, opt = {}) {
   let id = 1000000;
@@ -90,9 +90,9 @@ export async function encodeFBX(meshes, opt = {}) {
       kids.push(N('LayerElementEdgeCrease', [I(0)], [N('Version', [I(101)]), N('Name', [Sx('')]), N('MappingInformationType', [Sx('ByEdge')]), N('ReferenceInformationType', [Sx('Direct')]), N('EdgeCrease', [Ad(Float64Array.from(cr))])]));
       layer.push('LayerElementEdgeCrease');
     }
-    if (m.normals) {
-      const n = new Float64Array(corners.length * 3);
-      corners.forEach((v, i) => { n[i*3] = m.normals[v*3]; n[i*3+1] = m.normals[v*3+1]; n[i*3+2] = m.normals[v*3+2]; });
+    if (m.normals || m.cornerNormals) {
+      const n = new Float64Array(corners.length * 3), cn = m.cornerNormals;   // cornerNormals: per face corner, polys in order
+      corners.forEach((v, i) => { if (cn) { n[i*3] = cn[i*3]; n[i*3+1] = cn[i*3+1]; n[i*3+2] = cn[i*3+2]; } else { n[i*3] = m.normals[v*3]; n[i*3+1] = m.normals[v*3+1]; n[i*3+2] = m.normals[v*3+2]; } });
       kids.push(N('LayerElementNormal', [I(0)], [N('Version', [I(101)]), N('Name', [Sx('')]), N('MappingInformationType', [Sx('ByPolygonVertex')]), N('ReferenceInformationType', [Sx('Direct')]), N('Normals', [Ad(n)])]));
       layer.push('LayerElementNormal');
     }

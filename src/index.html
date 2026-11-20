@@ -6344,26 +6344,36 @@ function makeOBJ() {
   flushNormals();
   const recs = shownRecs();
   const out = [`# BoardPainter\n# subtools ${recs.length}\n`];
-  let chunk = '', base = 0, vtBase = 0;
+  let chunk = '', base = 0, vtBase = 0, vnBase = 0;
   const flush = () => { if (chunk.length > 1e6) { out.push(chunk); chunk = ''; } };
   for (const r of recs) {
     const p = r.pos, ix = r.idx, n = r === active ? nrm : computeNormals(p, ix), vn = p.length / 3;
     chunk += `o ${r.name.replace(/\s+/g, '_')}\nusemtl ${r.name.replace(/\s+/g, '_')}\n`;   // one material per part (ID maps in bakers)
     const pc = r.paint && r.paint.length === p.length ? r.paint : null;   // vertex colors as "v x y z r g b" (sRGB)
     for (let i = 0; i < p.length; i += 3) { chunk += `v ${p[i].toFixed(6)} ${p[i+1].toFixed(6)} ${p[i+2].toFixed(6)}${pc ? ` ${lin2srgb(pc[i]).toFixed(4)} ${lin2srgb(pc[i+1]).toFixed(4)} ${lin2srgb(pc[i+2]).toFixed(4)}` : ''}\n`; flush(); }
-    for (let i = 0; i < n.length; i += 3) { chunk += `vn ${n[i].toFixed(4)} ${n[i+1].toFixed(4)} ${n[i+2].toFixed(4)}\n`; flush(); }
     const LL = r.levels[r.lv], PL = levelPolys(LL);
+    // the faces written below; on a subdivided level with creases the normals are split along them (sharp in bakes)
+    const faces = hasUV(LL) ? null : PL ? PE.toPolys(PL.start, PL.idx) : null, cs = r.lv > 0 ? creaseSet(LL, vn) : null;   // creases on the base level only steer subdivision
+    let cn = null;
+    if (cs) {
+      const fl = faces || []; if (!faces) { const F = hasUV(LL) ? LL.uvIdx : ix; for (let f = 0; f < F.length; f += 3) fl.push([F[f], F[f+1], F[f+2]]); }
+      cn = PE.creaseNormals(p, fl, (a, b) => cs.has(a < b ? a * vn + b : b * vn + a));
+      const N = cn.normals; for (let i = 0; i < N.length; i += 3) { chunk += `vn ${N[i].toFixed(4)} ${N[i+1].toFixed(4)} ${N[i+2].toFixed(4)}\n`; flush(); }
+    } else
+    for (let i = 0; i < n.length; i += 3) { chunk += `vn ${n[i].toFixed(4)} ${n[i+1].toFixed(4)} ${n[i+2].toFixed(4)}\n`; flush(); }
+    const nb = cn ? vnBase : base, ni = (corner, v) => (cn ? cn.corner[corner] : v) + 1 + nb;   // normal index of a face corner
     if (hasUV(LL)) {   // UV coordinates: one vt per face corner
       for (let k = 0; k < LL.uv.length; k += 2) { chunk += `vt ${LL.uv[k].toFixed(6)} ${LL.uv[k+1].toFixed(6)}\n`; flush(); }
       const F = LL.uvIdx;
-      for (let f = 0; f < F.length; f += 3) { const a = F[f]+1+base, b = F[f+1]+1+base, c = F[f+2]+1+base, t = vtBase + f + 1; chunk += `f ${a}/${t}/${a} ${b}/${t+1}/${b} ${c}/${t+2}/${c}\n`; flush(); }
+      for (let f = 0; f < F.length; f += 3) { const a = F[f]+1+base, b = F[f+1]+1+base, c = F[f+2]+1+base, t = vtBase + f + 1; chunk += `f ${a}/${t}/${ni(f, F[f])} ${b}/${t+1}/${ni(f+1, F[f+1])} ${c}/${t+2}/${ni(f+2, F[f+2])}\n`; flush(); }
       vtBase += F.length;
     } else
-    if (PL) {
-      const { start: ps, idx: pi } = PL;
-      for (let f = 0; f + 1 < ps.length; f++) { let line = 'f'; for (let k = ps[f]; k < ps[f + 1]; k++) { const a = pi[k] + 1 + base; line += ` ${a}//${a}`; } chunk += line + '\n'; flush(); }
+    if (faces) {
+      let c = 0;
+      for (const g of faces) { let line = 'f'; for (const v of g) { line += ` ${v + 1 + base}//${ni(c++, v)}`; } chunk += line + '\n'; flush(); }
     } else
-    for (let f = 0; f < ix.length; f += 3) { const a = ix[f]+1+base, b = ix[f+1]+1+base, c = ix[f+2]+1+base; chunk += `f ${a}//${a} ${b}//${b} ${c}//${c}\n`; flush(); }
+    for (let f = 0; f < ix.length; f += 3) { const a = ix[f]+1+base, b = ix[f+1]+1+base, c = ix[f+2]+1+base; chunk += `f ${a}//${ni(f, ix[f])} ${b}//${ni(f+1, ix[f+1])} ${c}//${ni(f+2, ix[f+2])}\n`; flush(); }
+    vnBase += cn ? cn.normals.length / 3 : vn;
     base += vn;
   }
   out.push(chunk);
@@ -6415,7 +6425,11 @@ async function makeFBX() {
     let crease = null;
     const cs = L.crease && creaseSet(L, P.length / 3) ? L.crease : null;
     if (cs) { crease = new Set(); for (let i = 0; i < cs.length; i += 2) { const a = cs[i], b = cs[i + 1]; crease.add(a < b ? a + ',' + b : b + ',' + a); } }
-    meshes.push({ name: r.name.replace(/[\0\x01]/g, '') || 'mesh', pos: P, polys, normals, colors, uv, crease });
+    // subdivided level with creases: normals per face corner, split along the creases (sharp in bakes)
+    const csN = r.lv > 0 ? creaseSet(L, P.length / 3) : null, n3 = P.length / 3;
+    const cornerNormals = csN ? (() => { const cn = PE.creaseNormals(P, polys, (a, b) => csN.has(a < b ? a * n3 + b : b * n3 + a)), out = new Float32Array(cn.corner.length * 3);
+      cn.corner.forEach((g, i) => { out[i*3] = cn.normals[g*3]; out[i*3+1] = cn.normals[g*3+1]; out[i*3+2] = cn.normals[g*3+2]; }); return out; })() : null;
+    meshes.push({ name: r.name.replace(/[\0\x01]/g, '') || 'mesh', pos: P, polys, normals, cornerNormals, colors, uv, crease });
   }
   if (!meshes.length) { toast('書き出すパーツがありません（表示中のパーツが対象です）'); return null; }
   const blob = await encodeFBX(meshes, { unit: 1 });

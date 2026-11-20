@@ -654,3 +654,43 @@ export function hiddenFaces(P, polys, others = [], eps = 0) {
   });
   return out;
 }
+
+// Normals split at crease edges (hard edges of a subdivided hard-surface part): the corners of faces that meet
+// across an edge that is not creased share one normal (area-weighted face normals), so creased edges stay sharp
+// in exports and bakes. faces: polygons (vertex index arrays, triangles or quads); isCrease(a, b) for an edge.
+// Returns { corner: Int32Array (normal index per face corner, faces in order), normals: Float32Array }.
+export function creaseNormals(P, faces, isCrease) {
+  let nc = 0; const off = new Int32Array(faces.length + 1);
+  faces.forEach((f, i) => { off[i] = nc; nc += f.length; }); off[faces.length] = nc;
+  const par = new Int32Array(nc); for (let i = 0; i < nc; i++) par[i] = i;
+  const find = x => { while (par[x] !== x) x = par[x] = par[par[x]]; return x; };
+  const join = (x, y) => { x = find(x); y = find(y); if (x !== y) par[y] = x; };
+  const nV = P.length / 3, open = new Map();   // undirected edge -> corner index of its first end in the first face
+  faces.forEach((f, i) => {
+    for (let k = 0; k < f.length; k++) {
+      const a = f[k], b = f[(k + 1) % f.length], key = a < b ? a * nV + b : b * nV + a;
+      const ca = off[i] + k, cb = off[i] + (k + 1) % f.length, o = open.get(key);
+      if (o === undefined) { open.set(key, [ca, cb, a]); continue; }
+      open.delete(key);   // (a third face on the edge starts over: non-manifold edges stay split)
+      if (isCrease(a, b)) continue;
+      if (o[2] === a) { join(o[0], ca); join(o[1], cb); } else { join(o[0], cb); join(o[1], ca); }
+    }
+  });
+  // every corner of a vertex not joined to another face still gets its face's normal; group sums
+  const sum = new Float64Array(nc * 3);
+  faces.forEach((f, i) => {
+    let x = 0, y = 0, z = 0;   // Newell (area weighted)
+    for (let k = 0; k < f.length; k++) {
+      const a = f[k] * 3, b = f[(k + 1) % f.length] * 3;
+      x += (P[a+1] - P[b+1]) * (P[a+2] + P[b+2]); y += (P[a+2] - P[b+2]) * (P[a] + P[b]); z += (P[a] - P[b]) * (P[a+1] + P[b+1]);
+    }
+    for (let k = 0; k < f.length; k++) { const r = find(off[i] + k) * 3; sum[r] += x; sum[r+1] += y; sum[r+2] += z; }
+  });
+  const id = new Int32Array(nc).fill(-1), corner = new Int32Array(nc), out = [];
+  for (let c = 0; c < nc; c++) {
+    const r = find(c);
+    if (id[r] < 0) { id[r] = out.length / 3; const l = Math.hypot(sum[r*3], sum[r*3+1], sum[r*3+2]) || 1; out.push(sum[r*3] / l, sum[r*3+1] / l, sum[r*3+2] / l); }
+    corner[c] = id[r];
+  }
+  return { corner, normals: Float32Array.from(out) };
+}
