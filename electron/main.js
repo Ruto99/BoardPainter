@@ -179,6 +179,45 @@ ipcMain.handle('bp:save-many', async (_e, files) => {
   return dir;
 });
 
+// ---------------- Blender link (like GoZ): a shared folder ----------------
+// <home>/BoardPainterLink/to_blender       parts sent from BoardPainter (the Blender add-on picks them up)
+// <home>/BoardPainterLink/to_boardpainter  parts sent from Blender (polled here once a second while linked)
+// Files are OBJ text in BoardPainter's coordinates (Y up), written as .tmp and renamed, so a reader never sees half.
+const os = require('node:os');
+const linkRoot = () => process.env.BP_LINK_DIR ? path.resolve(process.env.BP_LINK_DIR) : path.join(os.homedir(), 'BoardPainterLink');
+async function linkDirs() { const d = linkRoot(); for (const s of ['to_blender', 'to_boardpainter']) await fs.mkdir(path.join(d, s), { recursive: true }); return d; }
+const linkName = n => String(n || 'part').replace(/[\\/:*?"<>|\x00-\x1f]/g, '_').slice(0, 120) || 'part';
+let linkTimer = null, linkLast = '';
+async function linkScan() {
+  try {
+    const d = path.join(linkRoot(), 'to_boardpainter'), names = (await fs.readdir(d)).filter(f => f.toLowerCase().endsWith('.obj')).sort();
+    const key = names.join('\n');
+    if (names.length && key !== linkLast && win) win.webContents.send('bp:link-in', names);
+    linkLast = key;
+  } catch { /* folder not there yet */ }
+}
+ipcMain.handle('bp:link-info', async () => ({ dir: await linkDirs() }));
+ipcMain.handle('bp:link-send', async (_e, name, text) => {
+  const f = path.join(await linkDirs(), 'to_blender', linkName(name) + '.obj');
+  await fs.writeFile(f + '.tmp', String(text)); await fs.rename(f + '.tmp', f);
+  return f;
+});
+ipcMain.handle('bp:link-watch', async (_e, on) => {
+  clearInterval(linkTimer); linkTimer = null; linkLast = '';
+  if (on) { await linkDirs(); linkTimer = setInterval(linkScan, 1000); linkScan(); }
+  return !!on;
+});
+ipcMain.handle('bp:link-take', async (_e, name) => {
+  const f = path.join(linkRoot(), 'to_boardpainter', path.basename(String(name)));
+  if (!f.toLowerCase().endsWith('.obj')) return null;
+  try { const t = await fs.readFile(f, 'utf8'); await fs.unlink(f).catch(() => {}); linkLast = ''; return t; } catch { return null; }
+});
+ipcMain.handle('bp:link-save-addon', async () => {
+  const r = await dialog.showSaveDialog(win, { title: 'Blender 用アドオンを保存', defaultPath: path.join(lastDir(), 'boardpainter_link.py'), filters: [{ name: 'Python', extensions: ['py'] }] });
+  if (r.canceled || !r.filePath) return null;
+  await fs.copyFile(path.join(__dirname, '..', 'blender', 'boardpainter_link.py'), r.filePath);
+  return r.filePath;
+});
 ipcMain.handle('bp:reveal', (_e, p) => { if (typeof p === 'string') shell.showItemInFolder(p); });
 ipcMain.on('bp:close-ack', () => { clearTimeout(closeTimer); closeTimer = 'asking'; });
 ipcMain.on('bp:close-ready', () => { clearTimeout(closeTimer); allowClose = true; if (win) win.close(); });
