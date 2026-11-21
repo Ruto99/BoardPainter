@@ -379,7 +379,49 @@ export function holeLoop(polys, a, b) {
   while (v !== undefined && v !== st && loop.length < 100000) { loop.push(v); v = out.get(v); }
   return v === st && loop.length >= 3 ? loop : null;
 }
-export function bridge(P, polys, a1, b1, a2, b2) {
+// chamfer vertices: each selected vertex becomes a small polygon, its corners at t along every incident edge
+export function bevelVertices(P, polys, verts, t = 0.2) {
+  const S = new Set(verts), nP = Array.from(P), keyId = new Map(), caps = new Map(), n0 = P.length / 3;
+  const nv = (v, u) => { const k = v + ',' + u; let id = keyId.get(k); if (id === undefined) { id = nP.length / 3; for (let c = 0; c < 3; c++) nP.push(P[v*3+c] + (P[u*3+c] - P[v*3+c]) * t); keyId.set(k, id); } return id; };
+  const out = [];
+  for (const f of polys) {
+    const g = [];
+    for (let k = 0; k < f.length; k++) {
+      const v = f[k]; if (!S.has(v)) { g.push(v); continue; }
+      const a = f[(k + f.length - 1) % f.length], b = f[(k + 1) % f.length], na = nv(v, a), nb = nv(v, b);
+      g.push(na, nb);
+      if (!caps.has(v)) caps.set(v, new Map()); caps.get(v).set(nb, na);   // the cap runs opposite to the face
+    }
+    out.push(g);
+  }
+  if (!caps.size) return null;
+  for (const m of caps.values()) {
+    const vals = new Set(m.values()); let st = [...m.keys()].find(k => !vals.has(k)); if (st === undefined) st = m.keys().next().value;
+    const cap = [st]; let c = m.get(st);
+    while (c !== undefined && c !== st && cap.length <= m.size + 1) { cap.push(c); c = m.get(c); }
+    if (cap.length >= 3) out.push(cap);
+  }
+  const src = new Int32Array(nP.length / 3); for (let i = 0; i < n0; i++) src[i] = i;
+  for (const [k, id] of keyId) src[id] = +k.slice(0, k.indexOf(','));
+  return compact(new Float32Array(nP), out, src);
+}
+// a band of quads between two border edges (one face each), `segs` rows; (x1 -> y1) and (x2 -> y2) as their faces run
+export function bridgeEdges(P, polys, a1, b1, a2, b2, segs = 1) {
+  const dirOf = (a, b) => { for (const f of polys) for (let k = 0; k < f.length; k++) if (f[k] === a && f[(k + 1) % f.length] === b) return [a, b]; else if (f[k] === b && f[(k + 1) % f.length] === a) return [b, a]; return null; };
+  const byEdge = adjacency(polys), e1 = byEdge.get(ek(a1, b1)), e2 = byEdge.get(ek(a2, b2));
+  if (!e1 || !e2 || e1.length !== 1 || e2.length !== 1) return { error: 'border' };
+  if (ek(a1, b1) === ek(a2, b2)) return { error: 'same' };
+  const [x1, y1] = dirOf(a1, b1), [x2, y2] = dirOf(a2, b2), n = Math.max(1, segs | 0), nP = Array.from(P), src = [];
+  const lerp = (u, w, t) => { const id = nP.length / 3; for (let c = 0; c < 3; c++) nP.push(P[u*3+c] + (P[w*3+c] - P[u*3+c]) * t); src.push(u); return id; };
+  const p = [x1], q = [y1];
+  for (let j = 1; j < n; j++) { p.push(lerp(x1, y2, j / n)); q.push(lerp(y1, x2, j / n)); }
+  p.push(y2); q.push(x2);
+  const out = polys.slice();
+  for (let j = 0; j < n; j++) out.push([q[j], p[j], p[j+1], q[j+1]].filter((v, i, a) => a.indexOf(v) === i));
+  const s0 = new Int32Array(nP.length / 3); for (let i = 0; i < P.length / 3; i++) s0[i] = i; src.forEach((v, i) => { s0[P.length / 3 + i] = v; });
+  return { pos: new Float32Array(nP), polys: out.filter(f => f.length >= 3), src: s0, size: n };
+}
+export function bridge(P, polys, a1, b1, a2, b2, segs = 1) {
   const A = holeLoop(polys, a1, b1), B = holeLoop(polys, a2, b2);
   if (!A || !B) return { error: 'border' };
   if (A.includes(B[0])) return { error: 'same' };
@@ -388,10 +430,14 @@ export function bridge(P, polys, a1, b1, a2, b2) {
   let best = 0, bd = Infinity;
   for (let s = 0; s < n; s++) { let d = 0; for (let i = 0; i < n; i++) d += d2(A[i], B[((s - i) % n + n) % n]); if (d < bd) { bd = d; best = s; } }
   const bi = i => B[((best - i) % n + n) % n];
-  const out = polys.slice();
-  for (let i = 0; i < n; i++) out.push([A[i], A[(i + 1) % n], bi(i + 1), bi(i)]);
-  const pos = new Float32Array(P), src = new Int32Array(P.length / 3).map((_, i) => i);
-  return { pos, polys: out, src, size: n };
+  const out = polys.slice(), m = Math.max(1, segs | 0), nP = Array.from(P), srcX = [];
+  // rings between the two holes (ring 0 = A, ring m = B)
+  const ring = [A.slice()];
+  for (let j = 1; j < m; j++) { const R = []; for (let i = 0; i < n; i++) { const u = A[i], w = bi(i), id = nP.length / 3; for (let c = 0; c < 3; c++) nP.push(P[u*3+c] + (P[w*3+c] - P[u*3+c]) * j / m); srcX.push(u); R.push(id); } ring.push(R); }
+  ring.push(Array.from({ length: n }, (_, i) => bi(i)));
+  for (let j = 0; j < m; j++) for (let i = 0; i < n; i++) out.push([ring[j][i], ring[j][(i + 1) % n], ring[j+1][(i + 1) % n], ring[j+1][i]]);
+  const pos = new Float32Array(nP), src = new Int32Array(nP.length / 3).map((_, i) => i < P.length / 3 ? i : srcX[i - P.length / 3]);
+  return { pos, polys: out, src, size: n * m };
 }
 
 // ---------------- more ZModeler-like actions ----------------
