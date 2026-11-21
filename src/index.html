@@ -7146,7 +7146,7 @@ async function bakeTextures() {
   active.levels = active.levels.slice(); active.levels[active.lv] = NL;
   texCache.delete(L); updateTexUI(); scheduleSave();
   $('texPreview').checked = true; await setTexPreview(true);
-  toast(`焼き付けました（${size}px・${res.color ? '法線・高さ・色' : '法線・高さ'}・${(res.t / 1000).toFixed(1)}秒${res.misses ? `・届かなかった点 ${res.misses.toLocaleString()}` : ''}）`);
+  toast(`焼き付けました（${size}px・${res.color ? '法線・高さ・色' : '法線・高さ'}${res.ao ? '・AO・凹み' : ''}・${(res.t / 1000).toFixed(1)}秒${res.misses ? `・届かなかった点 ${res.misses.toLocaleString()}` : ''}）`);
 }
 // textures for preview / GLB export
 const texCache = new WeakMap();
