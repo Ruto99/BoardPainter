@@ -40,6 +40,10 @@ header{grid-column:1/-1;display:flex;align-items:center;gap:8px;padding:0 12px;b
 .btn.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:700}
 .btn:disabled{opacity:.4;cursor:default}
 .btn.on{border-color:var(--accent);color:var(--accent)}
+#tlBar{position:relative;height:30px;margin-top:6px;background:var(--panel-2);border:1px solid var(--line);border-radius:6px;cursor:ew-resize;touch-action:none}
+#tlBar .tlk{position:absolute;top:3px;width:20px;height:22px;margin-left:-10px;border-radius:4px;background:#6fb7ff;color:#0b1a2a;font:600 11px/22px var(--mono);text-align:center;cursor:grab}
+#tlBar .tlk.on{background:var(--accent);color:var(--accent-ink)}
+#tlHeadMark{position:absolute;top:0;bottom:0;width:2px;margin-left:-1px;background:#ff6b6b;pointer-events:none}
 #groomCur{position:absolute;border:1.5px solid #ffd49a;border-radius:50%;pointer-events:none;z-index:5;box-shadow:0 0 0 1px rgba(0,0,0,.35)}
 .btn small{color:var(--muted);font-family:var(--mono);font-size:10px}
 .btn.primary small{color:#5a4120}
@@ -900,7 +904,9 @@ dl.keys dd{margin:0;color:var(--muted)}
       <button class="btn full" id="ttGo">ターンテーブル動画を書き出す（WebM）</button>
       <h3 style="margin:10px 0 4px;font-size:12px">タイムライン（カメラの動き）</h3>
       <div class="grid3"><button class="btn" id="tlAdd" title="今の視点をキーとして追加します">キーを追加</button><button class="btn" id="tlPlay" disabled>再生</button><button class="btn" id="tlClear">全部消す</button></div>
-      <div id="tlKeys" style="display:flex;flex-wrap:wrap;gap:4px;margin-top:6px"></div>
+      <div id="tlBar" title="キーをドラッグで時刻を変える・空いた所をドラッグで再生位置を動かす"><div id="tlHeadMark"></div></div>
+      <div class="row"><label for="tlKeyEase">選んだキーの緩急</label><select id="tlKeyEase" disabled><option value="">全体と同じ</option><option value="mix">ふつう</option><option value="smooth">キーでゆっくり</option><option value="linear">一定の速さ</option></select></div>
+      <div class="row"><label for="tlKeyHold">選んだキーで止まる（秒）</label><input type="number" id="tlKeyHold" min="0" max="30" step="0.1" placeholder="全体と同じ" style="width:90px" disabled></div>
       <div class="row"><span id="tlInfo" class="note" style="margin:0">キーはありません</span></div>
       <div class="row"><label for="tlSecs">動画の長さ（秒）</label><output id="tlSecsOut">8</output></div>
       <input type="range" id="tlSecs" min="2" max="60" step="1" value="8">
@@ -5345,16 +5351,28 @@ function recordTurntable() {
 let tlKeys = [];
 const tlSph = c => { const d = new V3().fromArray(c.p).sub(new V3().fromArray(c.t)), r = d.length() || 1e-6; return [r, Math.atan2(d.x, d.z), Math.asin(Math.max(-1, Math.min(1, d.y / r)))]; };
 const crom = (a, b, c, d, t) => { const t2 = t * t, t3 = t2 * t; return 0.5 * (2 * b + (-a + c) * t + (2 * a - 5 * b + 4 * c - d) * t2 + (-a + 3 * b - 3 * c + d) * t3); };
+// key times (0..1 of the clip): evenly spaced until the user drags a key, then fixed (tlAuto = false)
+let tlAuto = true, tlHead = 0, tlSel = -1;
+function tlTimes() {
+  const n = tlKeys.length, loop = $('tlLoop').checked;
+  if (tlAuto || tlKeys.some(c => typeof c.at !== 'number')) tlKeys.forEach((c, i) => { c.at = n < 2 ? 0 : i / (loop ? n : n - 1); });
+  return tlKeys.map(c => c.at);
+}
+const tlEaseOf = (u, e) => e === 'linear' ? u : e === 'smooth' ? sstep(u) : sstep(u) * 0.35 + u * 0.65;
 function tlPose(k) {
   const K = tlKeys, n = K.length;
   if (n === 1) return K[0];
-  const loop = $('tlLoop').checked, segs = loop ? n : n - 1;
-  // pause at each key: a share `hold` of the time is spent standing on keys (one hold per segment start + the end)
-  const hold = Math.min(0.8, Math.max(0, +$('tlHold').value || 0) * (loop ? n : n) / Math.max(1, +$('tlSecs').value || 8));
-  const stops = loop ? n : n, move = 1 - hold, per = segs ? move / segs : 1, hs = stops ? hold / stops : 0;
-  let s = 0, u = 0, kk = Math.max(0, Math.min(1, k));
-  for (s = 0; s < segs; s++) { if (kk < hs) { u = 0; break; } kk -= hs; if (kk < per || s === segs - 1) { u = Math.min(1, kk / (per || 1)); break; } kk -= per; }
-  const ease = $('tlEase').value, t = ease === 'linear' ? u : ease === 'smooth' ? sstep(u) : sstep(u) * 0.35 + u * 0.65;
+  const loop = $('tlLoop').checked, T = tlTimes(), secs = Math.max(1, +$('tlSecs').value || 8);
+  let kk = Math.max(0, Math.min(1, k));
+  if (loop && kk < T[0]) kk += 1;
+  if (!loop && kk <= T[0]) return K[0];
+  if (!loop && kk >= T[n - 1]) return K[n - 1];
+  let s = 0; for (let i = 0; i < n; i++) if (T[i] <= kk) s = i;
+  const T1 = s + 1 < n ? T[s + 1] : 1 + T[0], dur = Math.max(1e-6, T1 - T[s]);
+  // a pause on the key at the start of the segment, then the move with that key's easing
+  const hold = Math.min(dur, Math.max(0, K[s].hold ?? +$('tlHold').value ?? 0) / secs);
+  const u = hold >= dur ? 0 : Math.max(0, Math.min(1, ((kk - T[s]) - hold) / (dur - hold)));
+  const t = tlEaseOf(u, K[s].ease || $('tlEase').value);
   const at = i => loop ? K[((i % n) + n) % n] : K[Math.max(0, Math.min(n - 1, i))];
   const q = [at(s - 1), at(s), at(s + 1), at(s + 2)], sp = q.map(tlSph);
   // unwrap the azimuth so the camera takes the short way round
@@ -5363,7 +5381,7 @@ function tlPose(k) {
   const r = Math.max(1e-4, crom(sp[0][0], sp[1][0], sp[2][0], sp[3][0], t)), az = crom(sp[0][1], sp[1][1], sp[2][1], sp[3][1], t);
   const el = Math.max(-1.55, Math.min(1.55, crom(sp[0][2], sp[1][2], sp[2][2], sp[3][2], t)));
   const p = [tg[0] + r * Math.cos(el) * Math.sin(az), tg[1] + r * Math.sin(el), tg[2] + r * Math.cos(el) * Math.cos(az)];
-  return { p, t: tg, fov: crom(q[0].fov, q[1].fov, q[2].fov, q[3].fov, t), vis: k >= 1 ? (loop ? K[0] : K[n - 1]).vis : q[1].vis };
+  return { p, t: tg, fov: crom(q[0].fov, q[1].fov, q[2].fov, q[3].fov, t), vis: q[1].vis };
 }
 // minimal ZIP writer (stored, no compression) for frame sequences
 const CRC_T = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
@@ -5400,13 +5418,46 @@ async function tlFrames() {
   saveOne(async () => ({ name: `${fileBase()}_frames.zip`, blob: zipStore(files) }));
   toast(`${N} 枚の連番画像（${fps} fps）を ZIP にまとめました`);
 }
+// the time bar: key markers (drag = retime, double-click = go to the view, Alt+click = delete) and a playhead (drag = scrub)
 function tlRefresh() {
-  const n = tlKeys.length;
-  $('tlInfo').textContent = n ? `キー ${n} 個` : 'キーはありません';
-  $('tlKeys').replaceChildren(...tlKeys.map((c, i) => { const b = document.createElement('button'); b.className = 'btn'; b.textContent = String(i + 1); b.title = 'クリックでこの視点に移動・Alt+クリックで削除'; b.onclick = e => { if (e.altKey) { tlKeys.splice(i, 1); tlRefresh(); scheduleSave(); } else camApply(c); }; return b; }));
+  const n = tlKeys.length, bar = $('tlBar'), T = tlTimes(), secs = +$('tlSecs').value || 8;
+  if (tlSel >= n) tlSel = n - 1;
+  $('tlInfo').textContent = n ? `キー ${n} 個${tlSel >= 0 ? `・キー ${tlSel + 1}（${(T[tlSel] * secs).toFixed(1)} 秒）を選択中` : ''}` : 'キーはありません';
+  bar.querySelectorAll('.tlk').forEach(e => e.remove());
+  tlKeys.forEach((c, i) => {
+    const m = document.createElement('div'); m.className = 'tlk' + (i === tlSel ? ' on' : ''); m.style.left = `${T[i] * 100}%`; m.textContent = String(i + 1); m.dataset.i = i;
+    m.title = 'ドラッグで時刻を変える・ダブルクリックでこの視点に移動・Alt+クリックで削除'; bar.appendChild(m);
+  });
+  $('tlHeadMark').style.left = `${tlHead * 100}%`;
+  const k = tlKeys[tlSel], on = !!k;
+  $('tlKeyEase').disabled = $('tlKeyHold').disabled = !on;
+  if (on) { $('tlKeyEase').value = k.ease || ''; $('tlKeyHold').value = k.hold ?? ''; }
   $('tlPlay').disabled = $('tlRec').disabled = n < 2 || turning;
 }
-function tlAdd() { tlKeys.push(camSnap()); tlRefresh(); scheduleSave(); toast(`今の視点をキー ${tlKeys.length} にしました`); }
+function tlBarDown(e) {
+  const bar = $('tlBar'), r = bar.getBoundingClientRect(), at = x => Math.max(0, Math.min(1, (x - r.left) / r.width));
+  const mk = e.target.closest('.tlk');
+  if (mk) {
+    const i = +mk.dataset.i;
+    if (e.altKey) { tlKeys.splice(i, 1); tlSel = -1; tlRefresh(); scheduleSave(); return; }
+    tlTimes(); tlAuto = false; tlSel = i;
+    const key = tlKeys[i];
+    const move = ev => { key.at = at(ev.clientX); tlRefresh(); };
+    const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); tlKeys.sort((a, b) => a.at - b.at); tlSel = tlKeys.indexOf(key); tlRefresh(); scheduleSave(); };
+    window.addEventListener('pointermove', move); window.addEventListener('pointerup', up); tlRefresh();
+    return;
+  }
+  // empty bar: scrub the playhead
+  const scrub = ev => { tlHead = at(ev.clientX); if (tlKeys.length) camApply(tlPose(tlHead), true); tlRefresh(); };
+  const up = () => { window.removeEventListener('pointermove', scrub); window.removeEventListener('pointerup', up); };
+  scrub(e); window.addEventListener('pointermove', scrub); window.addEventListener('pointerup', up);
+}
+function tlAdd() {
+  const c = camSnap();
+  if (tlAuto) tlKeys.push(c);
+  else { c.at = tlHead; tlKeys.push(c); tlKeys.sort((a, b) => a.at - b.at); }
+  tlSel = tlKeys.indexOf(c); tlRefresh(); scheduleSave(); toast(`今の視点をキー ${tlSel + 1} にしました`);
+}
 async function tlPlayNow() { if (tlKeys.length < 2 || turning) return; const keep = camSnap(); turning = true; await playCamera(+$('tlSecs').value || 6, tlPose); turning = false; camApply(keep); }
 
 // ---------------- subtool operations ----------------
@@ -7340,7 +7391,7 @@ function projectMeta() {
     app: 'BoardPainter', savedAt: new Date().toISOString(), active: subtools.indexOf(active),
     camera: { position: camera.position.toArray(), target: controls.target.toArray() },
     settings: { fname: $('fname').value, stlH: +$('stlH').value || 80 },
-    timeline: tlKeys.length ? tlKeys : undefined,
+    timeline: tlKeys.length ? tlKeys : undefined, timelineAuto: tlKeys.length ? tlAuto : undefined,
   };
 }
 function applyProject(meta, subs, opts) {
@@ -7355,7 +7406,7 @@ function applyProject(meta, subs, opts) {
     const dist = camera.position.distanceTo(controls.target);
     camera.near = dist / 100; camera.far = dist * 20; camera.updateProjectionMatrix(); controls.update();
   } else frame();
-  tlKeys = Array.isArray(meta.timeline) ? meta.timeline.filter(c => c && Array.isArray(c.p) && Array.isArray(c.t)).map(c => ({ p: c.p, t: c.t, fov: +c.fov || camera.fov, vis: Array.isArray(c.vis) ? c.vis.map(String) : undefined })) : []; tlRefresh();
+  tlAuto = meta.timelineAuto !== false; tlSel = -1; tlKeys = Array.isArray(meta.timeline) ? meta.timeline.filter(c => c && Array.isArray(c.p) && Array.isArray(c.t)).map(c => ({ p: c.p, t: c.t, fov: +c.fov || camera.fov, vis: Array.isArray(c.vis) ? c.vis.map(String) : undefined, ...(Number.isFinite(c.at) ? { at: Math.max(0, Math.min(1, c.at)) } : {}), ...(['mix', 'smooth', 'linear'].includes(c.ease) ? { ease: c.ease } : {}), ...(Number.isFinite(c.hold) ? { hold: Math.max(0, c.hold) } : {}) })) : []; tlRefresh();
   if (meta.settings) { if (meta.settings.fname) $('fname').value = meta.settings.fname; if (meta.settings.stlH) $('stlH').value = meta.settings.stlH; }
   projectPath = opts.path || null; projectName = opts.name || '無題';
   dirty = !!opts.dirty; fresh = !!opts.fresh; updateTitle();
@@ -8143,8 +8194,13 @@ $('rdGo').onclick = () => busy(() => renderImage().catch(err => { console.error(
 $('rdSave').onclick = () => { if (lastRender) saveOne(async () => ({ name: `${fileBase()}_render${lastRender.suffix || ''}.png`, blob: lastRender.blob })); };
 $('rdClose').onclick = () => { $('rdView').hidden = true; };
 $('tlAdd').onclick = () => tlAdd();
+$('tlBar').addEventListener('pointerdown', tlBarDown);
+$('tlBar').addEventListener('dblclick', e => { const m = e.target.closest('.tlk'); if (m) camApply(tlKeys[+m.dataset.i]); });
+$('tlKeyEase').onchange = e => { const k = tlKeys[tlSel]; if (k) { if (e.target.value) k.ease = e.target.value; else delete k.ease; scheduleSave(); } };
+$('tlKeyHold').onchange = e => { const k = tlKeys[tlSel]; if (k) { const v = e.target.value === '' ? null : Math.max(0, +e.target.value); if (v == null) delete k.hold; else k.hold = v; scheduleSave(); } };
+$('tlLoop').addEventListener('change', () => tlRefresh()); $('tlSecs').addEventListener('input', () => tlRefresh());
 $('tlPng').onclick = () => tlFrames(); $('tlHold').addEventListener('input', e => { $('tlHoldOut').textContent = (+e.target.value).toFixed(1); });
-$('tlClear').onclick = () => { tlKeys = []; tlRefresh(); scheduleSave(); };
+$('tlClear').onclick = () => { tlKeys = []; tlAuto = true; tlSel = -1; tlHead = 0; tlRefresh(); scheduleSave(); };
 $('tlPlay').onclick = () => tlPlayNow();
 $('tlRec').onclick = () => { if (tlKeys.length >= 2) recordCamera(+$('tlSecs').value || 8, tlPose, 'timeline'); };
 $('tlSecs').addEventListener('input', e => { $('tlSecsOut').textContent = e.target.value; });
