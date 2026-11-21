@@ -203,6 +203,7 @@ dl.keys dd{margin:0;color:var(--muted)}
 }
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
+<script>if (!(window.bp && window.bp.isDesktop)) document.documentElement.style.visibility = 'hidden';   // desktop only: no flash of the UI elsewhere</script>
 <script type="importmap">
 {
   "imports": {
@@ -222,7 +223,6 @@ dl.keys dd{margin:0;color:var(--muted)}
     <button class="btn" id="btnNewProj" title="Ctrl+N">新規</button>
     <button class="btn" id="btnOpen" title="Ctrl+O（.bpp プロジェクト / OBJ / STL）">開く <small>Ctrl+O</small></button>
     <button class="btn" id="btnSave" title="Ctrl+S（Ctrl+Shift+S で名前を付けて保存）">保存 <small>Ctrl+S</small></button>
-    <input id="fileIn" type="file" accept=".bpp,.obj,.stl,.fbx,.glb,.gltf" hidden>
     <div class="sep"></div>
     <button class="btn" id="btnUndo" title="Ctrl+Z">元に戻す</button>
     <button class="btn" id="btnRedo" title="Ctrl+Y">やり直し</button>
@@ -1002,6 +1002,16 @@ import { fieldRetopo } from './fieldretopo.js';
 import * as PE from './polyedit.js';
 import { BUILTIN, builtinAlpha, imageToAlpha, sampleAlpha, drawAlpha, alphaRGBA, RES as ALPHA_RES } from './alphas.js';
 
+// desktop only: opened anywhere else (a plain browser), show where to get the app and stop here
+if (!(window.bp && window.bp.isDesktop)) {
+  document.title = 'BoardPainter（デスクトップ版専用）';
+  document.body.innerHTML = '<div style="max-width:560px;margin:15vh auto;padding:0 24px;font:15px/1.7 system-ui,sans-serif;color:#e6e6e6">'
+    + '<h1 style="font-size:22px;margin:0 0 12px">BoardPainter はデスクトップ版専用です</h1>'
+    + '<p>ブラウザ版は提供を終了しました。Windows / macOS / Linux 用のアプリを <a style="color:#ffb347" href="https://github.com/Ruto99/BoardPainter/releases/latest">Releases</a> からダウンロードしてください。インストール後はネット接続なしで使えます。</p></div>';
+  document.body.style.background = '#1f2024';
+  document.documentElement.style.visibility = '';
+  throw new Error('BoardPainter: desktop app only');
+}
 // native (C++) processing from the desktop app; null when unavailable (then the JavaScript versions run)
 const ACCEL = (() => {
   try {
@@ -7220,7 +7230,6 @@ async function saveTextures() {
   if (L.bake.aoPng) files.push({ name: `${base}_ao.png`, data: L.bake.aoPng.slice().buffer });
   if (L.bake.cavPng) files.push({ name: `${base}_cavity.png`, data: L.bake.cavPng.slice().buffer });
   if (L.bake.heightPng) { files.push({ name: `${base}_height.png`, data: L.bake.heightPng.slice().buffer }); toast(`高さマップ：灰色 128 が面の位置、白／黒が ±${(L.bake.heightRange * mmPerUnit()).toFixed(2)} mm（印刷サイズ換算）`); }
-  if (!native) { for (const f of files) download(new Blob([f.data], { type: 'image/png' }), f.name); return; }
   const dir = await native.saveMany(files);
   if (dir) toast(`テクスチャを保存しました: ${dir}`);
 }
@@ -7369,10 +7378,6 @@ async function saveProject(saveAs = false) {
   if (native && native.projBegin) return saveProjectStream(saveAs);
   let data;
   try { data = await encodeProject(projectMeta(), subtools.map(recData)); } catch (err) { console.error(err); toast('保存に失敗しました: ' + err.message); return false; }
-  if (!native) {
-    download(new Blob([data], { type:'application/octet-stream' }), `${projectName}.bpp`);
-    setDirty(false); autosaveSoon(); return true;
-  }
   let p;
   try { p = await native.saveProject(projectPath, projectName, data.buffer, saveAs); } catch (err) { console.error(err); toast('保存に失敗しました: ' + err.message); return false; }
   if (!p) return false;
@@ -7422,27 +7427,19 @@ function newProject() {
 
 // ---------------- export ----------------
 function fileBase() { return ($('fname').value.trim() || 'sculpt').replace(/[\\/:*?"<>|]/g, '_'); }
-function download(blob, name) {
-  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name;
-  document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
-}
 async function saveOne(make) {
   const f = await make(); if (!f) return;
-  if (!native) { download(f.blob, f.name); return; }
   const p = await native.saveFile(f.name, await f.blob.arrayBuffer());
   if (p) toast(`保存しました: ${p}`);
 }
 async function saveAll() {
   const files = [];
   for (const make of [makeOBJ, makeGLB, makeSTL]) { const f = await make(); if (f) files.push(f); }
-  if (!native) { files.forEach(f => download(f.blob, f.name)); toast(`${files.length}つのファイルを書き出しました`); return; }
   const payload = await Promise.all(files.map(async f => ({ name: f.name, data: await f.blob.arrayBuffer() })));
   const dir = await native.saveMany(payload);
   if (dir) toast(`${files.length}つのファイルを保存しました: ${dir}`);
 }
 async function openModel() {
-  if (!native) { $('fileIn').click(); return; }
   const m = await native.openModel();
   if (m) importFile(m);
 }
@@ -7601,8 +7598,8 @@ function saveNow() {
 }
 async function writeAutosave() {
   const data = { version: 2, t: Date.now(), meta: projectMeta(), projectPath, projectName, dirty, subtools: subtools.map(recData) };
-  if (native && native.autoBegin) {
-    // desktop: typed arrays go to a file in 8 MB pieces, so even huge models never freeze the page
+  {
+    // typed arrays go to a file in 8 MB pieces, so even huge models never freeze the page
     const parts = []; let off = 0;
     const walk = x => {
       if (ArrayBuffer.isView(x)) { const d = { $a: x.constructor.name, o: off, n: x.length }; parts.push(new Uint8Array(x.buffer, x.byteOffset, x.byteLength)); off += x.byteLength; const pad = (4 - off % 4) % 4; if (pad) { parts.push(new Uint8Array(pad)); off += pad; } return d; }
@@ -7619,10 +7616,7 @@ async function writeAutosave() {
       idbCleared = true;
       try { const db = await idb(); db.transaction('s', 'readwrite').objectStore('s').delete('auto'); } catch { /* none */ }
     }
-    return;
   }
-  const db = await idb();
-  await new Promise(res => { const tx = db.transaction('s', 'readwrite'); tx.objectStore('s').put(data, 'auto'); tx.oncomplete = tx.onerror = tx.onabort = res; });
 }
 // desktop autosave file -> the same object writeAutosave started from
 async function readAutosaveFile() {
@@ -7927,7 +7921,6 @@ $('dmDisp').onclick = () => exportDisplacement(false);
 $('dmVec').onclick = () => exportDisplacement(true);
 $('expAll').onclick = () => saveAll();
 $('btnOpen').onclick = () => openModel();
-$('fileIn').onchange = e => { const f = e.target.files[0]; if (f) importFile(f); e.target.value = ''; };
 $('btnNewProj').onclick = () => newProject();
 $('btnSave').onclick = $('projSave').onclick = () => saveProject(false);
 $('projSaveAs').onclick = () => saveProject(true);
@@ -8213,7 +8206,6 @@ applyView(false);
 $('vsEngine').textContent = ACCEL ? `ネイティブ（C++・${ACCEL.threads} スレッド）` : 'JavaScript（低速）';
 $('vsEngine').title = ACCEL ? 'リメッシュ・ブーリアン・リトポ・テクスチャ焼き付け・ZSphere・文字の立体化などの重い処理を C++ で実行しています' : 'ネイティブモジュールが読み込めなかったため、JavaScript で処理しています（結果は同じで、速度だけが遅くなります）';
 if (ACCEL) { $('rmRes').max = 512; $('bakeSize').add(new Option('4096', '4096')); }   // native bake: 4096 px in a second or two
-if (!native) setTimeout(() => toast('BoardPainter はデスクトップ版専用です。Releases からアプリをダウンロードしてください'), 600);
 $('zsPresetGo').onclick = () => zsPreset($('zsPreset').value); $('zsStart').onclick = zsStart; $('zsMake').onclick = zsMake; $('zsUndo').onclick = zsUndo; $('zsCancel').onclick = zsEnd;
 
 view.addEventListener('dragover', e => e.preventDefault());
