@@ -26,26 +26,32 @@ function mulberry32(a) {
 }
 
 // ---- NanoMesh ------------------------------------------------------------------------------------------------
-// opt: fit 'face' | 'uniform', scale, height, offset, rotate (deg), randScale, randRot, seed, sel (Uint8Array), flip
+// opt: fit 'face' | 'uniform', scale, height, offset, rotate (deg), randScale, randRot, seed, sel (Uint8Array), flip,
+//      mix 'random' | 'group' (with several instances: inst may be an array), group (per-face id for 'group'),
+//      over { [face]: { d: delete, s: scale factor, r: extra rotation (deg), o: extra lift } } per-instance edits
 export function nanoMesh(P, polys, inst, opt = {}) {
   const { start, idx } = polys, nF = start.length - 1;
   const fit = opt.fit ?? 'face', scale = opt.scale ?? 1, height = opt.height ?? 1, offset = opt.offset ?? 0;
   const rot0 = (opt.rotate ?? 0) * Math.PI / 180, rS = opt.randScale ?? 0, rR = opt.randRot ?? 0, sel = opt.sel, flip = !!opt.flip;
-  const rnd = mulberry32(opt.seed | 0);
+  const rnd = mulberry32(opt.seed | 0), rndK = mulberry32((opt.seed | 0) + 7919), over = opt.over || null, grp = opt.group;
   // instance -> local frame: footprint (x, z) in [-0.5, 0.5] by the larger extent, y from 0, one scale factor
-  const ip = inst.p, ix = inst.ix, nIV = ip.length / 3, nIT = ix.length / 3;
-  const mn = [Infinity, Infinity, Infinity], mx = [-Infinity, -Infinity, -Infinity];
-  for (let i = 0; i < nIV; i++) for (let k = 0; k < 3; k++) { const c = ip[i*3+k]; if (c < mn[k]) mn[k] = c; if (c > mx[k]) mx[k] = c; }
-  const ext = Math.max(mx[0] - mn[0], mx[2] - mn[2]) || (mx[1] - mn[1]) || 1, s0 = 1 / ext;
-  const cx = (mn[0] + mx[0]) / 2, cz = (mn[2] + mx[2]) / 2;
-  const L = new Float32Array(nIV * 3);
-  for (let i = 0; i < nIV; i++) { L[i*3] = (ip[i*3] - cx) * s0; L[i*3+1] = (ip[i*3+1] - mn[1]) * s0; L[i*3+2] = (ip[i*3+2] - cz) * s0; }
+  const IN = (Array.isArray(inst) ? inst : [inst]).map(({ p: ip, ix }) => {
+    const nIV = ip.length / 3, mn = [Infinity, Infinity, Infinity], mx = [-Infinity, -Infinity, -Infinity];
+    for (let i = 0; i < nIV; i++) for (let k = 0; k < 3; k++) { const c = ip[i*3+k]; if (c < mn[k]) mn[k] = c; if (c > mx[k]) mx[k] = c; }
+    const ext = Math.max(mx[0] - mn[0], mx[2] - mn[2]) || (mx[1] - mn[1]) || 1, s0 = 1 / ext;
+    const cx = (mn[0] + mx[0]) / 2, cz = (mn[2] + mx[2]) / 2, L = new Float32Array(nIV * 3);
+    for (let i = 0; i < nIV; i++) { L[i*3] = (ip[i*3] - cx) * s0; L[i*3+1] = (ip[i*3+1] - mn[1]) * s0; L[i*3+2] = (ip[i*3+2] - cz) * s0; }
+    return { L, ix, nIV, nIT: ix.length / 3 };
+  }), nIn = IN.length;
 
   // per face frame (computed first so the output can be sized); random numbers drawn for every face -> stable
   const fr = [];
   for (let f = 0; f < nF; f++) {
-    const u1 = rnd(), u2 = rnd(), s = start[f], e = start[f + 1];
+    const u1 = rnd(), u2 = rnd(), u3 = rndK(), s = start[f], e = start[f + 1];
     if (sel && !sel[f] || e - s < 3) continue;
+    const ov = over && over[f];
+    if (ov && ov.d) continue;
+    const ki = nIn < 2 ? 0 : opt.mix === 'group' && grp ? ((grp[f] % nIn) + nIn) % nIn : Math.min(nIn - 1, Math.floor(u3 * nIn));
     const N = newell(P, idx, s, e), nl = len(N);
     if (nl < 1e-20) continue;
     const n = [N[0] / nl, N[1] / nl, N[2] / nl], sq = Math.sqrt(nl / 2);
@@ -57,7 +63,7 @@ export function nanoMesh(P, polys, inst, opt = {}) {
     let c = [0, 0, 0]; for (let k = s; k < e; k++) { const v = idx[k] * 3; c[0] += P[v]; c[1] += P[v+1]; c[2] += P[v+2]; }
     c = c.map(x => x / (e - s));
     let sx, sy, sz;
-    const m = scale * (1 + rS * (2 * u1 - 1));
+    const m = scale * (1 + rS * (2 * u1 - 1)) * (ov && ov.s > 0 ? ov.s : 1);
     if (fit === 'uniform') { sx = sz = sq * m; sy = sq * m * height; }
     else {   // stretch the footprint over the face's extent along t and b (centred on that extent)
       let t0 = Infinity, t1 = -Infinity, b0 = Infinity, b1 = -Infinity;
@@ -70,28 +76,30 @@ export function nanoMesh(P, polys, inst, opt = {}) {
       sx = (t1 - t0) * m; sz = (b1 - b0) * m; sy = sq * m * height;
     }
     const up = flip ? [-n[0], -n[1], -n[2]] : n, B = cross(up, t);   // b = n x t (with the used normal)
-    const off = offset * sq;
+    const off = (offset + (ov && ov.o || 0)) * sq;
     c = [c[0] + up[0]*off, c[1] + up[1]*off, c[2] + up[2]*off];
-    const ang = rot0 + rR * 2 * Math.PI * u2, ca = Math.cos(ang), sa = Math.sin(ang);
+    const ang = rot0 + rR * 2 * Math.PI * u2 + (ov && ov.r || 0) * Math.PI / 180, ca = Math.cos(ang), sa = Math.sin(ang);
     // rotated tangent axes in the face plane
     const T = [t[0]*ca + B[0]*sa, t[1]*ca + B[1]*sa, t[2]*ca + B[2]*sa], Bb = [B[0]*ca - t[0]*sa, B[1]*ca - t[1]*sa, B[2]*ca - t[2]*sa];
     const X = T.map(x => x * sx), Y = up.map(x => x * sy), Z = Bb.map(x => x * sz);
-    fr.push({ f, c, X, Y, Z, neg: dot(X, cross(Y, Z)) < 0 });
+    fr.push({ f, c, X, Y, Z, neg: dot(X, cross(Y, Z)) < 0, k: ki });
   }
 
-  const cnt = fr.length, pos = new Float32Array(cnt * nIV * 3), out = new Uint32Array(cnt * nIT * 3), face = new Uint32Array(cnt * nIV);
-  fr.forEach(({ f, c, X, Y, Z, neg }, q) => {
-    const vo = q * nIV;
+  let TV = 0, TT = 0; for (const q of fr) { TV += IN[q.k].nIV; TT += IN[q.k].nIT; }
+  const cnt = fr.length, pos = new Float32Array(TV * 3), out = new Uint32Array(TT * 3), face = new Uint32Array(TV);
+  let vo = 0, to = 0;
+  fr.forEach(({ f, c, X, Y, Z, neg, k: ki }) => {
+    const { L, ix, nIV, nIT } = IN[ki];
     for (let i = 0; i < nIV; i++) {
       const x = L[i*3], y = L[i*3+1], z = L[i*3+2], o = (vo + i) * 3;
       pos[o] = c[0] + X[0]*x + Y[0]*y + Z[0]*z; pos[o+1] = c[1] + X[1]*x + Y[1]*y + Z[1]*z; pos[o+2] = c[2] + X[2]*x + Y[2]*y + Z[2]*z;
       face[vo + i] = f;
     }
-    const to = q * nIT * 3;
     for (let k = 0; k < nIT; k++) {
       const a = ix[k*3] + vo, b = ix[k*3+1] + vo, d = ix[k*3+2] + vo;
       out[to + k*3] = a; out[to + k*3 + 1] = neg ? d : b; out[to + k*3 + 2] = neg ? b : d;
     }
+    vo += nIV; to += nIT * 3;
   });
   return { pos, idx: out, face, count: cnt };
 }
