@@ -40,6 +40,7 @@ header{grid-column:1/-1;display:flex;align-items:center;gap:8px;padding:0 12px;b
 .btn.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:700}
 .btn:disabled{opacity:.4;cursor:default}
 .btn.on{border-color:var(--accent);color:var(--accent)}
+#groomCur{position:absolute;border:1.5px solid #ffd49a;border-radius:50%;pointer-events:none;z-index:5;box-shadow:0 0 0 1px rgba(0,0,0,.35)}
 .btn small{color:var(--muted);font-family:var(--mono);font-size:10px}
 .btn.primary small{color:#5a4120}
 #btnPanel{display:none}
@@ -266,6 +267,7 @@ dl.keys dd{margin:0;color:var(--muted)}
   </nav>
   <main id="view">
     <div id="toast"></div>
+    <div id="groomCur" hidden></div>
     <svg id="lazyLine" aria-hidden="true"><line id="lazyL" stroke="#ffd49a" stroke-width="1.5" stroke-dasharray="3 3" opacity=".8" visibility="hidden"/><polygon id="lassoPoly" points="" visibility="hidden"/></svg>
     <div class="overlay" id="stats"></div>
     <div class="overlay" id="hint">
@@ -442,6 +444,12 @@ dl.keys dd{margin:0;color:var(--muted)}
         <button class="btn" data-def="flatten">平らにする</button>
         <button class="btn" data-def="relax" title="形をならす（量で回数）">ならす</button>
       </div>
+      <div class="row" style="margin-top:8px"><label for="ffdRes" title="格子の点の数（1辺あたり）">FFD の格子</label><select id="ffdRes"><option value="2">2×2×2</option><option value="3" selected>3×3×3</option><option value="4">4×4×4</option><option value="5">5×5×5</option><option value="6">6×6×6</option></select></div>
+      <button class="btn full" id="ffdGo" title="パーツを囲む格子の点を動かして、全体をなめらかに変形します（FFD）">FFD（格子で変形）を始める</button>
+      <div id="ffdTools" hidden>
+        <div class="grid2"><button class="btn primary" id="ffdApply">FFD を確定</button><button class="btn" id="ffdCancel">やめる</button><button class="btn" id="ffdReset">格子を戻す</button><button class="btn" id="ffdAll">点をすべて選ぶ</button></div>
+        <p class="note" style="margin:4px 0 0">点をドラッグ：動かす。Shift+クリック：複数選択。対称 X がオンなら反対側の点も動きます。</p>
+      </div>
       <div class="grid2" style="margin-top:6px">
         <button class="btn primary" id="dfApply" disabled title="プレビュー中の変形を確定します">確定</button>
         <button class="btn" id="dfCancel" disabled>やめる</button>
@@ -581,8 +589,19 @@ dl.keys dd{margin:0;color:var(--muted)}
       <input type="range" id="fbSpread" min="0" max="1" step="0.01" value="0.3">
       <div class="row"><label for="fbThick">太さ</label><output id="fbThickOut">0.30</output></div>
       <input type="range" id="fbThick" min="0.05" max="2" step="0.01" value="0.3">
+      <div class="row"><label for="fbCurl" title="毛を波打たせる・縮らせる">うねり</label><output id="fbCurlOut">0.00</output></div>
+      <input type="range" id="fbCurl" min="0" max="1" step="0.01" value="0">
+      <div class="row"><label for="fbSeg" title="毛1本の節の数（多いほどなめらかに曲がる）">節の数</label><select id="fbSeg"><option>4</option><option selected>6</option><option>8</option><option>12</option><option>16</option></select></div>
+      <div class="row"><label for="fbSides">断面の角数</label><select id="fbSides"><option selected>3</option><option>4</option><option>6</option></select></div>
       <button class="btn primary full" id="fbGo">マスクした所から毛を生やす</button>
+      <h3 style="margin:10px 0 4px;font-size:12px">グルーミング（毛を整える）</h3>
+      <div class="row"><input type="checkbox" id="groomOn" disabled><label for="groomOn">グルーミングする</label></div>
+      <div class="row"><label for="groomTool">ブラシ</label><select id="groomTool"><option value="comb">くし（とかす）</option><option value="lift">立てる</option><option value="gravity">たらす</option><option value="length">長さ（Alt で短く）</option><option value="cut">切りそろえる</option><option value="clump">束ねる</option><option value="curl">巻く（Alt で逆向き）</option><option value="smooth">なめらか</option><option value="frizz">乱す</option></select></div>
+      <div class="row"><label for="groomStr">強さ</label><output id="groomStrOut">0.60</output></div>
+      <input type="range" id="groomStr" min="0.05" max="1" step="0.01" value="0.6">
+      <p class="note" id="groomNote">毛のパーツを選ぶと使えます</p>
       <p class="note">マスクした所から毛（髪・毛皮・草）を生やして、新しいサブツールにします。根元の色はポリペイントの色を引き継ぎます。</p>
+          <p class="note">毛は節ごとの線として覚えているので、あとから整えられます。「グルーミングする」をオンにして、毛のパーツの上をドラッグします（円の大きさ＝ブラシサイズ）。根元は動かず、毛の長さは保たれます（「長さ」「切りそろえる」以外）。元に戻す・保存に対応しています。</p>
     </section>
 
     <section data-tab="model" id="t3Sec">
@@ -773,6 +792,9 @@ dl.keys dd{margin:0;color:var(--muted)}
       <div class="row"><input type="checkbox" id="rtSym" checked><label for="rtSym">左右対称（X）</label></div>
       <div class="row"><input type="checkbox" id="rtPure" checked><label for="rtPure">四角ポリゴンだけにする（形に沿う）</label></div>
       <div class="row"><input type="checkbox" id="rtSharp" checked><label for="rtSharp">角やエッジを保つ（形に沿う）</label></div>
+      <div class="row"><label for="rtCurv" title="腕・筒・トーラスなど、一方向に長い所でループを形に巻き付けます（0 で以前と同じ）">曲がりに沿わせる（形に沿う）</label><output id="rtCurvOut">0.50</output></div>
+      <input type="range" id="rtCurv" min="0" max="1" step="0.05" value="0.5">
+      <div class="row"><input type="checkbox" id="rtCollapse" checked><label for="rtCollapse" title="両端が三角形で終わる余分な四角の列をまとめて、極（5本・3本の辺が集まる点）を減らします">余分な列をまとめて極を減らす（形に沿う）</label></div>
       <div class="row"><input type="checkbox" id="rtGroups" checked><label for="rtGroups">ポリグループの境目に沿わせる（形に沿う）</label></div>
       <div class="row"><input type="checkbox" id="rtGuides" checked><label for="rtGuides">ガイド線の向きに並べる（形に沿う）</label></div>
       <div class="grid2"><button class="btn" id="rtGuideDraw" title="ガイド線ブラシに切り替えます。表面をなぞると線が引けます">ガイド線を引く</button><button class="btn" id="rtGuideClear">ガイド線を消す</button></div>
@@ -1243,6 +1265,7 @@ function recData(r) {
     dens: densOf(r),
     topo: topoPack(r.topo),
     vdmPlate: r.vdmPlate || null,
+    fiber: r.fiber && r.fiber.dir instanceof Float32Array ? { n: r.fiber.n, seg: r.fiber.seg, sides: r.fiber.sides, dir: r.fiber.dir } : null,
     layers: (r.layers || []).filter(l => l.delta.length === r.pos.length).map(l => ({ name: l.name, I: l.I, on: l.on, delta: l.delta })),
     levels: r.levels.map((L, k) => k === r.lv
       ? { current: true, ev: L.ev || null, quads: L.quads || null, ref0: L.ref0 || null, ...texData(L), ...polyData(L), ...(L.cc !== undefined ? { cc: L.cc } : {}) }
@@ -1268,6 +1291,7 @@ function recFromData(s) {
   r.topo = topoUnpack(s.topo);
   r.dens = s.dens instanceof Float32Array && s.dens.length === s.pos.length / 3 ? s.dens : null;
   r.vdmPlate = s.vdmPlate && s.vdmPlate.ref instanceof Float32Array ? { ref: s.vdmPlate.ref, h: +s.vdmPlate.h || 1 } : null;
+  { const f = s.fiber; r.fiber = f && f.dir instanceof Float32Array && f.n > 0 && f.dir.length === f.n * 3 && s.pos.length === f.n * (f.seg * f.sides + 1) * 3 ? { n: f.n | 0, seg: f.seg | 0, sides: f.sides | 0, dir: f.dir } : null; }
   r.layers = Array.isArray(s.layers) ? s.layers.filter(l => l && l.delta instanceof Float32Array && l.delta.length === s.pos.length)
     .map((l, k) => ({ name: String(l.name || `レイヤー ${k + 1}`), delta: l.delta, I: Number.isFinite(l.I) ? l.I : 1, on: l.on !== false, rec: false })) : [];
   const Ls = Array.isArray(s.levels) ? s.levels : null, lv = s.lv | 0;
@@ -1355,10 +1379,12 @@ function activate(rec, force = false) {
   if (dfp) deformCommit(true);
   if (dyn) dynStop();
   if (nmPrev) nmClear();
+  if (ffd) ffdCommit(true);
   flushNormals();
   dropView(rec);
   active = rec;
   setMesh(rec.pos, rec.idx, rec.mask, rec.mirror, rec.paint);
+  queueMicrotask(groomUI);
   syncScene();
   if (gizmoOn) attachGizmo();
 }
@@ -1699,8 +1725,8 @@ function stepHistory(from, to) {
   if (gizmoOn) attachGizmo();
   updateUndoButtons(); scheduleSave();
 }
-function undo() { if (dyn) dynStop(); if (dfp) { deformCancel(); return; } stepHistory(undoStack, redoStack); }
-function redo() { if (dfp) deformCommit(true); stepHistory(redoStack, undoStack); }
+function undo() { if (dyn) dynStop(); if (ffd) { ffdCancel(); return; } if (dfp) { deformCancel(); return; } stepHistory(undoStack, redoStack); }
+function redo() { if (dfp) deformCommit(true); if (ffd) ffdCommit(true); stepHistory(redoStack, undoStack); }
 function updateUndoButtons() { $('btnUndo').disabled = !undoStack.length; $('btnRedo').disabled = !redoStack.length; }
 
 // ---------------- brushes ----------------
@@ -2204,6 +2230,8 @@ function dabSym(P, N, r, ref, reps = 0) {
 
 function onDown(e) {
   if (zs) { zsDown(e); return; }
+  if (ffd && e.button === 0) { if (ffdValid()) { ffdDown(e); return; } ffdCommit(true); }   // FFD: points only, no sculpting
+  if (groom.on && e.button === 0 && fiberValid()) { if (!e.ctrlKey && !e.shiftKey) { groomDown(e); return; } }
   if (pe.on && e.button === 0) { if (peAvailable()) peSet(false); else { peDown(e); return; } }   // a miss leaves the background to the view controls
   if (nz && e.button === 0) noiseCancel();   // sculpting ends a noise preview
   if (dfp && e.button === 0) deformCommit(true);   // ...and commits a deformer preview
@@ -2482,6 +2510,9 @@ function showLazy(L, e) {
 
 canvas.addEventListener('pointermove', e => {
   if (zs) { if (zs.drag) zsMove(e); return; }
+  if (groom.on) groomCursor(e);
+  if (ffd && ffd.drag) { ffdMove(e); return; }
+  if (groom.drag) { groomMove(e); return; }
   if (clip) { if (e.pointerId === clip.id) clipMove(e); return; }
   if (lasso) { if (e.pointerId === lasso.id) lassoMove(e); return; }
   if (pe.on) { if (pe.drag) { if (e.pointerId === pe.drag.id) peDragTo(e); } else if (!e.buttons) peHover(e); return; }
@@ -2524,6 +2555,8 @@ canvas.addEventListener('dblclick', e => {
 });
 function endStroke() {
   if (zs) { zsUp(); return; }
+  if (ffd && ffd.drag) { ffdUp(); return; }
+  if (groom.drag) { groomUp(); return; }
   if (pe.drag) { peUp(); return; }
   if (clip) { finishClip(); return; }
   if (lasso) { finishLasso(); return; }
@@ -3808,6 +3841,128 @@ function nmMake(kind) {
   });
 }
 
+// ---------------- FFD: a lattice of control points around the active part, Bernstein (Bezier volume) deformation ----------------
+let ffd = null;   // { rec, base, L:[l,m,n], cp0, cp, W (per-vertex basis), sel:Set, group, pts:[], lines, drag }
+const ffdPtGeo = new THREE.SphereGeometry(1, 12, 8);
+const ffdMat = new THREE.MeshBasicMaterial({ color: 0x6fb7ff, depthTest: false, transparent: true, opacity: 0.95 });
+const ffdSelMat = new THREE.MeshBasicMaterial({ color: 0xffb347, depthTest: false });
+const ffdLineMat = new THREE.LineBasicMaterial({ color: 0x6fb7ff, depthTest: false, transparent: true, opacity: 0.55 });
+const ffdValid = () => ffd && ffd.rec === active && ffd.base.length === pos.length;
+const binom = (n, k) => { let r = 1; for (let i = 1; i <= k; i++) r = r * (n - k + i) / i; return r; };
+function ffdStart() {
+  if (ffd) ffdCommit(true);
+  if (!active || stroke) return;
+  if (dfp) deformCommit(true);
+  if (gizmoOn) setGizmo(false);
+  flushNormals(); geo.computeBoundingBox();
+  const res = Math.max(2, Math.min(6, +$('ffdRes').value | 0)), Ls = [res, res, res];
+  const bb = geo.boundingBox, pad = bb.getSize(new V3()).length() * 0.02;
+  const lo = [bb.min.x - pad, bb.min.y - pad, bb.min.z - pad], hi = [bb.max.x + pad, bb.max.y + pad, bb.max.z + pad];
+  const N = Ls[0] * Ls[1] * Ls[2], cp0 = new Float32Array(N * 3);
+  // a degree-(n-1) Bezier volume with evenly spaced control points is the identity map, so moved points = offsets
+  for (let i = 0; i < Ls[0]; i++) for (let j = 0; j < Ls[1]; j++) for (let k = 0; k < Ls[2]; k++) {
+    const c = ((i * Ls[1] + j) * Ls[2] + k) * 3, t = [i / (Ls[0] - 1), j / (Ls[1] - 1), k / (Ls[2] - 1)];
+    for (let a = 0; a < 3; a++) cp0[c + a] = lo[a] + (hi[a] - lo[a]) * t[a];
+  }
+  // per-vertex 1D basis values for each axis
+  const W = [0, 1, 2].map(a => new Float32Array(nV * Ls[a]));
+  const bc = [0, 1, 2].map(a => Array.from({ length: Ls[a] }, (_, i) => binom(Ls[a] - 1, i)));
+  for (let v = 0; v < nV; v++) for (let a = 0; a < 3; a++) {
+    const t = Math.max(0, Math.min(1, (pos[v*3+a] - lo[a]) / (hi[a] - lo[a] || 1))), n = Ls[a] - 1, w = W[a], o = v * Ls[a];
+    for (let i = 0; i <= n; i++) w[o + i] = bc[a][i] * Math.pow(t, i) * Math.pow(1 - t, n - i);
+  }
+  pushUndo();
+  const group = new THREE.Group(); group.renderOrder = 998; scene.add(group);
+  ffd = { rec: active, base: pos.slice(), L: Ls, lo, hi, cp0, cp: cp0.slice(), W, sel: new Set(), group, pts: [], lines: null, drag: null };
+  const r = (hi[0] - lo[0] + hi[1] - lo[1] + hi[2] - lo[2]) / 3 * 0.018;
+  for (let c = 0; c < N; c++) { const m = new THREE.Mesh(ffdPtGeo, ffdMat); m.scale.setScalar(r); m.renderOrder = 999; m.userData.c = c; group.add(m); ffd.pts.push(m); }
+  const segs = [];
+  for (let i = 0; i < Ls[0]; i++) for (let j = 0; j < Ls[1]; j++) for (let k = 0; k < Ls[2]; k++) {
+    const c = (i * Ls[1] + j) * Ls[2] + k;
+    if (i + 1 < Ls[0]) segs.push(c, c + Ls[1] * Ls[2]); if (j + 1 < Ls[1]) segs.push(c, c + Ls[2]); if (k + 1 < Ls[2]) segs.push(c, c + 1);
+  }
+  const lg = new THREE.BufferGeometry(); lg.setAttribute('position', new THREE.BufferAttribute(ffd.cp, 3)); lg.setIndex(segs);
+  ffd.lines = new THREE.LineSegments(lg, ffdLineMat); ffd.lines.renderOrder = 998; ffd.lines.frustumCulled = false; group.add(ffd.lines);
+  ffdSync(); ffdUI();
+  toast('FFD：青い点をドラッグで動かします（Shift+クリックで複数選択、背景クリックで選択解除）');
+}
+function ffdSync() {
+  for (const m of ffd.pts) { const c = m.userData.c; m.position.fromArray(ffd.cp, c * 3); m.material = ffd.sel.has(c) ? ffdSelMat : ffdMat; }
+  ffd.lines.geometry.attributes.position.needsUpdate = true; ffd.group.updateMatrixWorld(true);
+}
+function ffdApply() {
+  const { L, W, cp, cp0, base } = ffd, [l, m, n] = L, N = l * m * n;
+  const D = new Float32Array(N * 3); let anyMove = false;
+  for (let c = 0; c < N * 3; c++) { D[c] = cp[c] - cp0[c]; if (D[c]) anyMove = true; }
+  if (!anyMove) { pos.set(base); computeAllNormals(); return; }
+  const Wx = W[0], Wy = W[1], Wz = W[2];
+  for (let v = 0; v < nV; v++) {
+    const i3 = v * 3, keep = 1 - mask[v];
+    if (keep <= 0) { pos[i3] = base[i3]; pos[i3+1] = base[i3+1]; pos[i3+2] = base[i3+2]; continue; }
+    let x = 0, y = 0, z = 0;
+    for (let i = 0; i < l; i++) {
+      const wi = Wx[v * l + i]; if (wi < 1e-7) continue;
+      for (let j = 0; j < m; j++) {
+        const wij = wi * Wy[v * m + j]; if (wij < 1e-7) continue;
+        const cb = (i * m + j) * n;
+        for (let k = 0; k < n; k++) { const w = wij * Wz[v * n + k], c = (cb + k) * 3; x += D[c] * w; y += D[c+1] * w; z += D[c+2] * w; }
+      }
+    }
+    pos[i3] = base[i3] + x * keep; pos[i3+1] = base[i3+1] + y * keep; pos[i3+2] = base[i3+2] + z * keep;
+  }
+  computeAllNormals(); geo.computeBoundingSphere();
+}
+let ffdRaf = 0;
+const ffdSoon = () => { cancelAnimationFrame(ffdRaf); ffdRaf = requestAnimationFrame(() => { if (ffdValid()) ffdApply(); }); };
+// mirrored lattice index across x (lattice built around the bounding box; mirrored through its centre)
+const ffdMirror = c => { const [l, m, n] = ffd.L, i = Math.floor(c / (m * n)), r = c % (m * n); return (l - 1 - i) * m * n + r; };
+function ffdDown(e) {
+  if (!ffdValid()) return false;
+  setNDC(e); camera.updateMatrixWorld(); raycaster.setFromCamera(ndc, camera);
+  // nearest control point in screen space within 14 px
+  const rect = canvas.getBoundingClientRect(), mx = e.clientX - rect.left, my = e.clientY - rect.top, v = new V3();
+  let best = -1, bd = 14;
+  for (const m of ffd.pts) { v.copy(m.position).project(camera); const sx = (v.x + 1) / 2 * rect.width, sy = (1 - v.y) / 2 * rect.height, d = Math.hypot(sx - mx, sy - my); if (v.z < 1 && d < bd) { bd = d; best = m.userData.c; } }
+  if (best < 0) { if (!e.shiftKey && ffd.sel.size) { ffd.sel.clear(); ffdSync(); } return false; }   // background: leave it to the view controls
+  if (e.shiftKey) { if (ffd.sel.has(best)) ffd.sel.delete(best); else ffd.sel.add(best); }
+  else if (!ffd.sel.has(best)) { ffd.sel.clear(); ffd.sel.add(best); }
+  const P = new V3().fromArray(ffd.cp, best * 3);
+  ffd.drag = { id: e.pointerId, plane: new THREE.Plane().setFromNormalAndCoplanarPoint(camera.getWorldDirection(new V3()), P), P0: P.clone(), start: ffd.cp.slice() };
+  controls.enabled = false; try { canvas.setPointerCapture(e.pointerId); } catch {}
+  ffdSync();
+  return true;
+}
+function ffdMove(e) {
+  const d = ffd && ffd.drag; if (!d || e.pointerId !== d.id) return;
+  setNDC(e); raycaster.setFromCamera(ndc, camera);
+  const hit = raycaster.ray.intersectPlane(d.plane, new V3()); if (!hit) return;
+  const dv = hit.sub(d.P0), sym = S.sym, done = new Set();
+  ffd.cp.set(d.start);
+  for (const c of ffd.sel) {
+    ffd.cp[c*3] = d.start[c*3] + dv.x; ffd.cp[c*3+1] = d.start[c*3+1] + dv.y; ffd.cp[c*3+2] = d.start[c*3+2] + dv.z; done.add(c);
+  }
+  if (sym) for (const c of ffd.sel) { const mc = ffdMirror(c); if (done.has(mc)) continue; ffd.cp[mc*3] = d.start[mc*3] - dv.x; ffd.cp[mc*3+1] = d.start[mc*3+1] + dv.y; ffd.cp[mc*3+2] = d.start[mc*3+2] + dv.z; }
+  ffdSync(); ffdSoon();
+}
+function ffdUp() {
+  const d = ffd && ffd.drag; if (!d) return;
+  ffd.drag = null; controls.enabled = true;
+  try { canvas.releasePointerCapture(d.id); } catch {}
+}
+function ffdEnd() { if (!ffd) return; cancelAnimationFrame(ffdRaf); scene.remove(ffd.group); ffd.lines.geometry.dispose(); ffd = null; ffdUI(); }
+function ffdCommit(quiet = false) {
+  if (!ffd) return;
+  if (ffdValid()) { ffdApply(); afterBulkEdit(); if (!quiet) toast('FFD の変形を確定しました'); }
+  ffdEnd();
+}
+function ffdCancel() {
+  if (!ffd) return;
+  if (ffdValid()) { pos.set(ffd.base); computeAllNormals(); geo.computeBoundingSphere(); undoStack.pop(); }
+  ffdEnd();
+}
+function ffdReset() { if (!ffdValid()) return; ffd.cp.set(ffd.cp0); ffd.sel.clear(); ffdSync(); ffdApply(); }
+function ffdUI() { const on = !!ffd; $('ffdGo').hidden = on; $('ffdTools').hidden = !on; }
+
 // ---------------- morph target ----------------
 function morphStore() { flushNormals(); active.morph = pos.slice(); toast('今の形をモーフとして保存しました（「モーフ」ブラシで塗ると戻せます）'); scheduleSave(); }
 function morphRestore() {
@@ -4136,6 +4291,65 @@ function pgFromColor() {
 }
 
 // ---------------- FiberMesh-style fibres (hair, fur, grass) grown from the masked area ----------------
+// ---------------- FiberMesh: strands kept as data (tube rings around a centre line) so they can be groomed ----------------
+// layout of one fiber in the mesh: seg rings of `sides` vertices (root first), then one tip vertex
+const fiberStride = F => F.seg * F.sides + 1;
+const fiberValid = (r = active) => !!(r && r.fiber && r === active && nV === r.fiber.n * fiberStride(r.fiber));
+// centre lines from the current mesh: ring averages + tip
+function fiberPts(F, P) {
+  const st = fiberStride(F), S1 = F.seg + 1, out = new Float32Array(F.n * S1 * 3);
+  for (let k = 0; k < F.n; k++) {
+    const b = k * st;
+    for (let s = 0; s < F.seg; s++) {
+      let x = 0, y = 0, z = 0;
+      for (let j = 0; j < F.sides; j++) { const v = (b + s * F.sides + j) * 3; x += P[v]; y += P[v+1]; z += P[v+2]; }
+      const o = (k * S1 + s) * 3; out[o] = x / F.sides; out[o+1] = y / F.sides; out[o+2] = z / F.sides;
+    }
+    const t = (b + F.seg * F.sides) * 3, o = (k * S1 + F.seg) * 3; out[o] = P[t]; out[o+1] = P[t+1]; out[o+2] = P[t+2];
+  }
+  return out;
+}
+// root radius of every fiber (ring 0 distance from its centre)
+function fiberRadii(F, P, C) {
+  const st = fiberStride(F), S1 = F.seg + 1, r = new Float32Array(F.n);
+  for (let k = 0; k < F.n; k++) { const v = k * st * 3, o = k * S1 * 3; r[k] = Math.hypot(P[v] - C[o], P[v+1] - C[o+1], P[v+2] - C[o+2]); }
+  return r;
+}
+// tube mesh around the centre lines, parallel-transported frames (no twisting), radius narrowing to the tip
+function fiberWrite(F, C, R, P, only) {
+  const st = fiberStride(F), S1 = F.seg + 1, sd = F.sides;
+  let e1x = 0, e1y = 0, e1z = 0;
+  for (let k = 0; k < F.n; k++) {
+    if (only && !only[k]) continue;
+    const c0 = k * S1 * 3, b = k * st;
+    for (let s = 0; s < F.seg; s++) {
+      const o = c0 + s * 3, a = s > 0 ? o - 3 : o, n = o + 3;
+      let dx = C[n] - C[a], dy = C[n+1] - C[a+1], dz = C[n+2] - C[a+2]; const dl = Math.hypot(dx, dy, dz) || 1; dx /= dl; dy /= dl; dz /= dl;
+      if (s === 0) { if (Math.abs(dx) < 0.9) { e1x = 0; e1y = -dz; e1z = dy; } else { e1x = dz; e1y = 0; e1z = -dx; } }
+      const dd = e1x * dx + e1y * dy + e1z * dz; e1x -= dx * dd; e1y -= dy * dd; e1z -= dz * dd;
+      const el = Math.hypot(e1x, e1y, e1z) || 1; e1x /= el; e1y /= el; e1z /= el;
+      const e2x = dy * e1z - dz * e1y, e2y = dz * e1x - dx * e1z, e2z = dx * e1y - dy * e1x, r = R[k] * (1 - s / F.seg);
+      for (let j = 0; j < sd; j++) {
+        const q = j / sd * Math.PI * 2, cs = Math.cos(q) * r, sn = Math.sin(q) * r, v = (b + s * sd + j) * 3;
+        P[v] = C[o] + e1x * cs + e2x * sn; P[v+1] = C[o+1] + e1y * cs + e2y * sn; P[v+2] = C[o+2] + e1z * cs + e2z * sn;
+      }
+    }
+    const t = (b + F.seg * sd) * 3, o = c0 + F.seg * 3; P[t] = C[o]; P[t+1] = C[o+1]; P[t+2] = C[o+2];
+  }
+}
+function fiberIndex(n, seg, sides) {
+  const st = seg * sides + 1, ix = new Uint32Array(n * ((seg - 1) * sides * 2 + sides) * 3); let w = 0;
+  for (let k = 0; k < n; k++) {
+    const base = k * st;
+    for (let s = 0; s < seg - 1; s++) for (let j = 0; j < sides; j++) {
+      const A = base + s * sides + j, B = base + s * sides + (j + 1) % sides, C = A + sides, D = B + sides;
+      ix[w++] = A; ix[w++] = B; ix[w++] = D; ix[w++] = A; ix[w++] = D; ix[w++] = C;
+    }
+    const tip = base + seg * sides, last = base + (seg - 1) * sides;
+    for (let j = 0; j < sides; j++) { ix[w++] = last + j; ix[w++] = last + (j + 1) % sides; ix[w++] = tip; }
+  }
+  return ix;
+}
 function growFibers() {
   flushNormals();
   const faces = [], area = [];
@@ -4151,10 +4365,12 @@ function growFibers() {
     geo.computeBoundingSphere();
     const count = Math.max(10, Math.min(20000, +$('fbCount').value | 0)), size = geo.boundingSphere.radius * 2;
     const len0 = +$('fbLen').value * size, vary = +$('fbVary').value, grav = +$('fbGrav').value, thick = +$('fbThick').value * size * 0.01, spread = +$('fbSpread').value;
-    const SEG = 6, SIDES = 3, p = [], ix = [], col = paint ? [] : null;
+    const SEG = Math.max(3, Math.min(16, +$('fbSeg').value | 0)), SIDES = Math.max(3, Math.min(8, +$('fbSides').value | 0)), curl = +$('fbCurl').value;
+    const S1 = SEG + 1, C = new Float32Array(count * S1 * 3), R = new Float32Array(count).fill(thick), dir = new Float32Array(count * 3);
+    const rootCol = paint ? new Float32Array(count * 3) : null;
     let seed = 1234567;
     const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
-    const n = new V3(), d = new V3(), t1 = new V3(), t2 = new V3(), cur = new V3(), down = new V3(0, -1, 0);
+    const n = new V3(), d = new V3(), t1 = new V3(), t2 = new V3(), cur = new V3(), down = new V3(0, -1, 0), ax = new V3();
     for (let k = 0; k < count; k++) {
       // area-weighted random face, random point inside it
       const x = rnd() * total; let lo = 0, hi = area.length - 1; while (lo < hi) { const m = (lo + hi) >> 1; if (area[m] < x) lo = m + 1; else hi = m; }
@@ -4166,29 +4382,134 @@ function growFibers() {
       t1.set(Math.abs(n.x) < 0.9 ? 1 : 0, Math.abs(n.x) < 0.9 ? 0 : 1, 0).cross(n).normalize(); t2.crossVectors(n, t1);
       const ang = rnd() * Math.PI * 2, tilt = spread * rnd();
       d.copy(n).addScaledVector(t1, Math.cos(ang) * tilt).addScaledVector(t2, Math.sin(ang) * tilt).normalize();
-      const L = len0 * (1 - vary * rnd()), seg = L / SEG, base = p.length / 3;
-      const rc = col ? [paint[a*3]*z + paint[b*3]*u + paint[c*3]*w, paint[a*3+1]*z + paint[b*3+1]*u + paint[c*3+1]*w, paint[a*3+2]*z + paint[b*3+2]*u + paint[c*3+2]*w] : null;
-      // rings of 3 vertices along the strand, narrowing to a single tip vertex
+      dir[k*3] = n.x; dir[k*3+1] = n.y; dir[k*3+2] = n.z;
+      const L = len0 * (1 - vary * rnd()), seg = L / SEG;
+      if (rootCol) for (let j = 0; j < 3; j++) rootCol[k*3+j] = paint[a*3+j]*z + paint[b*3+j]*u + paint[c*3+j]*w;
+      ax.copy(n); const cph = rnd() * Math.PI * 2;
       for (let s = 0; s <= SEG; s++) {
-        if (s > 0) { cur.addScaledVector(d, seg); d.addScaledVector(down, grav * 0.35).normalize(); }
-        if (s === SEG) { p.push(cur.x, cur.y, cur.z); if (col) col.push(...rc); break; }
-        const r = thick * (1 - s / SEG);
-        const e1 = new V3(Math.abs(d.x) < 0.9 ? 1 : 0, Math.abs(d.x) < 0.9 ? 0 : 1, 0).cross(d).normalize(), e2 = new V3().crossVectors(d, e1);
-        for (let j = 0; j < SIDES; j++) { const q = j / SIDES * Math.PI * 2; p.push(cur.x + (e1.x * Math.cos(q) + e2.x * Math.sin(q)) * r, cur.y + (e1.y * Math.cos(q) + e2.y * Math.sin(q)) * r, cur.z + (e1.z * Math.cos(q) + e2.z * Math.sin(q)) * r); if (col) col.push(...rc); }
+        if (s > 0) {
+          cur.addScaledVector(d, seg); d.addScaledVector(down, grav * 0.35);
+          if (curl) d.applyAxisAngle(ax, curl * 0.9 * Math.cos(cph + s));   // wavy / curly
+          d.normalize();
+        }
+        const o = (k * S1 + s) * 3; C[o] = cur.x; C[o+1] = cur.y; C[o+2] = cur.z;
       }
-      for (let s = 0; s < SEG - 1; s++) for (let j = 0; j < SIDES; j++) {
-        const A = base + s * SIDES + j, B = base + s * SIDES + (j + 1) % SIDES, C = A + SIDES, D = B + SIDES;
-        ix.push(A, B, D, A, D, C);
-      }
-      const tip = base + SEG * SIDES, last = base + (SEG - 1) * SIDES;
-      for (let j = 0; j < SIDES; j++) ix.push(last + j, last + (j + 1) % SIDES, tip);
     }
+    const st = SEG * SIDES + 1, P = new Float32Array(count * st * 3), F = { n: count, seg: SEG, sides: SIDES, dir };
+    fiberWrite(F, C, R, P);
     pushStruct();
-    const rec = newRec(uniqueName('毛'), new Float32Array(p), new Uint32Array(ix));
-    if (col) rec.paint = new Float32Array(col);
-    insertAfterActive(rec); syncScene(); scheduleSave();
-    toast(`${count.toLocaleString()} 本の毛を生やしました（「${rec.name}」・${(ix.length / 3).toLocaleString()} ポリゴン）`);
+    const rec = newRec(uniqueName('毛'), P, fiberIndex(count, SEG, SIDES));
+    rec.fiber = F;
+    if (rootCol) { const c = new Float32Array(P.length); for (let k = 0; k < count; k++) for (let v = 0; v < st; v++) c.set(rootCol.subarray(k*3, k*3+3), (k * st + v) * 3); rec.paint = c; }
+    insertAfterActive(rec); syncScene(); renderSubtoolList(); scheduleSave();
+    toast(`${count.toLocaleString()} 本の毛を生やしました（「${rec.name}」・${(rec.idx.length / 3).toLocaleString()} ポリゴン）。選ぶと「グルーミング」で整えられます`);
   });
+}
+// ---------------- grooming: brushes on the strands in screen space ----------------
+const groom = { on: false, drag: null };
+const GROOM_TOOLS = { comb: 'くし（とかす）', lift: '立てる', gravity: 'たらす', length: '長さ（Alt で短く）', clump: '束ねる', curl: '巻く', smooth: 'なめらか', frizz: '乱す', cut: '切りそろえる' };
+function groomUI() {
+  const ok = fiberValid();
+  $('groomOn').disabled = !ok; if (!ok && groom.on) { groom.on = false; $('groomOn').checked = false; }
+  $('groomNote').textContent = ok ? `「${active.name}」：${active.fiber.n.toLocaleString()} 本` : '毛のパーツを選ぶと使えます';
+  $('groomCur').hidden = !groom.on;
+}
+function groomDown(e) {
+  if (!fiberValid()) return false;
+  flushNormals();
+  const F = active.fiber, C = fiberPts(F, pos), S1 = F.seg + 1, L = new Float32Array(F.n * F.seg);
+  for (let k = 0; k < F.n; k++) for (let s = 0; s < F.seg; s++) { const o = (k * S1 + s) * 3; L[k * F.seg + s] = Math.hypot(C[o+3] - C[o], C[o+4] - C[o+1], C[o+5] - C[o+2]); }
+  pushUndo();
+  groom.drag = { id: e.pointerId, x: e.clientX, y: e.clientY, C, L, R: fiberRadii(F, pos, C), scr: new Float32Array(F.n * S1 * 2), touched: new Uint8Array(F.n), seed: 1 };
+  controls.enabled = false; try { canvas.setPointerCapture(e.pointerId); } catch {}
+  return true;
+}
+function groomMove(e) {
+  const G = groom.drag; if (!G || e.pointerId !== G.id) return;
+  const F = active.fiber, C = G.C, L = G.L, S1 = F.seg + 1, tool = $('groomTool').value, k0 = +$('groomStr').value;
+  const dxp = e.clientX - G.x, dyp = e.clientY - G.y; G.x = e.clientX; G.y = e.clientY;
+  const rect = canvas.getBoundingClientRect(), mx = e.clientX - rect.left, my = e.clientY - rect.top, Rpx = S.size, moved = Math.hypot(dxp, dyp);
+  if (!moved) return;
+  camera.updateMatrixWorld();
+  const vp = new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse).elements, W = rect.width, H = rect.height;
+  const right = camAxis(0), up = camAxis(1), wpp = worldPerPx(controls.target);
+  const off = new V3().addScaledVector(right, dxp * wpp).addScaledVector(up, -dyp * wpp);
+  const sign = e.altKey ? -1 : 1;
+  // weights per fiber point: screen distance to the brush, more toward the tip
+  const wts = new Float32Array(F.n * S1); let any = 0;
+  for (let k = 0; k < F.n; k++) {
+    for (let s = 1; s < S1; s++) {
+      const o = (k * S1 + s) * 3, x = C[o], y = C[o+1], z = C[o+2];
+      const cw = vp[3] * x + vp[7] * y + vp[11] * z + vp[15]; if (cw <= 0) continue;
+      const sx = ((vp[0] * x + vp[4] * y + vp[8] * z + vp[12]) / cw * 0.5 + 0.5) * W, sy = (0.5 - (vp[1] * x + vp[5] * y + vp[9] * z + vp[13]) / cw * 0.5) * H;
+      const d = Math.hypot(sx - mx, sy - my) / Rpx; if (d >= 1) continue;
+      const fo = (1 - d * d) ** 2; wts[k * S1 + s] = fo * k0 * (tool === 'comb' || tool === 'gravity' || tool === 'curl' ? s / F.seg : 1); any = 1;
+    }
+  }
+  if (!any) return;
+  const gS = new Float32Array(S1 * 3), gN = new Float32Array(S1);   // clump: average point per segment level under the brush
+  if (tool === 'clump') for (let k = 0; k < F.n; k++) for (let s = 1; s < S1; s++) { const w = wts[k * S1 + s]; if (!w) continue; const o = (k * S1 + s) * 3; gS[s*3] += C[o] * w; gS[s*3+1] += C[o+1] * w; gS[s*3+2] += C[o+2] * w; gN[s] += w; }
+  let rs = G.seed;
+  const rnd = () => { rs = (rs * 1103515245 + 12345) & 0x7fffffff; return rs / 0x7fffffff - 0.5; };
+  const q = new THREE.Quaternion(), v = new V3(), axis = new V3();
+  for (let k = 0; k < F.n; k++) {
+    let hit = 0; for (let s = 1; s < S1; s++) if (wts[k * S1 + s]) { hit = 1; break; }
+    if (!hit) continue;
+    G.touched[k] = 1;
+    const c0 = k * S1 * 3, segL = L[k * F.seg];
+    if (tool === 'length' || tool === 'cut') {
+      let w = 0; for (let s = 1; s < S1; s++) w = Math.max(w, wts[k * S1 + s]);
+      const f = tool === 'cut' ? 1 - 0.02 * w * moved : 1 + sign * 0.01 * w * moved;
+      for (let s = 0; s < F.seg; s++) L[k * F.seg + s] = Math.max(1e-6, L[k * F.seg + s] * Math.max(0.5, Math.min(1.5, f)));
+      continue;
+    }
+    if (tool === 'smooth') {
+      for (let s = 1; s < F.seg; s++) { const w = Math.min(1, wts[k * S1 + s] * 0.6), o = c0 + s * 3; for (let j = 0; j < 3; j++) C[o+j] += ((C[o-3+j] + C[o+3+j]) / 2 - C[o+j]) * w; }
+      continue;
+    }
+    if (tool === 'curl') axis.set(F.dir[k*3], F.dir[k*3+1], F.dir[k*3+2]);
+    for (let s = 1; s < S1; s++) {
+      const w = wts[k * S1 + s]; if (!w) continue;
+      const o = c0 + s * 3;
+      if (tool === 'comb') { C[o] += off.x * w; C[o+1] += off.y * w; C[o+2] += off.z * w; }
+      else if (tool === 'gravity') { C[o+1] -= segL * 0.08 * w * moved * 0.2; }
+      else if (tool === 'lift') {   // turn each segment toward the root direction
+        const p = o - 3, dl = L[k * F.seg + s - 1], b = Math.min(1, w * 0.04 * moved);
+        v.set(C[o] - C[p], C[o+1] - C[p+1], C[o+2] - C[p+2]).normalize().lerp(axis.set(F.dir[k*3], F.dir[k*3+1], F.dir[k*3+2]), b).normalize();
+        C[o] = C[p] + v.x * dl; C[o+1] = C[p+1] + v.y * dl; C[o+2] = C[p+2] + v.z * dl;
+      } else if (tool === 'clump') { if (gN[s] > 0) { const b = Math.min(1, w * 0.03 * moved); for (let j = 0; j < 3; j++) C[o+j] += (gS[s*3+j] / gN[s] - C[o+j]) * b; } }
+      else if (tool === 'curl') {   // rotate the strand around its root direction, more toward the tip
+        q.setFromAxisAngle(axis, sign * w * 0.004 * moved * s);
+        v.set(C[o] - C[c0], C[o+1] - C[c0+1], C[o+2] - C[c0+2]).applyQuaternion(q);
+        C[o] = C[c0] + v.x; C[o+1] = C[c0+1] + v.y; C[o+2] = C[c0+2] + v.z;
+      } else if (tool === 'frizz') { const a = segL * 0.03 * w * moved * 0.2; C[o] += rnd() * a; C[o+1] += rnd() * a; C[o+2] += rnd() * a; }
+    }
+  }
+  G.seed = rs;
+  // follow the leader: keep every segment's length, root fixed
+  for (let k = 0; k < F.n; k++) {
+    if (!G.touched[k]) continue;
+    const c0 = k * S1 * 3;
+    for (let s = 1; s < S1; s++) {
+      const o = c0 + s * 3, p = o - 3, dl = L[k * F.seg + s - 1];
+      let x = C[o] - C[p], y = C[o+1] - C[p+1], z = C[o+2] - C[p+2]; const l = Math.hypot(x, y, z) || 1;
+      C[o] = C[p] + x / l * dl; C[o+1] = C[p+1] + y / l * dl; C[o+2] = C[p+2] + z / l * dl;
+    }
+  }
+  fiberWrite(F, C, G.R, pos, G.touched);
+  G.touched.fill(0);
+  computeAllNormals(); geo.computeBoundingSphere();
+}
+function groomUp() {
+  const G = groom.drag; if (!G) return;
+  groom.drag = null; controls.enabled = true;
+  try { canvas.releasePointerCapture(G.id); } catch {}
+  afterBulkEdit();
+}
+function groomCursor(e) {
+  const c = $('groomCur'); if (!groom.on) { c.hidden = true; return; }
+  const r = view.getBoundingClientRect(), R = S.size;
+  c.hidden = false; c.style.left = `${e.clientX - r.left - R}px`; c.style.top = `${e.clientY - r.top - R}px`; c.style.width = c.style.height = `${R * 2}px`;
 }
 
 
@@ -5229,6 +5550,7 @@ function setLevel(target, quiet = false) {
   target = Math.max(0, Math.min(L.length - 1, target));
   if (target === rec.lv || stroke) return false;
   if (dfp) deformCommit(true);
+  if (ffd) ffdCommit(true);
   flushNormals();
   let m = mask, pt = paint, gp = pg;
   while (rec.lv > target) {
@@ -6211,13 +6533,13 @@ function peDown(e) {
       active.levels[0].crease = Uint32Array.from(keysToPairs(set)); buildCreaseLines();
     }
     pe.drag = { id: e.pointerId, y0: e.clientY, kind: 'bevel', base, polys, edges: loop.edges, t: t0, rec, amt: t0, nOut: r.pos.length };
-    controls.enabled = false; canvas.setPointerCapture(e.pointerId); peShow(null);
+    controls.enabled = false; try { canvas.setPointerCapture(e.pointerId); } catch {} peShow(null);
     toast(`${loop.edges.length} 本の辺を面取りします（上下にドラッグで幅）`);
   } else if (a === 'slide') {
     const loop = PE.edgeLoop(M.polys, nV, h.edge[0], h.edge[1], M.vf);
     pushUndo();
     pe.drag = { id: e.pointerId, y0: e.clientY, kind: 'slide', base: pos.slice(), polys: M.polys, edges: loop.edges, rec: active, amt: 0 };
-    controls.enabled = false; canvas.setPointerCapture(e.pointerId); peShow(null);
+    controls.enabled = false; try { canvas.setPointerCapture(e.pointerId); } catch {} peShow(null);
     toast(`${loop.edges.length} 本の辺の輪を滑らせます（上下にドラッグ）`);
   } else if (a === 'dissolve') {
     const loop = PE.edgeLoop(M.polys, nV, h.edge[0], h.edge[1], M.vf);
@@ -6244,7 +6566,7 @@ function peDown(e) {
     const v = peVertex(h), p = new V3(pos[v*3], pos[v*3+1], pos[v*3+2]), n = new V3(); camera.getWorldDirection(n);
     pushUndo();
     pe.drag = { id: e.pointerId, kind: 'vmove', v, plane: new THREE.Plane().setFromNormalAndCoplanarPoint(n, p), rec: active, amt: 0, p0: p.clone() };
-    controls.enabled = false; canvas.setPointerCapture(e.pointerId); peShow(null);
+    controls.enabled = false; try { canvas.setPointerCapture(e.pointerId); } catch {} peShow(null);
   } else if (a === 'flatten') {
     const sel = peSelection(h.f, h), r = PE.flatten(pos, M.polys, sel);
     pushUndo(); pos.set(r.pos); peGeomChanged();
@@ -6291,7 +6613,7 @@ function peDown(e) {
     let cx = 0, cy = 0, cz = 0; for (const [, v] of moved) { cx += P0[v*3]; cy += P0[v*3+1]; cz += P0[v*3+2]; }
     const k = moved.length || 1, size = sceneBounds([active]).getSize(new V3()).length();
     pe.drag = { id: e.pointerId, y0: e.clientY, moved, base: P0, center: [cx / k, cy / k, cz / k], size, rec, amt: 0, kind: a, ...extra };
-    controls.enabled = false; canvas.setPointerCapture(e.pointerId);
+    controls.enabled = false; try { canvas.setPointerCapture(e.pointerId); } catch {}
     peShow(null);
   }
   pe.cache = null;
@@ -6631,7 +6953,7 @@ function retopo() {
     flushNormals();
     const t0 = performance.now(), flow = $('rtMode').value === 'flow';
     const groups = $('rtGroups').checked && pg && pgCountGroups() > 1 ? pg : null, guides = $('rtGuides').checked && active.guides && active.guides.length ? active.guides : null;
-    const r = flow ? fieldRetopo({ pos, idx }, { target, smooth: Math.min(12, +$('rtSmooth').value), sym: $('rtSym').checked, pureQuad: $('rtPure').checked, sharpAngle: $('rtSharp').checked ? 60 : 0, groups, guides, density: $('rtDens').checked ? densOf(active) : null })
+    const r = flow ? fieldRetopo({ pos, idx }, { target, smooth: Math.min(12, +$('rtSmooth').value), sym: $('rtSym').checked, pureQuad: $('rtPure').checked, sharpAngle: $('rtSharp').checked ? 60 : 0, curvature: +$('rtCurv').value, collapseRows: $('rtCollapse').checked, groups, guides, density: $('rtDens').checked ? densOf(active) : null })
                    : quadRemesh({ pos, idx }, { target, smooth: +$('rtSmooth').value, sym: $('rtSym').checked, voxelLimit: VOXEL_LIMIT });
     if (!r) { toast('リトポできませんでした。目標ポリゴン数を変えてみてください'); return; }
     pushStruct();
@@ -7556,6 +7878,7 @@ $('dfAxis').addEventListener('change', () => { if (dfp) { dfp.R = dfp.Rc = null;
 $('dfApply').onclick = () => deformCommit();
 for (const [id, d] of [['dynGrav', 1], ['dynPress', 1], ['dynStiff', 2], ['dynBend', 2], ['dynFric', 2], ['dynFrames', 0]]) $(id).addEventListener('input', e => { $(id + 'Out').textContent = (+e.target.value).toFixed(d); });
 $('dynGo').onclick = () => dynStart();
+$('rtCurv').addEventListener('input', e => { $('rtCurvOut').textContent = (+e.target.value).toFixed(2); });
 $('mpTile').replaceChildren(...MICRO_TILES.map(t => { const o = document.createElement('option'); o.value = t.id; o.textContent = t.name; return o; }));
 for (const [id, d] of [['nmScale', 2], ['nmHeight', 2], ['nmOffset', 2], ['nmRot', 0], ['nmRandS', 2], ['nmRandR', 2], ['mpThick', 2]]) $(id).addEventListener('input', e => { $(id + 'Out').textContent = (+e.target.value).toFixed(d); if (nmPrev) nmPreview(); });
 for (const id of ['nmInst', 'nmFit', 'nmSeed', 'nmFlip', 'mpTile', 'mpTris', 'nmMasked']) $(id).addEventListener('change', () => { if (nmPrev) nmPreview(); });
@@ -7578,7 +7901,12 @@ for (const [id, d] of [['refOp', 2], ['refSize', 2], ['refStr', 2], ['arGap', 2]
 $('refMode').onchange = placeRef;
 $('arGo').onclick = arrayMesh; $('mwGo').onclick = mirrorWeld; $('pgSplit').onclick = splitGroups; $('paintCavity').onclick = () => busy(paintCavity);
 S.topoMask = false; $('topoMask').onchange = e => { S.topoMask = e.target.checked; };
-$('pgColor').onclick = pgFromColor; $('fbGo').onclick = growFibers; $('ttGo').onclick = () => recordTurntable();
+$('pgColor').onclick = pgFromColor; $('fbGo').onclick = growFibers;
+$('fbCurl').addEventListener('input', e => { $('fbCurlOut').textContent = (+e.target.value).toFixed(2); });
+$('groomStr').addEventListener('input', e => { $('groomStrOut').textContent = (+e.target.value).toFixed(2); });
+$('groomOn').onchange = e => { groom.on = e.target.checked && fiberValid(); if (groom.on && ffd) ffdCommit(true); groomUI(); };
+$('ffdGo').onclick = () => ffdStart(); $('ffdApply').onclick = () => ffdCommit(); $('ffdCancel').onclick = () => ffdCancel(); $('ffdReset').onclick = () => ffdReset();
+$('ffdAll').onclick = () => { if (!ffdValid()) return; ffd.sel = new Set(ffd.pts.map(m => m.userData.c)); ffdSync(); }; $('ttGo').onclick = () => recordTurntable();
 for (const [id, d] of [['fbLen', 2], ['fbVary', 2], ['fbGrav', 2], ['fbSpread', 2], ['fbThick', 2], ['ttSecs', 0]]) $(id).addEventListener('input', e => { $(id + 'Out').textContent = (+e.target.value).toFixed(d); });
 $('t3Go').onclick = textTo3D; $('t3Img').onclick = () => $('t3File').click();
 $('t3File').onchange = e => { const f = e.target.files[0]; if (f) imageTo3D(f); e.target.value = ''; };
