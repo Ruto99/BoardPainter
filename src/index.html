@@ -607,11 +607,12 @@ dl.keys dd{margin:0;color:var(--muted)}
       <h3 style="margin:10px 0 4px;font-size:12px">グルーミング（毛を整える）</h3>
       <div class="row"><input type="checkbox" id="groomOn" disabled><label for="groomOn">グルーミングする</label></div>
       <div class="row"><label for="groomTool">ブラシ</label><select id="groomTool"><option value="comb">くし（とかす）</option><option value="lift">立てる</option><option value="gravity">たらす</option><option value="length">長さ（Alt で短く）</option><option value="cut">切りそろえる</option><option value="clump">束ねる</option><option value="curl">巻く（Alt で逆向き）</option><option value="smooth">なめらか</option><option value="frizz">乱す</option></select></div>
+      <div class="row"><input type="checkbox" id="groomCollide" checked><label for="groomCollide" title="毛が、生やした元のパーツにめり込まないようにします">元のパーツにめり込ませない</label></div>
       <div class="row"><label for="groomStr">強さ</label><output id="groomStrOut">0.60</output></div>
       <input type="range" id="groomStr" min="0.05" max="1" step="0.01" value="0.6">
       <p class="note" id="groomNote">毛のパーツを選ぶと使えます</p>
       <p class="note">マスクした所から毛（髪・毛皮・草）を生やして、新しいサブツールにします。根元の色はポリペイントの色を引き継ぎます。</p>
-          <p class="note">毛は節ごとの線として覚えているので、あとから整えられます。「グルーミングする」をオンにして、毛のパーツの上をドラッグします（円の大きさ＝ブラシサイズ）。根元は動かず、毛の長さは保たれます（「長さ」「切りそろえる」以外）。元に戻す・保存に対応しています。</p>
+          <p class="note">毛は節ごとの線として覚えているので、あとから整えられます。「グルーミングする」をオンにして、毛のパーツの上をドラッグします（円の大きさ＝ブラシサイズ）。根元は動かず、毛の長さは保たれます（「長さ」「切りそろえる」以外）。対称 X がオンなら反対側も同じように整います。元に戻す・保存に対応しています。</p>
     </section>
 
     <section data-tab="model" id="t3Sec">
@@ -1285,7 +1286,7 @@ function recData(r) {
     topo: topoPack(r.topo),
     vdmPlate: r.vdmPlate || null,
     nano: r.nano ? { kind: r.nano.kind, hostName: (r.nano.host && r.nano.host.name) || r.nano.hostName, params: r.nano.params } : null,
-    fiber: r.fiber && r.fiber.dir instanceof Float32Array ? { n: r.fiber.n, seg: r.fiber.seg, sides: r.fiber.sides, dir: r.fiber.dir } : null,
+    fiber: r.fiber && r.fiber.dir instanceof Float32Array ? { n: r.fiber.n, seg: r.fiber.seg, sides: r.fiber.sides, dir: r.fiber.dir, hostName: (r.fiber.host && r.fiber.host.name) || r.fiber.hostName || '' } : null,
     layers: (r.layers || []).filter(l => l.delta.length === r.pos.length).map(l => ({ name: l.name, I: l.I, on: l.on, delta: l.delta })),
     levels: r.levels.map((L, k) => k === r.lv
       ? { current: true, ev: L.ev || null, quads: L.quads || null, ref0: L.ref0 || null, ...texData(L), ...polyData(L), ...(L.cc !== undefined ? { cc: L.cc } : {}) }
@@ -1312,7 +1313,7 @@ function recFromData(s) {
   r.dens = s.dens instanceof Float32Array && s.dens.length === s.pos.length / 3 ? s.dens : null;
   r.vdmPlate = s.vdmPlate && s.vdmPlate.ref instanceof Float32Array ? { ref: s.vdmPlate.ref, h: +s.vdmPlate.h || 1 } : null;
   r.nano = s.nano && (s.nano.kind === 'nano' || s.nano.kind === 'micro') && s.nano.params ? { kind: s.nano.kind, host: null, hostName: String(s.nano.hostName || ''), params: s.nano.params } : null;
-  { const f = s.fiber; r.fiber = f && f.dir instanceof Float32Array && f.n > 0 && f.dir.length === f.n * 3 && s.pos.length === f.n * (f.seg * f.sides + 1) * 3 ? { n: f.n | 0, seg: f.seg | 0, sides: f.sides | 0, dir: f.dir } : null; }
+  { const f = s.fiber; r.fiber = f && f.dir instanceof Float32Array && f.n > 0 && f.dir.length === f.n * 3 && s.pos.length === f.n * (f.seg * f.sides + 1) * 3 ? { n: f.n | 0, seg: f.seg | 0, sides: f.sides | 0, dir: f.dir, host: null, hostName: String(f.hostName || '') } : null; }
   r.layers = Array.isArray(s.layers) ? s.layers.filter(l => l && l.delta instanceof Float32Array && l.delta.length === s.pos.length)
     .map((l, k) => ({ name: String(l.name || `レイヤー ${k + 1}`), delta: l.delta, I: Number.isFinite(l.I) ? l.I : 1, on: l.on !== false, rec: false })) : [];
   const Ls = Array.isArray(s.levels) ? s.levels : null, lv = s.lv | 0;
@@ -4526,7 +4527,7 @@ function growFibers() {
         const o = (k * S1 + s) * 3; C[o] = cur.x; C[o+1] = cur.y; C[o+2] = cur.z;
       }
     }
-    const st = SEG * SIDES + 1, P = new Float32Array(count * st * 3), F = { n: count, seg: SEG, sides: SIDES, dir };
+    const st = SEG * SIDES + 1, P = new Float32Array(count * st * 3), F = { n: count, seg: SEG, sides: SIDES, dir, host: active, hostName: active.name };
     fiberWrite(F, C, R, P);
     pushStruct();
     const rec = newRec(uniqueName('毛'), P, fiberIndex(count, SEG, SIDES));
@@ -4551,7 +4552,8 @@ function groomDown(e) {
   const F = active.fiber, C = fiberPts(F, pos), S1 = F.seg + 1, L = new Float32Array(F.n * F.seg);
   for (let k = 0; k < F.n; k++) for (let s = 0; s < F.seg; s++) { const o = (k * S1 + s) * 3; L[k * F.seg + s] = Math.hypot(C[o+3] - C[o], C[o+4] - C[o+1], C[o+5] - C[o+2]); }
   pushUndo();
-  groom.drag = { id: e.pointerId, x: e.clientX, y: e.clientY, C, L, R: fiberRadii(F, pos, C), scr: new Float32Array(F.n * S1 * 2), touched: new Uint8Array(F.n), seed: 1 };
+  const R = fiberRadii(F, pos, C);
+  groom.drag = { id: e.pointerId, x: e.clientX, y: e.clientY, C, L, R, touched: new Uint8Array(F.n), seed: 1, collide: groomCollider(F, C, R) };
   controls.enabled = false; try { canvas.setPointerCapture(e.pointerId); } catch {}
   return true;
 }
@@ -4564,72 +4566,102 @@ function groomMove(e) {
   camera.updateMatrixWorld();
   const vp = new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse).elements, W = rect.width, H = rect.height;
   const right = camAxis(0), up = camAxis(1), wpp = worldPerPx(controls.target);
-  const off = new V3().addScaledVector(right, dxp * wpp).addScaledVector(up, -dyp * wpp);
-  const sign = e.altKey ? -1 : 1;
-  // weights per fiber point: screen distance to the brush, more toward the tip
-  const wts = new Float32Array(F.n * S1); let any = 0;
-  for (let k = 0; k < F.n; k++) {
-    for (let s = 1; s < S1; s++) {
-      const o = (k * S1 + s) * 3, x = C[o], y = C[o+1], z = C[o+2];
+  const off = new V3().addScaledVector(right, dxp * wpp).addScaledVector(up, -dyp * wpp), sign = e.altKey ? -1 : 1;
+  // weights per fiber point: screen distance to the brush (mirrored: the point's mirror image under the brush), more toward the tip
+  const weights = mir => {
+    const wts = new Float32Array(F.n * S1); let any = 0;
+    for (let k = 0; k < F.n; k++) for (let s = 1; s < S1; s++) {
+      const o = (k * S1 + s) * 3, x = mir ? -C[o] : C[o], y = C[o+1], z = C[o+2];
       const cw = vp[3] * x + vp[7] * y + vp[11] * z + vp[15]; if (cw <= 0) continue;
       const sx = ((vp[0] * x + vp[4] * y + vp[8] * z + vp[12]) / cw * 0.5 + 0.5) * W, sy = (0.5 - (vp[1] * x + vp[5] * y + vp[9] * z + vp[13]) / cw * 0.5) * H;
       const d = Math.hypot(sx - mx, sy - my) / Rpx; if (d >= 1) continue;
-      const fo = (1 - d * d) ** 2; wts[k * S1 + s] = fo * k0 * (tool === 'comb' || tool === 'gravity' || tool === 'curl' ? s / F.seg : 1); any = 1;
+      wts[k * S1 + s] = (1 - d * d) ** 2 * k0 * (tool === 'comb' || tool === 'gravity' || tool === 'curl' ? s / F.seg : 1); any = 1;
     }
-  }
-  if (!any) return;
-  const gS = new Float32Array(S1 * 3), gN = new Float32Array(S1);   // clump: average point per segment level under the brush
-  if (tool === 'clump') for (let k = 0; k < F.n; k++) for (let s = 1; s < S1; s++) { const w = wts[k * S1 + s]; if (!w) continue; const o = (k * S1 + s) * 3; gS[s*3] += C[o] * w; gS[s*3+1] += C[o+1] * w; gS[s*3+2] += C[o+2] * w; gN[s] += w; }
+    return any ? wts : null;
+  };
   let rs = G.seed;
   const rnd = () => { rs = (rs * 1103515245 + 12345) & 0x7fffffff; return rs / 0x7fffffff - 0.5; };
   const q = new THREE.Quaternion(), v = new V3(), axis = new V3();
-  for (let k = 0; k < F.n; k++) {
-    let hit = 0; for (let s = 1; s < S1; s++) if (wts[k * S1 + s]) { hit = 1; break; }
-    if (!hit) continue;
-    G.touched[k] = 1;
-    const c0 = k * S1 * 3, segL = L[k * F.seg];
-    if (tool === 'length' || tool === 'cut') {
-      let w = 0; for (let s = 1; s < S1; s++) w = Math.max(w, wts[k * S1 + s]);
-      const f = tool === 'cut' ? 1 - 0.02 * w * moved : 1 + sign * 0.01 * w * moved;
-      for (let s = 0; s < F.seg; s++) L[k * F.seg + s] = Math.max(1e-6, L[k * F.seg + s] * Math.max(0.5, Math.min(1.5, f)));
-      continue;
+  const applyW = (wts, off, sg) => {
+    const gS = new Float32Array(S1 * 3), gN = new Float32Array(S1);   // clump: average point per segment level under the brush
+    if (tool === 'clump') for (let k = 0; k < F.n; k++) for (let s = 1; s < S1; s++) { const w = wts[k * S1 + s]; if (!w) continue; const o = (k * S1 + s) * 3; gS[s*3] += C[o] * w; gS[s*3+1] += C[o+1] * w; gS[s*3+2] += C[o+2] * w; gN[s] += w; }
+    for (let k = 0; k < F.n; k++) {
+      let hit = 0; for (let s = 1; s < S1; s++) if (wts[k * S1 + s]) { hit = 1; break; }
+      if (!hit) continue;
+      G.touched[k] = 1;
+      const c0 = k * S1 * 3, segL = L[k * F.seg];
+      if (tool === 'length' || tool === 'cut') {
+        let w = 0; for (let s = 1; s < S1; s++) w = Math.max(w, wts[k * S1 + s]);
+        const f = tool === 'cut' ? 1 - 0.02 * w * moved : 1 + sg * 0.01 * w * moved;
+        for (let s = 0; s < F.seg; s++) L[k * F.seg + s] = Math.max(1e-6, L[k * F.seg + s] * Math.max(0.5, Math.min(1.5, f)));
+        continue;
+      }
+      if (tool === 'smooth') {
+        for (let s = 1; s < F.seg; s++) { const w = Math.min(1, wts[k * S1 + s] * 0.6), o = c0 + s * 3; for (let j = 0; j < 3; j++) C[o+j] += ((C[o-3+j] + C[o+3+j]) / 2 - C[o+j]) * w; }
+        continue;
+      }
+      if (tool === 'curl') axis.set(F.dir[k*3], F.dir[k*3+1], F.dir[k*3+2]);
+      for (let s = 1; s < S1; s++) {
+        const w = wts[k * S1 + s]; if (!w) continue;
+        const o = c0 + s * 3;
+        if (tool === 'comb') { C[o] += off.x * w; C[o+1] += off.y * w; C[o+2] += off.z * w; }
+        else if (tool === 'gravity') { C[o+1] -= segL * 0.08 * w * moved * 0.2; }
+        else if (tool === 'lift') {
+          const p = o - 3, dl = L[k * F.seg + s - 1], b = Math.min(1, w * 0.04 * moved);
+          v.set(C[o] - C[p], C[o+1] - C[p+1], C[o+2] - C[p+2]).normalize().lerp(axis.set(F.dir[k*3], F.dir[k*3+1], F.dir[k*3+2]), b).normalize();
+          C[o] = C[p] + v.x * dl; C[o+1] = C[p+1] + v.y * dl; C[o+2] = C[p+2] + v.z * dl;
+        } else if (tool === 'clump') { if (gN[s] > 0) { const b = Math.min(1, w * 0.03 * moved); for (let j = 0; j < 3; j++) C[o+j] += (gS[s*3+j] / gN[s] - C[o+j]) * b; } }
+        else if (tool === 'curl') {
+          q.setFromAxisAngle(axis, sg * w * 0.004 * moved * s);
+          v.set(C[o] - C[c0], C[o+1] - C[c0+1], C[o+2] - C[c0+2]).applyQuaternion(q);
+          C[o] = C[c0] + v.x; C[o+1] = C[c0+1] + v.y; C[o+2] = C[c0+2] + v.z;
+        } else if (tool === 'frizz') { const a = segL * 0.03 * w * moved * 0.2; C[o] += rnd() * a; C[o+1] += rnd() * a; C[o+2] += rnd() * a; }
+      }
     }
-    if (tool === 'smooth') {
-      for (let s = 1; s < F.seg; s++) { const w = Math.min(1, wts[k * S1 + s] * 0.6), o = c0 + s * 3; for (let j = 0; j < 3; j++) C[o+j] += ((C[o-3+j] + C[o+3+j]) / 2 - C[o+j]) * w; }
-      continue;
-    }
-    if (tool === 'curl') axis.set(F.dir[k*3], F.dir[k*3+1], F.dir[k*3+2]);
-    for (let s = 1; s < S1; s++) {
-      const w = wts[k * S1 + s]; if (!w) continue;
-      const o = c0 + s * 3;
-      if (tool === 'comb') { C[o] += off.x * w; C[o+1] += off.y * w; C[o+2] += off.z * w; }
-      else if (tool === 'gravity') { C[o+1] -= segL * 0.08 * w * moved * 0.2; }
-      else if (tool === 'lift') {   // turn each segment toward the root direction
-        const p = o - 3, dl = L[k * F.seg + s - 1], b = Math.min(1, w * 0.04 * moved);
-        v.set(C[o] - C[p], C[o+1] - C[p+1], C[o+2] - C[p+2]).normalize().lerp(axis.set(F.dir[k*3], F.dir[k*3+1], F.dir[k*3+2]), b).normalize();
-        C[o] = C[p] + v.x * dl; C[o+1] = C[p+1] + v.y * dl; C[o+2] = C[p+2] + v.z * dl;
-      } else if (tool === 'clump') { if (gN[s] > 0) { const b = Math.min(1, w * 0.03 * moved); for (let j = 0; j < 3; j++) C[o+j] += (gS[s*3+j] / gN[s] - C[o+j]) * b; } }
-      else if (tool === 'curl') {   // rotate the strand around its root direction, more toward the tip
-        q.setFromAxisAngle(axis, sign * w * 0.004 * moved * s);
-        v.set(C[o] - C[c0], C[o+1] - C[c0+1], C[o+2] - C[c0+2]).applyQuaternion(q);
-        C[o] = C[c0] + v.x; C[o+1] = C[c0+1] + v.y; C[o+2] = C[c0+2] + v.z;
-      } else if (tool === 'frizz') { const a = segL * 0.03 * w * moved * 0.2; C[o] += rnd() * a; C[o+1] += rnd() * a; C[o+2] += rnd() * a; }
-    }
-  }
+  };
+  const w1 = weights(false), w2 = S.sym ? weights(true) : null;
+  if (!w1 && !w2) return;
+  if (w1) applyW(w1, off, sign);
+  if (w2) applyW(w2, new V3(-off.x, off.y, off.z), -sign);   // the mirror image of the stroke (curl turns the other way)
   G.seed = rs;
-  // follow the leader: keep every segment's length, root fixed
-  for (let k = 0; k < F.n; k++) {
-    if (!G.touched[k]) continue;
+  // follow the leader: keep every segment's length, root fixed; then keep the strands outside the part they grew from
+  const ftl = k => {
     const c0 = k * S1 * 3;
     for (let s = 1; s < S1; s++) {
       const o = c0 + s * 3, p = o - 3, dl = L[k * F.seg + s - 1];
       let x = C[o] - C[p], y = C[o+1] - C[p+1], z = C[o+2] - C[p+2]; const l = Math.hypot(x, y, z) || 1;
       C[o] = C[p] + x / l * dl; C[o+1] = C[p+1] + y / l * dl; C[o+2] = C[p+2] + z / l * dl;
     }
-  }
+  };
+  const col = $('groomCollide').checked ? G.collide : null;
+  for (let k = 0; k < F.n; k++) { if (!G.touched[k]) continue; ftl(k); if (col && col(k)) ftl(k); }
   fiberWrite(F, C, G.R, pos, G.touched);
   G.touched.fill(0);
   computeAllNormals(); geo.computeBoundingSphere();
+}
+// a function that pushes fiber k's points (beyond the root) out of the host part; true if anything moved
+function groomCollider(F, C, R) {
+  const host = F.host && subtools.includes(F.host) ? F.host : subtools.find(r => r !== active && r.name === F.hostName);
+  if (!host) return null;
+  const g = ensureView(host).geometry, bvh = g.boundsTree; if (!bvh) return null;
+  const gp = g.attributes.position.array, gi = g.index.array, S1 = F.seg + 1, P3 = new V3(), hit = { point: new V3(), distance: 0, faceIndex: 0 };
+  return k => {
+    let movedAny = false; const gap = Math.max(R[k] * 1.5, 1e-6);
+    for (let s = 2; s < S1; s++) {
+      const o = (k * S1 + s) * 3; P3.set(C[o], C[o+1], C[o+2]);
+      if (!bvh.closestPointToPoint(P3, hit, 0, gap * 20)) continue;
+      const f = hit.faceIndex * 3, a = gi[f] * 3, b = gi[f+1] * 3, c = gi[f+2] * 3;
+      const ux = gp[b] - gp[a], uy = gp[b+1] - gp[a+1], uz = gp[b+2] - gp[a+2], wx = gp[c] - gp[a], wy = gp[c+1] - gp[a+1], wz = gp[c+2] - gp[a+2];
+      let nx = uy * wz - uz * wy, ny = uz * wx - ux * wz, nz = ux * wy - uy * wx; const nl = Math.hypot(nx, ny, nz) || 1; nx /= nl; ny /= nl; nz /= nl;
+      const d = (C[o] - hit.point.x) * nx + (C[o+1] - hit.point.y) * ny + (C[o+2] - hit.point.z) * nz;
+      if (d >= 0) {   // outside: measure the true distance (edges / corners), not along one face's normal
+        if (hit.distance >= gap) continue;
+        if (hit.distance > 1e-9) { nx = (C[o] - hit.point.x) / hit.distance; ny = (C[o+1] - hit.point.y) / hit.distance; nz = (C[o+2] - hit.point.z) / hit.distance; }
+      }
+      C[o] = hit.point.x + nx * gap; C[o+1] = hit.point.y + ny * gap; C[o+2] = hit.point.z + nz * gap; movedAny = true;
+    }
+    return movedAny;
+  };
 }
 function groomUp() {
   const G = groom.drag; if (!G) return;
