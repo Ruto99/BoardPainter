@@ -19,6 +19,7 @@ const FILES = [
   'three/examples/jsm/curves/NURBSCurve.js',
   'three/examples/jsm/curves/NURBSUtils.js',
   'three/examples/jsm/exporters/GLTFExporter.js',
+  'three/examples/jsm/environments/RoomEnvironment.js',
   'three/examples/jsm/utils/BufferGeometryUtils.js',
   'three/examples/jsm/utils/TextureUtils.js',
   'three/LICENSE',

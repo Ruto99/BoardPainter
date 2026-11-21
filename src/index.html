@@ -884,6 +884,9 @@ dl.keys dd{margin:0;color:var(--muted)}
       <div class="row"><label for="rdAO">陰影（AO）の品質</label><select id="rdAO"><option value="0">なし</option><option value="8">標準</option><option value="16" selected>高い</option></select></div>
       <div class="row"><input type="checkbox" id="rdShadow" checked><label for="rdShadow">床に影を落とす</label></div>
       <div class="row"><input type="checkbox" id="rdTransp"><label for="rdTransp">背景を透明にする</label></div>
+      <div class="row"><label for="rdMat">材質</label><select id="rdMat"><option value="clay">粘土（つや消し）</option><option value="view">表示中のマテリアル（MatCap）</option><option value="gloss">つやあり</option><option value="metal">金属</option></select></div>
+      <div class="row"><label for="rdLight">光</label><select id="rdLight"><option value="studio">スタジオ（3 灯）</option><option value="front">正面から</option><option value="drama">ドラマチック（横から強く）</option><option value="warm">暖かい光</option></select></div>
+      <div class="row"><label for="rdBg">背景</label><select id="rdBg"><option value="dark">暗い</option><option value="grad">グラデーション</option><option value="gray">グレー</option><option value="white">白</option><option value="black">黒</option></select></div>
       <div class="row"><input type="checkbox" id="rdRim"><label for="rdRim" title="後ろから当てる光で輪郭を明るくします">リムライト（逆光）</label></div>
       <div class="row"><input type="checkbox" id="rdOutline"><label for="rdOutline" title="シルエットと鋭い折れ目に線を描きます（イラスト風）">輪郭線を描く</label></div>
       <div class="row"><label for="rdDOF" title="モデルの中心にピントを合わせ、手前と奥をぼかします">被写界深度（ぼけ）</label><select id="rdDOF"><option value="0">なし</option><option value="0.5">弱い</option><option value="1">標準</option><option value="2">強い</option></select></div>
@@ -981,6 +984,7 @@ import { ccTopology, ccPositions, ccAttr, ccMirror, ccGroups } from './subdiv.js
 import { slicePlane, panelLoops } from './hardsurface.js';
 import { BUILTIN_VDM, builtinVDM, sampleVDM, vdmPreview, stampFromEXR, captureStamp } from './vdmstamp.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { mergeVertices, mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { computeBoundsTree, acceleratedRaycast, MeshBVH, INTERSECTED, NOT_INTERSECTED } from 'three-mesh-bvh';
 import { zsphereMesh } from './zspheres.js';
@@ -3205,22 +3209,34 @@ async function renderImage() {
   const bvhs = parts.map(x => x.bvh);
   const rs = new THREE.Scene(), meshes = [];
   const transparent = $('rdTransp').checked || pass !== 'beauty' && pass !== 'ao';
-  if (!transparent) rs.background = new THREE.Color(pass === 'depth' ? 0x000000 : pass === 'ao' ? 0xffffff : 0x2b2c31);
+  const bgSel = $('rdBg').value, rdMat = $('rdMat').value, mc = rdMat === 'view' && matId !== 'std' ? MATCAPS.find(x => x.id === matId) : null;
+  if (!transparent) {
+    if (pass === 'beauty' && bgSel === 'grad') { const g = document.createElement('canvas'); g.width = 2; g.height = 256; const c = g.getContext('2d'), gr = c.createLinearGradient(0, 0, 0, 256); gr.addColorStop(0, '#5a5f6b'); gr.addColorStop(1, '#17181c'); c.fillStyle = gr; c.fillRect(0, 0, 2, 256); const t = new THREE.CanvasTexture(g); t.colorSpace = THREE.SRGBColorSpace; rs.background = t; }
+    else rs.background = new THREE.Color(pass === 'depth' ? 0x000000 : pass === 'ao' ? 0xffffff : ({ dark: 0x2b2c31, gray: 0x8a8c91, white: 0xf4f4f2, black: 0x000000 })[bgSel] ?? 0x2b2c31);
+  }
   for (const x of parts) {
     const ao = aoFor(x.p, x.n, bvhs, pass === 'ao' ? Math.max(8, rays) : rays, size * 0.18, size * 1e-4);
     const nv = x.p.length / 3, c = new Float32Array(nv * 3);
     const bc = [BASE_COL.r, BASE_COL.g, BASE_COL.b], hasPt = x.pt && x.pt.length === x.p.length;
-    for (let v = 0; v < nv; v++) for (let k = 0; k < 3; k++) c[v*3+k] = pass === 'ao' ? ao[v] : (hasPt ? x.pt[v*3+k] : bc[k]) * ao[v];
+    const base = mc ? [1, 1, 1] : bc;   // under a MatCap the unpainted colour is the MatCap itself
+    for (let v = 0; v < nv; v++) for (let k = 0; k < 3; k++) c[v*3+k] = pass === 'ao' ? ao[v] : (hasPt ? x.pt[v*3+k] : base[k]) * ao[v];
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(x.p, 3)); g.setAttribute('normal', new THREE.BufferAttribute(x.n, 3));
     g.setAttribute('color', new THREE.BufferAttribute(c, 3)); g.setIndex(new THREE.BufferAttribute(x.ix, 1));
-    const m = new THREE.Mesh(g, pass === 'ao' ? new THREE.MeshBasicMaterial({ vertexColors: true }) : new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.55, metalness: 0 }));
+    const mat = pass === 'ao' ? new THREE.MeshBasicMaterial({ vertexColors: true })
+      : mc ? new THREE.MeshMatcapMaterial({ matcap: mc.tex, vertexColors: true })
+      : new THREE.MeshStandardMaterial({ vertexColors: true, roughness: rdMat === 'gloss' ? 0.22 : rdMat === 'metal' ? 0.32 : 0.55, metalness: rdMat === 'metal' ? 1 : 0, envMapIntensity: 1 });
+    const m = new THREE.Mesh(g, mat);
     m.castShadow = m.receiveShadow = true; rs.add(m); meshes.push(m);
   }
-  rs.add(new THREE.HemisphereLight(0xfff3e4, 0x30323a, 0.75));
+  rs.add(new THREE.HemisphereLight(0xfff3e4, 0x30323a, $('rdLight').value === 'drama' ? 0.25 : 0.75));
+  if ($('rdMat').value === 'metal' || $('rdMat').value === 'gloss') { const pm = new THREE.PMREMGenerator(renderer); rs.environment = pm.fromScene(new RoomEnvironment(), 0.04).texture; pm.dispose(); }
   const right = camAxis(0), up = camAxis(1), back = camAxis(2);
-  const key = new THREE.DirectionalLight(0xffffff, 2.3);
-  const keyDir = right.clone().multiplyScalar(-0.9).addScaledVector(up, 1.6).addScaledVector(back, 1.1).normalize();
+  const lp = $('rdLight').value;
+  const key = new THREE.DirectionalLight(lp === 'warm' ? 0xffe2c0 : 0xffffff, lp === 'drama' ? 3.4 : 2.3);
+  const keyDir = lp === 'front' ? up.clone().multiplyScalar(0.4).addScaledVector(back, 1).normalize()
+    : lp === 'drama' ? right.clone().multiplyScalar(-1.6).addScaledVector(up, 0.9).addScaledVector(back, 0.25).normalize()
+    : right.clone().multiplyScalar(-0.9).addScaledVector(up, 1.6).addScaledVector(back, 1.1).normalize();
   key.position.copy(center).addScaledVector(keyDir, size * 2);
   key.target.position.copy(center); rs.add(key, key.target);
   const shadow = $('rdShadow').checked && pass === 'beauty';
@@ -3296,6 +3312,7 @@ async function renderImage() {
   rs.overrideMaterial = null;
   renderer.setRenderTarget(null); renderer.shadowMap.enabled = prevShadow; renderer.shadowMap.type = prevType;
   rt.dispose(); if (key.shadow.map) key.shadow.map.dispose();
+  if (rs.environment) rs.environment.dispose(); if (rs.background && rs.background.isTexture) rs.background.dispose();
   rs.traverse(o => { if (o.isMesh) { o.material.dispose(); o.geometry.dispose(); } });
   // flip rows (GL origin is bottom-left)
   const img = new ImageData(W, H), row = W * 4;
