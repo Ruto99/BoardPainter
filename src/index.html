@@ -35,6 +35,7 @@ header{grid-column:1/-1;display:flex;align-items:center;gap:8px;padding:0 12px;b
 .btn:focus-visible,.tool:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .btn.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:700}
 .btn:disabled{opacity:.4;cursor:default}
+.btn.on{border-color:var(--accent);color:var(--accent)}
 .btn small{color:var(--muted);font-family:var(--mono);font-size:10px}
 .btn.primary small{color:#5a4120}
 #btnPanel{display:none}
@@ -347,13 +348,30 @@ dl.keys dd{margin:0;color:var(--muted)}
       <div class="row"><label for="dfAxis">軸</label><select id="dfAxis"><option value="1">Y（縦）</option><option value="0">X（横）</option><option value="2">Z（奥）</option></select></div>
       <div class="row"><label for="dfAmt">量</label><output id="dfAmtOut">0.30</output></div>
       <input type="range" id="dfAmt" min="-1" max="1" step="0.01" value="0.3">
+      <div class="row"><label for="dfMid" title="曲げる・ねじる・先細り・中央をふくらます・波の中心を、軸に沿ってずらします">中心の位置</label><output id="dfMidOut">0.00</output></div>
+      <input type="range" id="dfMid" min="-1" max="1" step="0.01" value="0">
+      <div class="row"><label for="dfFreq">波の数</label><output id="dfFreqOut">3.0</output></div>
+      <input type="range" id="dfFreq" min="0.5" max="12" step="0.5" value="3">
       <div class="grid3">
-        <button class="btn" data-def="bend">曲げる</button>
+        <button class="btn" data-def="bend" title="軸を円弧に曲げる（Bend Arc）">曲げる</button>
+        <button class="btn" data-def="sbend" title="S字に曲げる（Bend Curve 風）">S字に曲げる</button>
         <button class="btn" data-def="twist">ねじる</button>
         <button class="btn" data-def="taper">先細り</button>
+        <button class="btn" data-def="flare" title="中央をふくらます（マイナスでくびれる）">中央をふくらます</button>
         <button class="btn" data-def="stretch">伸ばす</button>
+        <button class="btn" data-def="squeeze" title="体積を保ったまま押しつぶす・引き伸ばす（Squeeze）">押しつぶす</button>
+        <button class="btn" data-def="skew" title="軸に沿って斜めにずらす（Skew）">傾ける</button>
+        <button class="btn" data-def="rotate" title="軸のまわりに回す（−1〜1 で −180°〜180°）">回す</button>
+        <button class="btn" data-def="spherize" title="球に近づける（Spherize）">球にする</button>
+        <button class="btn" data-def="cylindrize" title="軸のまわりの円柱に近づける">円柱にする</button>
+        <button class="btn" data-def="wave" title="軸に沿って波打たせる">波打たせる</button>
         <button class="btn" data-def="inflate">膨らます</button>
         <button class="btn" data-def="flatten">平らにする</button>
+        <button class="btn" data-def="relax" title="形をならす（量で回数）">ならす</button>
+      </div>
+      <div class="grid2" style="margin-top:6px">
+        <button class="btn primary" id="dfApply" disabled title="プレビュー中の変形を確定します">確定</button>
+        <button class="btn" id="dfCancel" disabled>やめる</button>
       </div>
       <div class="grid3" style="margin-top:8px">
         <button class="btn" id="mfStore" title="今の形を覚えておきます">モーフを保存</button>
@@ -372,7 +390,58 @@ dl.keys dd{margin:0;color:var(--muted)}
       <input type="range" id="panelThick" min="0.002" max="0.1" step="0.001" value="0.02">
       <div class="row"><label for="panelGap">パネルのすき間</label><output id="panelGapOut">0.006</output></div>
       <input type="range" id="panelGap" min="0" max="0.05" step="0.001" value="0.006">
-      <p class="note">変形は選択中のパーツ全体にかかります（マスクした所は動きません）。「モーフ」ブラシで塗ると、塗った所だけ保存した形に戻ります。クリップは、ボタンを押してから画面上をドラッグして線を引くと、線から出ている短い印の側（Alt で反対側）が線の位置で平らになります。</p>
+      <p class="note">変形は選択中のパーツ全体にかかります（マスクした所は動きません）。ボタンを押すとプレビューになり、軸・量・中心の位置・波の数を動かすとすぐに形が変わります。「確定」で決定（彫り始める・別の変形を選ぶと自動で確定）、「やめる」で元に戻します。「モーフ」ブラシで塗ると、塗った所だけ保存した形に戻ります。クリップは、ボタンを押してから画面上をドラッグして線を引くと、線から出ている短い印の側（Alt で反対側）が線の位置で平らになります。</p>
+    </section>
+
+    <section id="nmSec">
+      <h2>NanoMesh・MicroPoly（面ごとに部品を並べる）</h2>
+      <div class="row"><label for="nmInst">置く部品</label><select id="nmInst"></select></div>
+      <div class="row"><label for="nmFit">大きさの合わせ方</label><select id="nmFit"><option value="face">面の形に合わせる</option><option value="uniform">同じ比率で</option></select></div>
+      <div class="row"><label for="nmScale">大きさ</label><output id="nmScaleOut">0.80</output></div>
+      <input type="range" id="nmScale" min="0.05" max="2" step="0.01" value="0.8">
+      <div class="row"><label for="nmHeight">高さ</label><output id="nmHeightOut">1.00</output></div>
+      <input type="range" id="nmHeight" min="0.05" max="4" step="0.05" value="1">
+      <div class="row"><label for="nmOffset">浮かせる</label><output id="nmOffsetOut">0.00</output></div>
+      <input type="range" id="nmOffset" min="-0.5" max="0.5" step="0.01" value="0">
+      <div class="row"><label for="nmRot">回転（度）</label><output id="nmRotOut">0</output></div>
+      <input type="range" id="nmRot" min="0" max="360" step="5" value="0">
+      <div class="row"><label for="nmRandS">大きさのばらつき</label><output id="nmRandSOut">0.00</output></div>
+      <input type="range" id="nmRandS" min="0" max="1" step="0.01" value="0">
+      <div class="row"><label for="nmRandR">回転のばらつき</label><output id="nmRandROut">0.00</output></div>
+      <input type="range" id="nmRandR" min="0" max="1" step="0.01" value="0">
+      <div class="row"><label for="nmSeed">ばらつきの番号</label><input type="number" id="nmSeed" min="1" max="9999" step="1" value="1" style="width:80px"></div>
+      <div class="row"><input type="checkbox" id="nmFlip"><label for="nmFlip">裏側（内向き）に置く</label></div>
+      <div class="grid2"><button class="btn" id="nmPrevBtn">プレビュー</button><button class="btn primary" id="nmGo">NanoMesh を作る</button></div>
+      <div class="row" style="margin-top:8px"><label for="mpTile">MicroPoly のタイル</label><select id="mpTile"></select></div>
+      <div class="row"><label for="mpThick">厚さ</label><output id="mpThickOut">0.50</output></div>
+      <input type="range" id="mpThick" min="0.05" max="2" step="0.01" value="0.5">
+      <div class="row"><input type="checkbox" id="mpTris"><label for="mpTris">三角形の面にも置く</label></div>
+      <div class="grid2"><button class="btn" id="mpPrevBtn">プレビュー</button><button class="btn primary" id="mpGo">MicroPoly を作る</button></div>
+      <div class="row" style="margin-top:6px"><input type="checkbox" id="nmMasked"><label for="nmMasked">マスクした面だけに置く</label></div>
+      <div class="row"><input type="checkbox" id="nmHide" checked><label for="nmHide">作ったあと元のパーツを隠す</label></div>
+      <div class="grid2"><button class="btn" id="nmCancel" disabled>プレビューを消す</button><span id="nmInfo" class="note" style="margin:0;align-self:center"></span></div>
+      <p class="note">選択中のパーツ（低ポリゴンがおすすめ）の面ひとつひとつに部品を置きます（NanoMesh 風）。部品は内蔵の部品・登録した部品・ほかのパーツから選べます。MicroPoly は四角ポリゴンの面を、格子・織り目・鎖かたびら・鋲・ウロコ・レンガのタイルで置き換えます（鎧・メッシュ・布地）。結果は新しいパーツになります。プレビュー中はスライダーを動かすとすぐに変わります。</p>
+    </section>
+
+    <section id="dynSec">
+      <h2>ダイナミクス（布・重力・膨らみ）</h2>
+      <div class="row"><label for="dynMode">動き</label><select id="dynMode"><option value="cloth">布をかける（ほかのパーツにぶつかる）</option><option value="sag">重力でたれる</option><option value="inflate">空気で膨らます</option><option value="deflate">しぼませる</option></select></div>
+      <div class="row"><label for="dynGrav">重力</label><output id="dynGravOut">1.0</output></div>
+      <input type="range" id="dynGrav" min="0" max="3" step="0.1" value="1">
+      <div class="row"><label for="dynPress">膨らみの強さ</label><output id="dynPressOut">1.0</output></div>
+      <input type="range" id="dynPress" min="0" max="3" step="0.1" value="1">
+      <div class="row"><label for="dynStiff" title="伸びにくさ">硬さ</label><output id="dynStiffOut">0.90</output></div>
+      <input type="range" id="dynStiff" min="0.1" max="1" step="0.01" value="0.9">
+      <div class="row"><label for="dynBend" title="折れ曲がりにくさ（大きいと厚い布・革）">曲げにくさ</label><output id="dynBendOut">0.10</output></div>
+      <input type="range" id="dynBend" min="0" max="1" step="0.01" value="0.1">
+      <div class="row"><label for="dynFric">摩擦</label><output id="dynFricOut">0.50</output></div>
+      <input type="range" id="dynFric" min="0" max="1" step="0.01" value="0.5">
+      <div class="row"><label for="dynFrames">長さ（フレーム）</label><output id="dynFramesOut">240</output></div>
+      <input type="range" id="dynFrames" min="30" max="1200" step="10" value="240">
+      <div class="row"><input type="checkbox" id="dynSelf"><label for="dynSelf">自分自身とぶつかる（遅くなります）</label></div>
+      <button class="btn primary full" id="dynGo">シミュレーション開始</button>
+      <div class="row"><span id="dynInfo" class="note" style="margin:0"></span></div>
+      <p class="note">選択中のパーツを布や風船のように動かします（Dynamics 風）。マスクした所は固定されます。「布をかける」は表示中のほかのパーツと床にぶつかります。服やカーテンは、薄い板（平面・抜き出したパーツなど）をパーツの上に置いてから使います。途中で「止める」を押すと、その形で止まります。元に戻すで始める前に戻ります。</p>
     </section>
 
     <section>
@@ -483,6 +552,7 @@ dl.keys dd{margin:0;color:var(--muted)}
     <section id="zsSec">
       <h2>ZSphere（球をつないで形を作る）</h2>
       <button class="btn primary full" id="zsStart">ZSphere を始める</button>
+      <div class="row" style="margin-top:6px"><label for="zsPreset" title="人・動物などの骨組みを ZSphere で置きます（マネキン）">マネキン</label><select id="zsPreset"><option value="human">人（Aポーズ）</option><option value="bust">胸像（頭と肩）</option><option value="quad">四足動物</option><option value="bird">鳥</option><option value="hand">手（右手）</option></select><button class="btn" id="zsPresetGo">置く</button></div>
       <div id="zsTools" hidden>
         <div class="row"><label for="zsRes">細かさ</label><output id="zsResOut">140</output></div>
         <input type="range" id="zsRes" min="64" max="256" step="4" value="140">
@@ -710,10 +780,22 @@ dl.keys dd{margin:0;color:var(--muted)}
       <div class="row"><label for="rdAO">陰影（AO）の品質</label><select id="rdAO"><option value="0">なし</option><option value="8">標準</option><option value="16" selected>高い</option></select></div>
       <div class="row"><input type="checkbox" id="rdShadow" checked><label for="rdShadow">床に影を落とす</label></div>
       <div class="row"><input type="checkbox" id="rdTransp"><label for="rdTransp">背景を透明にする</label></div>
+      <div class="row"><input type="checkbox" id="rdRim"><label for="rdRim" title="後ろから当てる光で輪郭を明るくします">リムライト（逆光）</label></div>
+      <div class="row"><input type="checkbox" id="rdOutline"><label for="rdOutline" title="シルエットと鋭い折れ目に線を描きます（イラスト風）">輪郭線を描く</label></div>
+      <div class="row"><label for="rdDOF" title="モデルの中心にピントを合わせ、手前と奥をぼかします">被写界深度（ぼけ）</label><select id="rdDOF"><option value="0">なし</option><option value="0.5">弱い</option><option value="1">標準</option><option value="2">強い</option></select></div>
+      <div class="row"><label for="rdPass" title="合成用に、深度・法線・マスク・AO だけの画像も作れます">出力</label><select id="rdPass"><option value="beauty">仕上がり</option><option value="depth">深度（手前が白）</option><option value="normal">法線（画面基準）</option><option value="mask">マスク（シルエット）</option><option value="ao">陰影（AO）だけ</option></select></div>
       <button class="btn primary full" id="rdGo">今の視点でレンダリング</button>
       <div class="row" style="margin-top:8px"><label for="ttSecs">ターンテーブルの長さ（秒）</label><output id="ttSecsOut">6</output></div>
       <input type="range" id="ttSecs" min="2" max="20" step="1" value="6">
       <button class="btn full" id="ttGo">ターンテーブル動画を書き出す（WebM）</button>
+      <h3 style="margin:10px 0 4px;font-size:12px">タイムライン（カメラの動き）</h3>
+      <div class="grid3"><button class="btn" id="tlAdd" title="今の視点をキーとして追加します">キーを追加</button><button class="btn" id="tlPlay" disabled>再生</button><button class="btn" id="tlClear">全部消す</button></div>
+      <div id="tlKeys" style="display:flex;flex-wrap:wrap;gap:4px;margin-top:6px"></div>
+      <div class="row"><span id="tlInfo" class="note" style="margin:0">キーはありません</span></div>
+      <div class="row"><label for="tlSecs">動画の長さ（秒）</label><output id="tlSecsOut">8</output></div>
+      <input type="range" id="tlSecs" min="2" max="60" step="1" value="8">
+      <div class="row"><input type="checkbox" id="tlLoop"><label for="tlLoop">最後のキーから最初に戻る（ループ）</label></div>
+      <button class="btn full" id="tlRec" disabled>タイムラインを動画に書き出す（WebM）</button>
       <p class="note">今見ている角度で、影と隙間の陰影（アンビエントオクルージョン）を付けた高画質の画像を作ります。色はポリペイントの色を使います。</p>
     </section>
 
@@ -792,6 +874,8 @@ import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { mergeVertices, mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { computeBoundsTree, acceleratedRaycast, MeshBVH, INTERSECTED, NOT_INTERSECTED } from 'three-mesh-bvh';
 import { zsphereMesh } from './zspheres.js';
+import { createSim } from './dynamics.js';
+import { nanoMesh, microPoly, MICRO_TILES, microTile } from './nanomesh.js';
 import { encodeProject, decodeProject, encodeProjectStream, decodeProjectStream } from './project.js';
 import { remesh, remeshGrid, quadRemesh, booleanMesh, voxelize, surfaceNets, setAccel, accelTimes, tryAccel } from './remesh.js';
 import { unwrap, drawUV } from './uv.js';
@@ -1194,6 +1278,9 @@ const visibleViews = () => subtools.filter(r => r !== active && r.view && r.view
 
 function activate(rec, force = false) {
   if (!rec || stroke || (rec === active && !force)) return;
+  if (dfp) deformCommit(true);
+  if (dyn) dynStop();
+  if (nmPrev) nmClear();
   flushNormals();
   dropView(rec);
   active = rec;
@@ -1538,8 +1625,8 @@ function stepHistory(from, to) {
   if (gizmoOn) attachGizmo();
   updateUndoButtons(); scheduleSave();
 }
-function undo() { stepHistory(undoStack, redoStack); }
-function redo() { stepHistory(redoStack, undoStack); }
+function undo() { if (dyn) dynStop(); if (dfp) { deformCancel(); return; } stepHistory(undoStack, redoStack); }
+function redo() { if (dfp) deformCommit(true); stepHistory(redoStack, undoStack); }
 function updateUndoButtons() { $('btnUndo').disabled = !undoStack.length; $('btnRedo').disabled = !redoStack.length; }
 
 // ---------------- brushes ----------------
@@ -2045,6 +2132,8 @@ function onDown(e) {
   if (zs) { zsDown(e); return; }
   if (pe.on && e.button === 0) { if (peAvailable()) peSet(false); else { peDown(e); return; } }   // a miss leaves the background to the view controls
   if (nz && e.button === 0) noiseCancel();   // sculpting ends a noise preview
+  if (dfp && e.button === 0) deformCommit(true);   // ...and commits a deformer preview
+  if (dyn && e.button === 0) dynStop();
   if (clipArmed && e.button === 0) { startClip(e); return; }
   if (e.button !== 0 || !mesh || gizmoOn) return;
   setNDC(e);
@@ -2948,11 +3037,15 @@ function aoFor(p, n, bvhs, rays, maxD, eps) {
   }
   return ao;
 }
+// BPR-like render: AO baked into vertex colours, soft floor shadow, optional rim light, depth of field (camera jitter
+// accumulated over several frames), outline from depth/normal edges, and single passes (depth / normal / mask / AO)
+const RD_PASS_NAMES = { beauty: '', depth: '_depth', normal: '_normal', mask: '_mask', ao: '_ao' };
 async function renderImage() {
   if (stroke) return;
   flushNormals(); ensureBVH();
   const recs = shownRecs(); if (!recs.length) return;
-  const scale = +$('rdScale').value || 1, rays = +$('rdAO').value || 0;
+  const scale = +$('rdScale').value || 1, rays = +$('rdAO').value || 0, pass = $('rdPass').value || 'beauty';
+  const dof = +$('rdDOF').value || 0, rim = $('rdRim').checked, outline = $('rdOutline').checked && pass === 'beauty';
   const vw = view.clientWidth || canvas.clientWidth, vh = view.clientHeight || canvas.clientHeight;
   const W = Math.min(4096, Math.round(vw * scale)), H = Math.min(4096, Math.round(vh * scale));
   const box = sceneBounds(recs), size = box.getSize(new V3()).length() || 1, center = box.getCenter(new V3());
@@ -2964,38 +3057,97 @@ async function renderImage() {
     return { r, p, ix, n, bvh, pt: isA ? paint : r.paint };
   });
   const bvhs = parts.map(x => x.bvh);
-  const rs = new THREE.Scene();
-  if (!$('rdTransp').checked) rs.background = new THREE.Color(0x2b2c31);
+  const rs = new THREE.Scene(), meshes = [];
+  const transparent = $('rdTransp').checked || pass !== 'beauty' && pass !== 'ao';
+  if (!transparent) rs.background = new THREE.Color(pass === 'depth' ? 0x000000 : pass === 'ao' ? 0xffffff : 0x2b2c31);
   for (const x of parts) {
-    const ao = aoFor(x.p, x.n, bvhs, rays, size * 0.18, size * 1e-4);
+    const ao = aoFor(x.p, x.n, bvhs, pass === 'ao' ? Math.max(8, rays) : rays, size * 0.18, size * 1e-4);
     const nv = x.p.length / 3, c = new Float32Array(nv * 3);
     const bc = [BASE_COL.r, BASE_COL.g, BASE_COL.b], hasPt = x.pt && x.pt.length === x.p.length;
-    for (let v = 0; v < nv; v++) for (let k = 0; k < 3; k++) c[v*3+k] = (hasPt ? x.pt[v*3+k] : bc[k]) * ao[v];
+    for (let v = 0; v < nv; v++) for (let k = 0; k < 3; k++) c[v*3+k] = pass === 'ao' ? ao[v] : (hasPt ? x.pt[v*3+k] : bc[k]) * ao[v];
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(x.p, 3)); g.setAttribute('normal', new THREE.BufferAttribute(x.n, 3));
     g.setAttribute('color', new THREE.BufferAttribute(c, 3)); g.setIndex(new THREE.BufferAttribute(x.ix, 1));
-    const m = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.55, metalness: 0 }));
-    m.castShadow = m.receiveShadow = true; rs.add(m);
+    const m = new THREE.Mesh(g, pass === 'ao' ? new THREE.MeshBasicMaterial({ vertexColors: true }) : new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.55, metalness: 0 }));
+    m.castShadow = m.receiveShadow = true; rs.add(m); meshes.push(m);
   }
   rs.add(new THREE.HemisphereLight(0xfff3e4, 0x30323a, 0.75));
   const right = camAxis(0), up = camAxis(1), back = camAxis(2);
   const key = new THREE.DirectionalLight(0xffffff, 2.3);
-  key.position.copy(center).addScaledVector(right.clone().multiplyScalar(-0.9).addScaledVector(up, 1.6).addScaledVector(back, 1.1).normalize(), size * 2);
+  const keyDir = right.clone().multiplyScalar(-0.9).addScaledVector(up, 1.6).addScaledVector(back, 1.1).normalize();
+  key.position.copy(center).addScaledVector(keyDir, size * 2);
   key.target.position.copy(center); rs.add(key, key.target);
-  const shadow = $('rdShadow').checked;
+  const shadow = $('rdShadow').checked && pass === 'beauty';
+  let ground = null;
   if (shadow) {
     key.castShadow = true; key.shadow.mapSize.set(2048, 2048); key.shadow.bias = -0.0004; key.shadow.normalBias = size * 0.002;
     const sc = key.shadow.camera; sc.left = sc.bottom = -size * 0.9; sc.right = sc.top = size * 0.9; sc.near = size * 0.1; sc.far = size * 4; sc.updateProjectionMatrix();
-    const ground = new THREE.Mesh(new THREE.PlaneGeometry(size * 8, size * 8), new THREE.ShadowMaterial({ opacity: 0.38 }));
+    ground = new THREE.Mesh(new THREE.PlaneGeometry(size * 8, size * 8), new THREE.ShadowMaterial({ opacity: 0.38 }));
     ground.rotation.x = -Math.PI / 2; ground.position.set(center.x, box.min.y - size * 0.002, center.z); ground.receiveShadow = true; rs.add(ground);
   }
   const fill = new THREE.DirectionalLight(0xc9d6ff, 0.5); fill.position.copy(center).addScaledVector(right.clone().addScaledVector(up, -0.3).addScaledVector(back, 0.6).normalize(), size * 2); rs.add(fill);
-  const rt = new THREE.WebGLRenderTarget(W, H, { samples: 4 }); rt.texture.colorSpace = THREE.SRGBColorSpace;
+  if (rim) { const rl = new THREE.DirectionalLight(0xffffff, 2.2); rl.position.copy(center).addScaledVector(back.clone().multiplyScalar(-1).addScaledVector(up, 0.5).normalize(), size * 2); rs.add(rl); }
+  const rt = new THREE.WebGLRenderTarget(W, H, { samples: 4 }); rt.texture.colorSpace = pass === 'beauty' || pass === 'ao' ? THREE.SRGBColorSpace : THREE.NoColorSpace;
   const cam = camera.clone(); cam.aspect = W / H; cam.updateProjectionMatrix();
   const prevShadow = renderer.shadowMap.enabled, prevType = renderer.shadowMap.type;
   renderer.shadowMap.enabled = shadow; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-  renderer.setRenderTarget(rt); renderer.clear(); renderer.render(rs, cam);
-  const px = new Uint8Array(W * H * 4); renderer.readRenderTargetPixels(rt, 0, 0, W, H, px);
+  const camDist = cam.position.distanceTo(center), near = Math.max(1e-4, camDist - size * 0.6), far = camDist + size * 0.6;
+  const shoot = (c, override) => {
+    rs.overrideMaterial = override || null;
+    renderer.setRenderTarget(rt); renderer.clear(); renderer.render(rs, c);
+    const px = new Uint8Array(W * H * 4); renderer.readRenderTargetPixels(rt, 0, 0, W, H, px); return px;
+  };
+  let px;
+  if (pass === 'beauty' || pass === 'ao') {
+    // depth of field: average frames from points on a lens disk, all looking at the model's centre (in focus)
+    const N = dof > 0 ? 24 : 1, acc = N > 1 ? new Float32Array(W * H * 4) : null, aperture = dof * size * 0.035;
+    const cr = camAxis(0), cu = camAxis(1), cd = cam.getWorldDirection(new V3());
+    const focus = cam.position.clone().addScaledVector(cd, Math.max(1e-4, center.clone().sub(cam.position).dot(cd)));   // on the view axis, at the model's depth
+    for (let s = 0; s < N; s++) {
+      let c = cam;
+      if (N > 1) {
+        const a = s * 2.399963, rr = Math.sqrt((s + 0.5) / N) * aperture;   // golden-angle spiral on the lens
+        c = cam.clone(); c.position.addScaledVector(cr, Math.cos(a) * rr).addScaledVector(cu, Math.sin(a) * rr); c.up.copy(cu); c.lookAt(focus); c.updateMatrixWorld();
+      }
+      const one = shoot(c);
+      if (!acc) { px = one; break; }
+      for (let i = 0; i < one.length; i++) acc[i] += one[i];
+      if (s % 6 === 5) await new Promise(r => setTimeout(r));
+    }
+    if (acc) { px = new Uint8Array(acc.length); for (let i = 0; i < acc.length; i++) px[i] = Math.round(acc[i] / N); }
+  } else if (pass === 'depth') {
+    const dc = cam.clone(); dc.near = near; dc.far = far; dc.updateProjectionMatrix();
+    px = shoot(dc, new THREE.MeshDepthMaterial());
+    for (let i = 0; i < px.length; i += 4) if (px[i + 3]) { const d = 255 - px[i]; px[i] = px[i+1] = px[i+2] = d; px[i+3] = 255; } else { px[i] = px[i+1] = px[i+2] = 0; px[i+3] = 255; }   // near = white
+  } else if (pass === 'normal') {
+    px = shoot(cam, new THREE.MeshNormalMaterial());
+  } else if (pass === 'mask') {
+    px = shoot(cam, new THREE.MeshBasicMaterial({ color: 0xffffff }));
+  }
+  if (outline) {
+    // edges where depth jumps (silhouettes) or the normal turns sharply (creases)
+    const dc = cam.clone(); dc.near = near; dc.far = far; dc.updateProjectionMatrix();
+    const bg = rs.background; rs.background = null; if (ground) ground.visible = false;
+    const dp = shoot(dc, new THREE.MeshDepthMaterial()), np = shoot(cam, new THREE.MeshNormalMaterial());
+    rs.background = bg; if (ground) ground.visible = true;
+    const w = Math.max(1, Math.round(scale)), ink = [24, 22, 26];
+    const D = i => dp[i + 3] ? dp[i] : 0;
+    const edge = new Uint8Array(W * H);
+    for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
+      const i = (y * W + x) * 4; let e = 0;
+      for (const o of [4, -4, W * 4, -W * 4]) {
+        const j = i + o;
+        if (Math.abs(D(i) - D(j)) > 6 || (dp[i + 3] !== dp[j + 3])) { e = 1; break; }
+        if (dp[i + 3] && dp[j + 3]) { const d = Math.abs(np[i] - np[j]) + Math.abs(np[i+1] - np[j+1]) + Math.abs(np[i+2] - np[j+2]); if (d > 110) { e = 1; break; } }
+      }
+      edge[y * W + x] = e;
+    }
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      let on = 0; for (let dy = -w + 1; dy < w && !on; dy++) for (let dx = -w + 1; dx < w; dx++) { const xx = x + dx, yy = y + dy; if (xx >= 0 && yy >= 0 && xx < W && yy < H && edge[yy * W + xx]) { on = 1; break; } }
+      if (on) { const i = (y * W + x) * 4; px[i] = ink[0]; px[i+1] = ink[1]; px[i+2] = ink[2]; px[i+3] = 255; }
+    }
+  }
+  rs.overrideMaterial = null;
   renderer.setRenderTarget(null); renderer.shadowMap.enabled = prevShadow; renderer.shadowMap.type = prevType;
   rt.dispose(); if (key.shadow.map) key.shadow.map.dispose();
   rs.traverse(o => { if (o.isMesh) { o.material.dispose(); o.geometry.dispose(); } });
@@ -3005,7 +3157,7 @@ async function renderImage() {
   const c2 = document.createElement('canvas'); c2.width = W; c2.height = H; c2.getContext('2d').putImageData(img, 0, 0);
   const blob = await new Promise(res => c2.toBlob(res, 'image/png'));
   if (lastRender) URL.revokeObjectURL(lastRender.url);
-  lastRender = { blob, url: URL.createObjectURL(blob) };
+  lastRender = { blob, url: URL.createObjectURL(blob), suffix: RD_PASS_NAMES[pass] || '' };
   $('rdImg').src = lastRender.url; $('rdView').hidden = false;
   $('rdInfo').textContent = `${W} × ${H} px・${((performance.now() - t0) / 1000).toFixed(1)}秒`;
 }
@@ -3249,6 +3401,49 @@ function zsMove(e) {
   zsRebuild();
 }
 function zsUp() { if (zs) zs.drag = null; controls.enabled = true; }
+// ---------------- mannequins: ready-made ZSphere skeletons (right side listed, the left side is mirrored) ----------------
+const ZS_PRESETS = {
+  human: { name: '人（Aポーズ）', sym: true, n: [
+    ['pelvis', 0, 0, 0, .16], ['spine', 0, .25, 0, .15, 'pelvis'], ['chest', 0, .5, 0, .19, 'spine'], ['neck', 0, .74, 0, .07, 'chest'], ['head', 0, .92, .02, .13, 'neck'],
+    ['sh', .21, .63, 0, .085, 'chest'], ['el', .36, .36, -.02, .06, 'sh'], ['wr', .48, .12, .02, .045, 'el'], ['hand', .53, .02, .03, .05, 'wr'],
+    ['hip', .1, -.06, 0, .11, 'pelvis'], ['kn', .12, -.47, .02, .075, 'hip'], ['an', .12, -.88, -.01, .05, 'kn'], ['toe', .12, -.93, .13, .045, 'an']] },
+  bust: { name: '胸像（頭と肩）', sym: true, n: [
+    ['chest', 0, 0, 0, .22], ['neck', 0, .26, .01, .09, 'chest'], ['head', 0, .47, .04, .16, 'neck'], ['jaw', 0, .38, .12, .09, 'head'], ['sh', .26, .1, 0, .11, 'chest']] },
+  quad: { name: '四足動物', sym: true, n: [
+    ['hips', 0, 0, -.4, .16], ['spine', 0, .04, 0, .17, 'hips'], ['chest', 0, .04, .4, .19, 'spine'], ['neck', 0, .24, .62, .1, 'chest'], ['head', 0, .36, .8, .12, 'neck'], ['snout', 0, .3, .96, .07, 'head'],
+    ['tail', 0, .04, -.62, .06, 'hips'], ['tail2', 0, -.08, -.86, .04, 'tail'], ['ear', .07, .5, .76, .04, 'head'],
+    ['fs', .14, -.06, .42, .085, 'chest'], ['fk', .14, -.36, .46, .06, 'fs'], ['fp', .14, -.64, .48, .05, 'fk'],
+    ['bh', .14, -.05, -.42, .095, 'hips'], ['bk', .15, -.33, -.5, .065, 'bh'], ['bp', .15, -.64, -.43, .05, 'bk']] },
+  bird: { name: '鳥', sym: true, n: [
+    ['body', 0, 0, 0, .2], ['chest', 0, .06, .2, .17, 'body'], ['neck', 0, .26, .3, .08, 'chest'], ['head', 0, .42, .36, .09, 'neck'], ['beak', 0, .39, .5, .03, 'head'], ['tail', 0, .02, -.32, .06, 'body'], ['tail2', 0, -.02, -.52, .04, 'tail'],
+    ['wing', .22, .1, .05, .07, 'chest'], ['wing2', .45, .08, -.06, .045, 'wing'], ['wing3', .62, .05, -.2, .03, 'wing2'], ['leg', .08, -.2, .02, .05, 'body'], ['foot', .08, -.42, .06, .03, 'leg']] },
+  hand: { name: '手（右手）', sym: false, n: [
+    ['wrist', 0, -.25, 0, .09], ['palm', 0, 0, 0, .13, 'wrist'], ['top', 0, .17, 0, .12, 'palm'],
+    ['i1', -.1, .3, 0, .04, 'top'], ['i2', -.11, .43, 0, .034, 'i1'], ['i3', -.115, .53, 0, .03, 'i2'],
+    ['m1', -.035, .32, 0, .042, 'top'], ['m2', -.035, .47, 0, .036, 'm1'], ['m3', -.035, .58, 0, .031, 'm2'],
+    ['r1', .035, .31, 0, .04, 'top'], ['r2', .035, .44, 0, .034, 'r1'], ['r3', .035, .54, 0, .03, 'r2'],
+    ['p1', .1, .27, 0, .035, 'top'], ['p2', .11, .36, 0, .03, 'p1'], ['p3', .115, .43, 0, .026, 'p2'],
+    ['t1', -.14, .02, .04, .05, 'palm'], ['t2', -.22, .12, .07, .04, 't1'], ['t3', -.27, .21, .09, .033, 't2']] },
+};
+function zsPreset(id) {
+  const P = ZS_PRESETS[id]; if (!P) return;
+  if (!zs) zsStart();
+  zsPush();
+  const root = zs.nodes[0], ys = P.n.map(q => q[2]), ext = Math.max(...ys) - Math.min(...ys) || 1;
+  const k = root.r * 10 * 0.7 / ext, base = root.p.clone(), at = {}, nodes = [];
+  for (const [name, x, y, z, r, par] of P.n) {
+    const pi = par ? at[par] : -1;
+    const n = { p: new V3(base.x + x * k, base.y + y * k, base.z + z * k), r: r * k, parent: pi, mirror: -1 };
+    nodes.push(n); at[name] = nodes.length - 1;
+    if (P.sym && x > 1e-6) {
+      const mp = par && nodes[pi].mirror >= 0 ? nodes[pi].mirror : pi;
+      nodes.push({ p: new V3(base.x - x * k, base.y + y * k, base.z + z * k), r: r * k, parent: mp, mirror: nodes.length - 1 });
+      n.mirror = nodes.length - 1;
+    }
+  }
+  zs.nodes = nodes; zsRebuild();
+  toast(`ZSphere の「${P.name}」を置きました。球を動かして形を整え、「メッシュにする」で変換します`);
+}
 function zsMake() {
   if (!zs) return;
   if (zs.nodes.length < 2) { toast('球が1つだけです。赤い球からドラッグして球を増やしてください'); return; }
@@ -3270,43 +3465,273 @@ function afterBulkEdit() {
   mirror = active.mirror = active.levels[active.lv].mirror = computeMirror(pos);
   gpuDirty = bvhDirty = true; scheduleSave();
 }
-function deform(kind) {
-  if (stroke) return;
-  flushNormals();
-  const a = +$('dfAxis').value, b = (a + 1) % 3, c = (a + 2) % 3, amt = +$('dfAmt').value;
-  if (!amt && kind !== 'flatten') { toast('「量」を 0 以外にしてください'); return; }
-  geo.computeBoundingBox();
-  const bb = geo.boundingBox, lo = [bb.min.x, bb.min.y, bb.min.z], hi = [bb.max.x, bb.max.y, bb.max.z];
-  const ctr = [0, 1, 2].map(k => (lo[k] + hi[k]) / 2), len = Math.max(1e-6, hi[a] - lo[a]), diag = Math.hypot(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]);
-  pushUndo();
-  const q = [0, 0, 0];
+// live preview: a deformer button starts it, the sliders re-run it from the shape before, 確定 / sculpting / another deformer commits
+var dfp = null;   // { rec, kind, base, nb, lo, hi, diag }
+const DEF_NAMES = { bend: '曲げました', sbend: 'S字に曲げました', twist: 'ねじりました', taper: '先細りにしました', flare: '中央をふくらませました', stretch: '伸ばしました', squeeze: '押しつぶしました', skew: '傾けました', rotate: '回しました', spherize: '球に近づけました', cylindrize: '円柱に近づけました', wave: '波打たせました', inflate: '膨らませました', flatten: '平らにしました', relax: 'ならしました' };
+const dfValid = () => dfp && dfp.rec === active && dfp.base.length === pos.length;
+function deformTo(target) {
+  const { kind, base: B, nb: N, lo, hi, diag } = dfp;
+  const a = +$('dfAxis').value, b = (a + 1) % 3, c = (a + 2) % 3, amt = +$('dfAmt').value, mid = +$('dfMid').value, freq = +$('dfFreq').value;
+  const ctr = [0, 1, 2].map(k => (lo[k] + hi[k]) / 2), len = Math.max(1e-6, hi[a] - lo[a]), half = len / 2;
+  const piv = ctr[a] + mid * half;   // the moved centre along the axis
+  // average radius from the centre (spherize) and around the axis (cylindrize), from the shape before
+  if (kind === 'spherize' && dfp.R == null) { let s = 0; for (let v = 0; v < nV; v++) s += Math.hypot(B[v*3] - ctr[0], B[v*3+1] - ctr[1], B[v*3+2] - ctr[2]); dfp.R = s / Math.max(1, nV); }
+  if (kind === 'cylindrize' && dfp.Rc == null) { let s = 0; for (let v = 0; v < nV; v++) s += Math.hypot(B[v*3+b] - ctr[b], B[v*3+c] - ctr[c]); dfp.Rc = s / Math.max(1, nV); }
+  if (kind === 'relax') {
+    target.set(B);
+    const it = Math.round(Math.abs(amt) * 20), tmp = new Float32Array(nV * 3);
+    for (let k = 0; k < it; k++) {
+      for (let v = 0; v < nV; v++) {
+        const s0 = vvStart[v], s1 = vvStart[v + 1], i = v * 3;
+        if (s1 === s0 || mask[v] >= 1) { tmp[i] = target[i]; tmp[i+1] = target[i+1]; tmp[i+2] = target[i+2]; continue; }
+        let x = 0, y = 0, z = 0; for (let j = s0; j < s1; j++) { const w = vvList[j] * 3; x += target[w]; y += target[w+1]; z += target[w+2]; }
+        const n = s1 - s0, k2 = 0.5 * (1 - mask[v]);
+        tmp[i] = target[i] + (x / n - target[i]) * k2; tmp[i+1] = target[i+1] + (y / n - target[i+1]) * k2; tmp[i+2] = target[i+2] + (z / n - target[i+2]) * k2;
+      }
+      target.set(tmp);
+    }
+    computeAllNormals(); geo.computeBoundingSphere(); return;
+  }
+  const out = [0, 0, 0];
   for (let v = 0; v < nV; v++) {
-    const i = v * 3, keep = 1 - mask[v]; if (keep <= 0) continue;
-    q[0] = pos[i]; q[1] = pos[i+1]; q[2] = pos[i+2];
-    const u = q[a] - ctr[a], t = u / (len / 2);   // -1..1 along the axis
-    const out = [q[0], q[1], q[2]];
+    const i = v * 3, keep = 1 - mask[v];
+    const q0 = B[i], q1 = B[i+1], q2 = B[i+2];
+    if (keep <= 0) { target[i] = q0; target[i+1] = q1; target[i+2] = q2; continue; }
+    const q = [q0, q1, q2];
+    out[0] = q0; out[1] = q1; out[2] = q2;
+    const u = q[a] - piv, t = u / half;   // about -1..1 along the axis from the moved centre
     if (kind === 'bend') {
       // bend toward +b: the axis becomes an arc of total angle amt*PI
       const k = amt * Math.PI / len;
-      if (Math.abs(k) > 1e-9) { const R = 1 / k, w = q[b] - ctr[b]; out[a] = ctr[a] + (R - w) * Math.sin(k * u); out[b] = ctr[b] + R - (R - w) * Math.cos(k * u); }
+      if (Math.abs(k) > 1e-9) { const R = 1 / k, w = q[b] - ctr[b]; out[a] = piv + (R - w) * Math.sin(k * u); out[b] = ctr[b] + R - (R - w) * Math.cos(k * u); }
+    } else if (kind === 'sbend') {
+      out[b] += amt * len * 0.18 * Math.sin(Math.PI * Math.max(-1, Math.min(1, t)));
     } else if (kind === 'twist') {
       const ang = amt * Math.PI * t, cs = Math.cos(ang), sn = Math.sin(ang), wb = q[b] - ctr[b], wc = q[c] - ctr[c];
+      out[b] = ctr[b] + wb * cs - wc * sn; out[c] = ctr[c] + wb * sn + wc * cs;
+    } else if (kind === 'rotate') {
+      const ang = amt * Math.PI, cs = Math.cos(ang), sn = Math.sin(ang), wb = q[b] - ctr[b], wc = q[c] - ctr[c];
       out[b] = ctr[b] + wb * cs - wc * sn; out[c] = ctr[c] + wb * sn + wc * cs;
     } else if (kind === 'taper') {
       const f = Math.max(0.02, 1 + amt * t);
       out[b] = ctr[b] + (q[b] - ctr[b]) * f; out[c] = ctr[c] + (q[c] - ctr[c]) * f;
+    } else if (kind === 'flare') {
+      const f = Math.max(0.02, 1 + amt * Math.max(0, 1 - t * t));
+      out[b] = ctr[b] + (q[b] - ctr[b]) * f; out[c] = ctr[c] + (q[c] - ctr[c]) * f;
     } else if (kind === 'stretch') {
-      out[a] = ctr[a] + u * Math.max(0.05, 1 + amt);
+      out[a] = piv + u * Math.max(0.05, 1 + amt);
+    } else if (kind === 'squeeze') {
+      // keep the volume: s along the axis, 1/sqrt(s) across
+      const s = Math.max(0.05, 1 + amt), r = 1 / Math.sqrt(s);
+      out[a] = piv + u * s; out[b] = ctr[b] + (q[b] - ctr[b]) * r; out[c] = ctr[c] + (q[c] - ctr[c]) * r;
+    } else if (kind === 'skew') {
+      out[b] += amt * u;
+    } else if (kind === 'spherize') {
+      const dx = q0 - ctr[0], dy = q1 - ctr[1], dz = q2 - ctr[2], d = Math.hypot(dx, dy, dz);
+      if (d > 1e-9) { const k = (dfp.R / d - 1) * amt; out[0] += dx * k; out[1] += dy * k; out[2] += dz * k; }
+    } else if (kind === 'cylindrize') {
+      const db = q[b] - ctr[b], dc = q[c] - ctr[c], d = Math.hypot(db, dc);
+      if (d > 1e-9) { const k = (dfp.Rc / d - 1) * amt; out[b] += db * k; out[c] += dc * k; }
+    } else if (kind === 'wave') {
+      out[b] += amt * diag * 0.04 * Math.sin(Math.PI * freq * t);
     } else if (kind === 'inflate') {
-      const d = amt * diag * 0.03; out[0] += nrm[i] * d; out[1] += nrm[i+1] * d; out[2] += nrm[i+2] * d;
+      const d = amt * diag * 0.03; out[0] += N[i] * d; out[1] += N[i+1] * d; out[2] += N[i+2] * d;
     } else if (kind === 'flatten') {
       // squash toward the middle plane across the axis (|amount| 1 = completely flat)
-      out[a] = ctr[a] + u * (1 - Math.min(1, Math.abs(amt || 1)));
+      out[a] = piv + u * (1 - Math.min(1, Math.abs(amt)));
     }
-    pos[i] = q[0] + (out[0] - q[0]) * keep; pos[i+1] = q[1] + (out[1] - q[1]) * keep; pos[i+2] = q[2] + (out[2] - q[2]) * keep;
+    target[i] = q0 + (out[0] - q0) * keep; target[i+1] = q1 + (out[1] - q1) * keep; target[i+2] = q2 + (out[2] - q2) * keep;
   }
-  afterBulkEdit();
-  toast({ bend: '曲げました', twist: 'ねじりました', taper: '先細りにしました', stretch: '伸ばしました', inflate: '膨らませました', flatten: '平らにしました' }[kind]);
+  computeAllNormals(); geo.computeBoundingSphere();
+}
+function deformUI(on) { $('dfApply').disabled = $('dfCancel').disabled = !on; document.querySelectorAll('[data-def]').forEach(b => b.classList.toggle('on', !!(on && dfp && b.dataset.def === dfp.kind))); }
+// start (or switch) a deformer preview
+function deform(kind) {
+  if (stroke || gizmo.dragging || !active) return;
+  if (dfValid() && dfp.kind !== kind) deformCommit(true);
+  if (!dfValid()) {
+    flushNormals();
+    geo.computeBoundingBox();
+    const bb = geo.boundingBox, lo = [bb.min.x, bb.min.y, bb.min.z], hi = [bb.max.x, bb.max.y, bb.max.z];
+    pushUndo();
+    dfp = { rec: active, kind, base: pos.slice(), nb: nrm.slice(), lo, hi, diag: Math.hypot(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]) || 1 };
+  }
+  dfp.kind = kind;
+  deformTo(pos);
+  deformUI(true);
+}
+let dfRaf = 0;
+function deformPreview() { if (!dfValid()) return; cancelAnimationFrame(dfRaf); dfRaf = requestAnimationFrame(() => { if (dfValid()) deformTo(pos); }); }
+function deformCommit(quiet = false) {
+  if (!dfp) return;
+  cancelAnimationFrame(dfRaf);
+  if (dfValid()) { deformTo(pos); afterBulkEdit(); if (!quiet) toast(DEF_NAMES[dfp.kind] || '変形しました'); }
+  dfp = null; deformUI(false);
+}
+function deformCancel() {
+  if (!dfp) return;
+  cancelAnimationFrame(dfRaf);
+  if (dfValid()) { pos.set(dfp.base); computeAllNormals(); geo.computeBoundingSphere(); gpuDirty = bvhDirty = true; undoStack.pop(); }
+  dfp = null; deformUI(false);
+}
+
+// ---------------- dynamics: cloth / gravity / inflate simulation of the active part (masked = pinned) ----------------
+let dyn = null;   // { rec, sim, frame, frames, raf, floor }
+const DYN_MODES = {
+  cloth: { gravity: 1, pressure: 0, collide: true },
+  sag: { gravity: 1, pressure: 0, collide: false },
+  inflate: { gravity: 0, pressure: 0.4, collide: false },
+  deflate: { gravity: 0, pressure: -0.35, collide: false },
+};
+function dynColliders(thick) {
+  const cols = subtools.filter(r => r !== active && r.visible).map(r => ensureView(r).geometry).filter(g => g.boundsTree);
+  if (!cols.length) return null;
+  const P3 = new V3(), hit = { point: new V3(), distance: 0, faceIndex: 0 }, fr = +$('dynFric').value;
+  return (P, Q, n) => {
+    for (let ci = 0; ci < cols.length; ci++) {
+      const g = cols[ci], bvh = g.boundsTree, gp = g.attributes.position.array, gi = g.index.array;
+      for (let v = 0; v < n; v++) {
+        const i = v * 3; P3.set(P[i], P[i+1], P[i+2]);
+        if (!bvh.closestPointToPoint(P3, hit, 0, thick * 6)) continue;
+        const f = hit.faceIndex * 3, a = gi[f] * 3, b = gi[f+1] * 3, c = gi[f+2] * 3;
+        const ux = gp[b] - gp[a], uy = gp[b+1] - gp[a+1], uz = gp[b+2] - gp[a+2], wx = gp[c] - gp[a], wy = gp[c+1] - gp[a+1], wz = gp[c+2] - gp[a+2];
+        let nx = uy * wz - uz * wy, ny = uz * wx - ux * wz, nz = ux * wy - uy * wx; const L = Math.hypot(nx, ny, nz) || 1; nx /= L; ny /= L; nz /= L;
+        const d = (P[i] - hit.point.x) * nx + (P[i+1] - hit.point.y) * ny + (P[i+2] - hit.point.z) * nz;   // signed distance along the face normal
+        if (d >= 0) {   // outside: keep at least thick away from the closest point (its direction, not the face normal - edges and corners)
+          const dist = hit.distance; if (dist >= thick) continue;
+          if (dist > 1e-9) { nx = (P[i] - hit.point.x) / dist; ny = (P[i+1] - hit.point.y) / dist; nz = (P[i+2] - hit.point.z) / dist; }
+        }
+        P[i] = hit.point.x + nx * thick; P[i+1] = hit.point.y + ny * thick; P[i+2] = hit.point.z + nz * thick;
+        Q[i] += (P[i] - Q[i]) * fr; Q[i+1] += (P[i+1] - Q[i+1]) * fr; Q[i+2] += (P[i+2] - Q[i+2]) * fr;   // friction: lose speed on contact
+      }
+    }
+  };
+}
+function dynStart() {
+  if (dyn) { dynStop(); return; }
+  if (stroke || !active) return;
+  if (active.levels.length > 1 && active.lv !== active.levels.length - 1) { toast('ダイナミクスは一番上の細分化レベルで使ってください'); return; }
+  if (nV > 400000) { toast(`頂点が多すぎます（${nV.toLocaleString()}）。40 万以下にしてください（リメッシュやポリゴン削減で軽くできます）`); return; }
+  if (dfp) deformCommit(true);
+  flushNormals();
+  const M = DYN_MODES[$('dynMode').value] || DYN_MODES.cloth;
+  const nS = Math.min(nF, 20000); let el = 0;
+  for (let f = 0; f < nS; f++) { const a = idx[f*3]*3, b = idx[f*3+1]*3; el += Math.hypot(pos[a] - pos[b], pos[a+1] - pos[b+1], pos[a+2] - pos[b+2]); }
+  el /= Math.max(1, nS);
+  const pressure = M.pressure * (+$('dynPress').value), g = M.gravity * (+$('dynGrav').value);
+  let anyPin = false; for (let v = 0; v < nV; v++) if (mask[v] >= 0.5) { anyPin = true; break; }
+  if (M.gravity && !M.collide && !anyPin) toast('マスクした所が固定されます（たらすときは、留める所をマスクしてください）');
+  const collide = M.collide ? dynColliders(el * 0.6) : null;
+  if (M.collide && !collide) toast('ぶつかる相手のパーツが表示されていません（床に落ちるだけになります）');
+  pushUndo();
+  const sim = createSim(pos.subarray(0, nV * 3), idx.subarray(0, nF * 3), {
+    pin: mask.subarray(0, nV), gravity: [0, -g, 0], stiffness: +$('dynStiff').value, bend: +$('dynBend').value, pressure, damping: 0.03,
+    iterations: 8, substeps: 2, collide, selfCollide: $('dynSelf').checked,
+  });
+  dyn = { rec: active, sim, frame: 0, frames: +$('dynFrames').value | 0, raf: 0, floor: null };
+  if (M.collide) dyn.floor = sceneBounds(subtools.filter(r => r.visible || r === active)).min.y - el;   // a floor just under the scene
+  $('dynGo').textContent = '止める';
+  const tick = () => {
+    if (!dyn) return;
+    if (dyn.rec !== active) { dynStop(); return; }
+    const t0 = performance.now();
+    do {
+      sim.step(1); dyn.frame++;
+      if (dyn.floor != null) { const P = sim.pos, Q = sim.prev; for (let i = 1; i < P.length; i += 3) if (P[i] < dyn.floor) { P[i] = dyn.floor; Q[i] += (P[i] - Q[i]) * 0.8; } }
+    } while (performance.now() - t0 < 12 && dyn.frame < dyn.frames);
+    pos.set(sim.pos); computeAllNormals(); geo.computeBoundingSphere();
+    $('dynInfo').textContent = `${dyn.frame} / ${dyn.frames} フレーム`;
+    if (dyn.frame >= dyn.frames || (dyn.frame > 30 && sim.moved < el * 1e-4)) { dynStop(); toast('シミュレーションが終わりました（元に戻すで戻せます）'); return; }
+    dyn.raf = requestAnimationFrame(tick);
+  };
+  dyn.raf = requestAnimationFrame(tick);
+}
+function dynStop() {
+  if (!dyn) return;
+  cancelAnimationFrame(dyn.raf);
+  const d = dyn; dyn = null;
+  if (d.rec === active) afterBulkEdit();
+  $('dynGo').textContent = 'シミュレーション開始';
+}
+
+// ---------------- NanoMesh (a part on every polygon) / MicroPoly (a tile in every quad) ----------------
+let nmPrev = null, nmRaf = 0;   // preview mesh: { mesh, rec, kind }
+const nmMat = new THREE.MeshStandardMaterial({ color: 0xd9a35b, roughness: 0.5, metalness: 0.05 });
+function nmFill() {
+  const sel = $('nmInst'), keep = sel.value;
+  const items = [...BUILTIN_IMM.map(b => [b.id, b.name]), ...customIMMs.map(a => [a.id, a.name]), ...subtools.filter(r => r !== active).map(r => ['s:' + r.id, 'パーツ：' + r.name])];
+  sel.replaceChildren(...items.map(([v, t]) => { const o = document.createElement('option'); o.value = v; o.textContent = t; return o; }));
+  if ([...sel.options].some(o => o.value === keep)) sel.value = keep;
+}
+function nmInstance() {
+  const id = $('nmInst').value;
+  if (id.startsWith('s:')) { const r = subtools.find(x => 's:' + x.id === id); return r ? { p: r.pos, ix: r.idx } : null; }
+  return getIMM(id);
+}
+// the host polygons of the active part at its current level, and which ones are masked
+function nmHost() {
+  flushNormals();
+  const F = facesOf(active.levels[active.lv]);
+  if (!F || F.start.length < 2) return null;
+  const n = F.start.length - 1;
+  let sel = null;
+  if ($('nmMasked').checked) {
+    sel = new Uint8Array(n); let any = 0;
+    for (let f = 0; f < n; f++) { let ok = 1; for (let j = F.start[f]; j < F.start[f+1]; j++) if (mask[F.idx[j]] < 0.5) { ok = 0; break; } sel[f] = ok; any |= ok; }
+    if (!any) return { err: 'マスクした面がありません' };
+  }
+  return { P: pos.subarray(0, nV * 3), F, n, sel };
+}
+function nmBuild(kind) {
+  const H = nmHost(); if (!H) return null; if (H.err) return H;
+  if (kind === 'nano') {
+    const inst = nmInstance(); if (!inst) return { err: '置く部品を選んでください' };
+    const tri = H.F.idx.length / 3;
+    if (H.n > 200000) return { err: `面が多すぎます（${H.n.toLocaleString()} 面）。低ポリゴンのパーツで使ってください` };
+    if ((inst.ix.length / 3) * (H.sel ? H.sel.reduce((a, b) => a + b, 0) : H.n) > 30_000_000) return { err: '結果のポリゴン数が多すぎます（部品を軽くするか、面を減らしてください）' };
+    return nanoMesh(H.P, H.F, inst, { fit: $('nmFit').value, scale: +$('nmScale').value, height: +$('nmHeight').value, offset: +$('nmOffset').value,
+      rotate: +$('nmRot').value, randScale: +$('nmRandS').value, randRot: +$('nmRandR').value, seed: (+$('nmSeed').value | 0) || 1, sel: H.sel, flip: $('nmFlip').checked });
+  }
+  const tile = microTile($('mpTile').value); if (!tile) return null;
+  if (H.n * (tile.ix.length / 3) > 30_000_000) return { err: '結果のポリゴン数が多すぎます（低ポリゴンのパーツで使ってください）' };
+  let F = H.F;
+  if (H.sel) { const keep = []; for (let f = 0; f < H.n; f++) if (H.sel[f]) keep.push(Array.from(F.idx.subarray(F.start[f], F.start[f+1]))); F = PE.fromPolys(keep); }
+  return microPoly(H.P, F, tile, { thickness: +$('mpThick').value, weld: true, tris: $('mpTris').checked });
+}
+function nmClear() {
+  cancelAnimationFrame(nmRaf);
+  if (nmPrev) { nmPrev.mesh.removeFromParent(); nmPrev.mesh.geometry.dispose(); nmPrev = null; }
+  $('nmCancel').disabled = true;
+}
+function nmPreview(kind = nmPrev && nmPrev.kind) {
+  if (!kind || !active) return;
+  cancelAnimationFrame(nmRaf);
+  nmRaf = requestAnimationFrame(() => {
+    const r = nmBuild(kind);
+    if (!r || r.err) { if (r && r.err) toast(r.err); nmClear(); return; }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(r.pos, 3)); g.setIndex(new THREE.BufferAttribute(r.idx, 1)); g.computeVertexNormals();
+    if (nmPrev) { nmPrev.mesh.geometry.dispose(); nmPrev.mesh.geometry = g; nmPrev.kind = kind; nmPrev.rec = active; }
+    else { const m = new THREE.Mesh(g, nmMat); m.raycast = () => {}; m.frustumCulled = false; scene.add(m); nmPrev = { mesh: m, rec: active, kind }; }
+    $('nmCancel').disabled = false;
+    $('nmInfo').textContent = `${kind === 'nano' ? '部品' : 'タイル'} ${r.count.toLocaleString()} 個・${(r.idx.length / 3).toLocaleString()} 三角形`;
+  });
+}
+function nmMake(kind) {
+  if (!active || stroke) return;
+  return busy(() => {
+    const r = nmBuild(kind);
+    if (!r) return; if (r.err) { toast(r.err); return; }
+    if (!r.count) { toast('置ける面がありませんでした（MicroPoly は四角ポリゴンの面に置きます）'); return; }
+    nmClear();
+    pushStruct();
+    const name = kind === 'nano' ? 'NanoMesh' : 'MicroPoly_' + ((MICRO_TILES.find(t => t.id === $('mpTile').value) || {}).name || '');
+    const rec = newRec(uniqueName(name), r.pos, dropDegenerate(r.idx));
+    insertAfterActive(rec);
+    if ($('nmHide').checked) active.visible = false;
+    activate(rec); scheduleSave(); renderSubtoolList();
+    toast(`${name} を新しいパーツとして作りました（${(r.idx.length / 3).toLocaleString()} 三角形）`);
+  });
 }
 
 // ---------------- morph target ----------------
@@ -4264,38 +4689,77 @@ function applyView(save) {
 
 // ---------------- turntable video (WebM) ----------------
 let turning = false;
-async function recordTurntable() {
+// record the canvas while poseAt(k) moves the camera, k = 0..1 over secs
+async function recordCamera(secs, poseAt, name, btn) {
   if (turning || stroke) return;
   if (typeof MediaRecorder !== 'function' || !canvas.captureStream) { toast('この環境では動画を書き出せません'); return; }
-  const secs = +$('ttSecs').value || 6;
   const type = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'].find(t => MediaRecorder.isTypeSupported(t));
   if (!type) { toast('この環境では WebM 動画を書き出せません'); return; }
-  turning = true; $('ttGo').disabled = true;
+  turning = true; for (const b of ['ttGo', 'tlRec', 'tlPlay']) $(b).disabled = true;
   const keepClear = renderer.getClearAlpha(), keepCol = renderer.getClearColor(new THREE.Color());
   renderer.setClearColor(0x2b2c31, 1);
   ring.visible = ring2.visible = quad.visible = quad2.visible = false;
   const chunks = [], rec = new MediaRecorder(canvas.captureStream(30), { mimeType: type, videoBitsPerSecond: 8_000_000 });
   rec.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
   const done = new Promise(res => { rec.onstop = res; });
-  const start = camera.position.clone().sub(controls.target), t0 = performance.now();
+  const keep = camSnap();
   rec.start();
-  toast(`${secs} 秒のターンテーブル動画を録画しています…`);
-  await new Promise(res => {
+  toast(`${secs} 秒の動画を録画しています…`);
+  await playCamera(secs, poseAt);
+  rec.stop(); await done;
+  camApply(keep);
+  renderer.setClearColor(keepCol, keepClear);
+  turning = false; for (const b of ['ttGo', 'tlRec', 'tlPlay']) $(b).disabled = false;
+  const blob = new Blob(chunks, { type: 'video/webm' });
+  saveOne(async () => ({ name: `${fileBase()}_${name}.webm`, blob }));
+}
+function playCamera(secs, poseAt) {
+  const t0 = performance.now();
+  return new Promise(res => {
     const step = () => {
       const k = Math.min(1, (performance.now() - t0) / (secs * 1000));
-      camera.position.copy(controls.target).add(start.clone().applyAxisAngle(new V3(0, 1, 0), k * Math.PI * 2));
-      camera.lookAt(controls.target);
+      camApply(poseAt(k), true);
       if (k < 1) requestAnimationFrame(step); else res();
     };
     requestAnimationFrame(step);
   });
-  rec.stop(); await done;
-  camera.position.copy(controls.target).add(start); controls.update();
-  renderer.setClearColor(keepCol, keepClear);
-  turning = false; $('ttGo').disabled = false;
-  const blob = new Blob(chunks, { type: 'video/webm' });
-  saveOne(async () => ({ name: `${fileBase()}_turntable.webm`, blob }));
 }
+const camSnap = () => ({ p: camera.position.toArray(), t: controls.target.toArray(), fov: camera.fov });
+function camApply(c, live = false) {
+  camera.position.fromArray(c.p); controls.target.fromArray(c.t);
+  if (c.fov && Math.abs(camera.fov - c.fov) > 1e-6) { camera.fov = c.fov; camera.updateProjectionMatrix(); }
+  camera.lookAt(controls.target); if (!live) controls.update();
+}
+function recordTurntable() {
+  const start = camera.position.clone().sub(controls.target), t = controls.target.toArray(), fov = camera.fov;
+  return recordCamera(+$('ttSecs').value || 6, k => ({ p: controls.target.clone().add(start.clone().applyAxisAngle(new V3(0, 1, 0), k * Math.PI * 2)).toArray(), t, fov }), 'turntable');
+}
+// ---------------- timeline: camera keyframes, smooth path through them (orbit-aware) ----------------
+let tlKeys = [];
+const tlSph = c => { const d = new V3().fromArray(c.p).sub(new V3().fromArray(c.t)), r = d.length() || 1e-6; return [r, Math.atan2(d.x, d.z), Math.asin(Math.max(-1, Math.min(1, d.y / r)))]; };
+const crom = (a, b, c, d, t) => { const t2 = t * t, t3 = t2 * t; return 0.5 * (2 * b + (-a + c) * t + (2 * a - 5 * b + 4 * c - d) * t2 + (-a + 3 * b - 3 * c + d) * t3); };
+function tlPose(k) {
+  const K = tlKeys, n = K.length;
+  if (n === 1) return K[0];
+  const loop = $('tlLoop').checked, segs = loop ? n : n - 1, x = Math.min(segs - 1e-9, k * segs), s = Math.floor(x), t = sstep(x - s) * 0.35 + (x - s) * 0.65;
+  const at = i => loop ? K[((i % n) + n) % n] : K[Math.max(0, Math.min(n - 1, i))];
+  const q = [at(s - 1), at(s), at(s + 1), at(s + 2)], sp = q.map(tlSph);
+  // unwrap the azimuth so the camera takes the short way round
+  for (let i = 1; i < 4; i++) { while (sp[i][1] - sp[i-1][1] > Math.PI) sp[i][1] -= 2 * Math.PI; while (sp[i][1] - sp[i-1][1] < -Math.PI) sp[i][1] += 2 * Math.PI; }
+  const tg = [0, 1, 2].map(j => crom(q[0].t[j], q[1].t[j], q[2].t[j], q[3].t[j], t));
+  const r = Math.max(1e-4, crom(sp[0][0], sp[1][0], sp[2][0], sp[3][0], t)), az = crom(sp[0][1], sp[1][1], sp[2][1], sp[3][1], t);
+  const el = Math.max(-1.55, Math.min(1.55, crom(sp[0][2], sp[1][2], sp[2][2], sp[3][2], t)));
+  const p = [tg[0] + r * Math.cos(el) * Math.sin(az), tg[1] + r * Math.sin(el), tg[2] + r * Math.cos(el) * Math.cos(az)];
+  return { p, t: tg, fov: crom(q[0].fov, q[1].fov, q[2].fov, q[3].fov, t) };
+}
+function tlRefresh() {
+  const n = tlKeys.length;
+  $('tlInfo').textContent = n ? `キー ${n} 個` : 'キーはありません';
+  $('tlKeys').replaceChildren(...tlKeys.map((c, i) => { const b = document.createElement('button'); b.className = 'btn'; b.textContent = String(i + 1); b.title = 'クリックでこの視点に移動・Alt+クリックで削除'; b.onclick = e => { if (e.altKey) { tlKeys.splice(i, 1); tlRefresh(); scheduleSave(); } else camApply(c); }; return b; }));
+  $('tlPlay').disabled = $('tlRec').disabled = n < 2 || turning;
+}
+function tlAdd() { tlKeys.push(camSnap()); tlRefresh(); scheduleSave(); toast(`今の視点をキー ${tlKeys.length} にしました`); }
+async function tlPlayNow() { if (tlKeys.length < 2 || turning) return; const keep = camSnap(); turning = true; await playCamera(+$('tlSecs').value || 6, tlPose); turning = false; camApply(keep); }
 
 // ---------------- subtool operations ----------------
 const SHAPE_NAMES = { sphere:'球', cube:'立方体', cylinder:'円柱', torus:'トーラス' };
@@ -4690,6 +5154,7 @@ function setLevel(target, quiet = false) {
   const rec = active, L = rec.levels;
   target = Math.max(0, Math.min(L.length - 1, target));
   if (target === rec.lv || stroke) return false;
+  if (dfp) deformCommit(true);
   flushNormals();
   let m = mask, pt = paint, gp = pg;
   while (rec.lv > target) {
@@ -6189,6 +6654,7 @@ function projectMeta() {
     app: 'BoardPainter', savedAt: new Date().toISOString(), active: subtools.indexOf(active),
     camera: { position: camera.position.toArray(), target: controls.target.toArray() },
     settings: { fname: $('fname').value, stlH: +$('stlH').value || 80 },
+    timeline: tlKeys.length ? tlKeys : undefined,
   };
 }
 function applyProject(meta, subs, opts) {
@@ -6203,6 +6669,7 @@ function applyProject(meta, subs, opts) {
     const dist = camera.position.distanceTo(controls.target);
     camera.near = dist / 100; camera.far = dist * 20; camera.updateProjectionMatrix(); controls.update();
   } else frame();
+  tlKeys = Array.isArray(meta.timeline) ? meta.timeline.filter(c => c && Array.isArray(c.p) && Array.isArray(c.t)).map(c => ({ p: c.p, t: c.t, fov: +c.fov || camera.fov })) : []; tlRefresh();
   if (meta.settings) { if (meta.settings.fname) $('fname').value = meta.settings.fname; if (meta.settings.stlH) $('stlH').value = meta.settings.stlH; }
   projectPath = opts.path || null; projectName = opts.name || '無題';
   dirty = !!opts.dirty; fresh = !!opts.fresh; updateTitle();
@@ -6888,11 +7355,28 @@ $('dynOn').onchange = e => { S.dyn = e.target.checked; if (S.dyn && active.level
 $('dynDetail').oninput = e => { S.dynDetail = +e.target.value; $('dynDetailOut').textContent = e.target.value; };
 $('hdAll').onclick = showAll; $('hdInv').onclick = invertHidden; $('hdDel').onclick = deleteHidden;
 $('rdGo').onclick = () => busy(() => renderImage().catch(err => { console.error(err); toast('レンダリングに失敗しました: ' + err.message); }));
-$('rdSave').onclick = () => { if (lastRender) saveOne(async () => ({ name: `${fileBase()}_render.png`, blob: lastRender.blob })); };
+$('rdSave').onclick = () => { if (lastRender) saveOne(async () => ({ name: `${fileBase()}_render${lastRender.suffix || ''}.png`, blob: lastRender.blob })); };
 $('rdClose').onclick = () => { $('rdView').hidden = true; };
+$('tlAdd').onclick = () => tlAdd();
+$('tlClear').onclick = () => { tlKeys = []; tlRefresh(); scheduleSave(); };
+$('tlPlay').onclick = () => tlPlayNow();
+$('tlRec').onclick = () => { if (tlKeys.length >= 2) recordCamera(+$('tlSecs').value || 8, tlPose, 'timeline'); };
+$('tlSecs').addEventListener('input', e => { $('tlSecsOut').textContent = e.target.value; });
 for (const [id, d] of [['cvThick', 2], ['cvTaper', 2], ['insGap', 2], ['zsRes', 0], ['zsBlend', 2]]) $(id).addEventListener('input', e => { $(id + 'Out').textContent = (+e.target.value).toFixed(d); });
-document.querySelectorAll('[data-def]').forEach(b => b.onclick = () => busy(() => deform(b.dataset.def)));
-$('dfAmt').addEventListener('input', e => { $('dfAmtOut').textContent = (+e.target.value).toFixed(2); });
+document.querySelectorAll('[data-def]').forEach(b => b.onclick = () => deform(b.dataset.def));
+for (const [id, d] of [['dfAmt', 2], ['dfMid', 2], ['dfFreq', 1]]) $(id).addEventListener('input', e => { $(id + 'Out').textContent = (+e.target.value).toFixed(d); deformPreview(); });
+$('dfAxis').addEventListener('change', () => { if (dfp) { dfp.R = dfp.Rc = null; deformPreview(); } });
+$('dfApply').onclick = () => deformCommit();
+for (const [id, d] of [['dynGrav', 1], ['dynPress', 1], ['dynStiff', 2], ['dynBend', 2], ['dynFric', 2], ['dynFrames', 0]]) $(id).addEventListener('input', e => { $(id + 'Out').textContent = (+e.target.value).toFixed(d); });
+$('dynGo').onclick = () => dynStart();
+$('mpTile').replaceChildren(...MICRO_TILES.map(t => { const o = document.createElement('option'); o.value = t.id; o.textContent = t.name; return o; }));
+for (const [id, d] of [['nmScale', 2], ['nmHeight', 2], ['nmOffset', 2], ['nmRot', 0], ['nmRandS', 2], ['nmRandR', 2], ['mpThick', 2]]) $(id).addEventListener('input', e => { $(id + 'Out').textContent = (+e.target.value).toFixed(d); if (nmPrev) nmPreview(); });
+for (const id of ['nmInst', 'nmFit', 'nmSeed', 'nmFlip', 'mpTile', 'mpTris', 'nmMasked']) $(id).addEventListener('change', () => { if (nmPrev) nmPreview(); });
+$('nmInst').addEventListener('pointerdown', nmFill); $('nmInst').addEventListener('focus', nmFill); nmFill();
+$('nmPrevBtn').onclick = () => nmPreview('nano'); $('mpPrevBtn').onclick = () => nmPreview('micro');
+$('nmGo').onclick = () => nmMake('nano'); $('mpGo').onclick = () => nmMake('micro');
+$('nmCancel').onclick = () => nmClear();
+$('dfCancel').onclick = () => deformCancel();
 $('exThick').addEventListener('input', e => { $('exThickOut').textContent = (+e.target.value).toFixed(3); });
 $('mfStore').onclick = morphStore; $('mfRestore').onclick = morphRestore; $('mfDel').onclick = morphDelete;
 $('exGo').onclick = extractShell; $('clipGo').onclick = () => clipArmed === 'clip' ? disarmClip() : armClip('clip');
@@ -6930,7 +7414,7 @@ $('vsEngine').textContent = ACCEL ? `ネイティブ（C++・${ACCEL.threads} �
 $('vsEngine').title = ACCEL ? 'リメッシュ・ブーリアン・リトポ・テクスチャ焼き付け・ZSphere・文字の立体化などの重い処理を C++ で実行しています' : 'ネイティブモジュールが読み込めなかったため、JavaScript で処理しています（結果は同じで、速度だけが遅くなります）';
 if (ACCEL) { $('rmRes').max = 512; $('bakeSize').add(new Option('4096', '4096')); }   // native bake: 4096 px in a second or two
 if (!native) setTimeout(() => toast('BoardPainter はデスクトップ版専用です。Releases からアプリをダウンロードしてください'), 600);
-$('zsStart').onclick = zsStart; $('zsMake').onclick = zsMake; $('zsUndo').onclick = zsUndo; $('zsCancel').onclick = zsEnd;
+$('zsPresetGo').onclick = () => zsPreset($('zsPreset').value); $('zsStart').onclick = zsStart; $('zsMake').onclick = zsMake; $('zsUndo').onclick = zsUndo; $('zsCancel').onclick = zsEnd;
 
 view.addEventListener('dragover', e => e.preventDefault());
 view.addEventListener('drop', e => {
@@ -7134,6 +7618,8 @@ renderer.setAnimationLoop(() => {
         return [b.id, +vol.toFixed(3), open]; });
     },
     get brushIds() { return BRUSHES.map(b => b.id); },
+    dynTrack(frames = 80, thick = 0.15) { const f = dynColliders(thick); const sim = createSim(pos.subarray(0, nV * 3), idx.subarray(0, nF * 3), { gravity: [0, -1, 0], collide: f, damping: 0.03 }); const out = []; for (let k = 0; k < frames; k++) { sim.step(1); let x = 0, y = 0, z = 0; for (let i = 0; i < sim.pos.length; i += 3) { x += sim.pos[i]; y += sim.pos[i+1]; z += sim.pos[i+2]; } const n = sim.pos.length / 3; out.push([k, +(x / n).toFixed(3), +(y / n).toFixed(3), +(z / n).toFixed(3), +sim.moved.toFixed(3)]); } return out; },
+    dynProbe(x, y, z, thick = 0.1) { const f = dynColliders(thick); if (!f) return null; const P = new Float32Array([x, y, z]), Q = P.slice(); f(P, Q, 1); return Array.from(P); },
     addBox(cx, cy, cz, h, name = '箱2') {   // another closed box part (not selected); returns its id
       const P = []; for (const z of [-1, 1]) for (const y of [-1, 1]) for (const x of [-1, 1]) P.push(cx + x * h, cy + y * h, cz + z * h);
       const polys = [[0,2,3,1],[4,5,7,6],[0,1,5,4],[2,6,7,3],[1,3,7,5],[0,4,6,2]], p = Float32Array.from(P);
