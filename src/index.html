@@ -425,6 +425,11 @@ dl.keys dd{margin:0;color:var(--muted)}
       <div class="row" style="margin-top:6px"><label for="dsLevel">なめらか表示</label><select id="dsLevel" style="width:150px"><option value="0">オフ</option><option value="1">細分化 1 回分</option><option value="2">細分化 2 回分</option><option value="3">細分化 3 回分</option></select></div>
       <button class="btn full" id="dsApply" disabled title="表示している なめらかな形を、細分化レベルとして確定します">なめらか表示を細分化レベルにする</button>
       <div class="row" style="margin-top:6px"><label for="peLoops">ループの数</label><select id="peLoops"><option>2</option><option selected>3</option><option>4</option><option>5</option><option>7</option></select></div>
+      <div class="row"><input type="checkbox" id="peSym"><label for="peSym" title="左右対称（X）のパーツで、反対側の同じ面・辺にも同じ編集をします">左右対称に編集（X）</label></div>
+      <div class="row"><input type="checkbox" id="peEach"><label for="peEach" title="複数の面を押し出す・はめ込むとき、まとめずに 1 枚ずつ別々に行います">面ごとに押し出す・はめ込む</label></div>
+      <div class="row"><label for="peAmt" title="押し出す・面を動かす：パーツの大きさに対する %、はめ込む・面取り：面に対する %。空欄ならドラッグで決めます">量を数値で（%）</label><input type="number" id="peAmt" step="0.5" placeholder="ドラッグ" style="width:80px"></div>
+      <div class="row"><label for="peSoft" title="面を動かすとき、周りの頂点もなめらかについてくる範囲（パーツの大きさに対する %）">ソフト選択の範囲（%）</label><output id="peSoftOut">0</output></div>
+      <input type="range" id="peSoft" min="0" max="50" step="1" value="0">
       <div class="row" style="margin-top:6px"><label for="peTarget">対象</label><select id="peTarget"><option value="poly">ポリゴン1枚</option><option value="flat">つながった平らな面</option><option value="ring" title="カーソルに近い辺を横切って一周する四角の帯">面の輪</option><option value="group">同じポリグループ</option></select></div>
       <p class="note">低ポリゴンのパーツを、面と辺の単位で直接作り変えます。カーソルの下の対象が光り、クリック（押し出す・はめ込む・面を動かすはドラッグ）で実行します。背景のドラッグで視点は回せます。細分化レベルがないパーツで使えます（三角形のパーツは自動で四角にまとめます）。「なめらか表示」は細分化した仕上がりを低ポリゴンのまま見せます（ダイナミック細分化）。クリースした辺（水色）は細分化しても丸くなりません。</p>
     </section>
@@ -488,6 +493,8 @@ dl.keys dd{margin:0;color:var(--muted)}
     <section data-tab="model" id="nmSec">
       <h2>NanoMesh・MicroPoly（面ごとに部品を並べる）</h2>
       <div class="row"><label for="nmInst">置く部品</label><select id="nmInst"></select></div>
+      <div class="row"><label for="nmInst2">混ぜる部品</label><select id="nmInst2"></select></div>
+      <div class="row"><label for="nmMix">混ぜ方</label><select id="nmMix"><option value="random">ランダム</option><option value="group">ポリグループごと</option></select></div>
       <div class="row"><label for="nmFit">大きさの合わせ方</label><select id="nmFit"><option value="face">面の形に合わせる</option><option value="uniform">同じ比率で</option></select></div>
       <div class="row"><label for="nmScale">大きさ</label><output id="nmScaleOut">0.80</output></div>
       <input type="range" id="nmScale" min="0.05" max="2" step="0.01" value="0.8">
@@ -510,8 +517,12 @@ dl.keys dd{margin:0;color:var(--muted)}
       <div class="row"><input type="checkbox" id="mpTris"><label for="mpTris">三角形の面にも置く</label></div>
       <div class="grid2"><button class="btn" id="mpPrevBtn">プレビュー</button><button class="btn primary" id="mpGo">MicroPoly を作る</button></div>
       <div class="row" style="margin-top:6px"><input type="checkbox" id="nmMasked"><label for="nmMasked">マスクした面だけに置く</label></div>
+      <div class="row"><input type="checkbox" id="nmFollow" checked><label for="nmFollow">元のパーツを変形したら追従する</label></div>
       <div class="row"><input type="checkbox" id="nmHide" checked><label for="nmHide">作ったあと元のパーツを隠す</label></div>
       <button class="btn full" id="nmRebuild" disabled title="選んでいる NanoMesh / MicroPoly のパーツを、元のパーツから今の設定で作り直します">選んだ NanoMesh・MicroPoly を今の設定で作り直す</button>
+      <div class="row"><input type="checkbox" id="nmEdit" disabled><label for="nmEdit" title="選んでいる NanoMesh の部品をクリックして 1 個ずつ変えます（Alt+クリックで元に戻す）">部品を 1 個ずつ編集</label>
+        <select id="nmEditOp"><option value="del">消す</option><option value="big">大きく</option><option value="small">小さく</option><option value="rot">45° 回す</option><option value="up">持ち上げる</option><option value="down">沈める</option><option value="reset">元に戻す</option></select></div>
+      <div class="row"><span id="nmEditInfo" class="note" style="margin:0"></span><button class="btn" id="nmEditClear">個別の編集をすべて戻す</button></div>
       <div class="grid2"><button class="btn" id="nmCancel" disabled>プレビューを消す</button><span id="nmInfo" class="note" style="margin:0;align-self:center"></span></div>
       <p class="note">選択中のパーツ（低ポリゴンがおすすめ）の面ひとつひとつに部品を置きます（NanoMesh 風）。部品は内蔵の部品・登録した部品・ほかのパーツから選べます。MicroPoly は四角ポリゴンの面を、格子・織り目・鎖かたびら・鋲・ウロコ・レンガのタイルで置き換えます（鎧・メッシュ・布地）。結果は新しいパーツになります。プレビュー中はスライダーを動かすとすぐに変わります。</p>
     </section>
@@ -873,9 +884,15 @@ dl.keys dd{margin:0;color:var(--muted)}
       <p class="note" id="uvInfo">UV はまだありません</p>
       <div class="row"><label for="uvAngle">分け方（角度）</label><output id="uvAngleOut">45</output></div>
       <input type="range" id="uvAngle" min="20" max="80" step="1" value="45">
+      <div class="row"><label for="uvSeams">継ぎ目</label><select id="uvSeams"><option value="angle">角度だけで決める</option><option value="group">ポリグループの境目にも入れる</option><option value="mask">マスクの境目にも入れる</option></select></div>
+      <div class="row"><input type="checkbox" id="uvDist"><label for="uvDist" title="赤：引き伸ばされた面・青：縮んだ面（テクスチャの粗さのむら）">歪みを色で表示</label></div>
       <button class="btn full" id="uvGo">UV を自動展開</button>
       <div class="row" style="margin-top:10px"><label for="bakeSrc">焼き付け元</label><select id="bakeSrc" style="width:150px"></select></div>
       <div class="row"><input type="checkbox" id="bakeAO"><label for="bakeAO" title="隙間の暗さ（アンビエントオクルージョン）と凹み（キャビティ）のマップも作ります。少し時間がかかります">AO・凹みのマップも作る</label></div>
+      <div class="row"><input type="checkbox" id="bakeID"><label for="bakeID" title="ポリグループごとの色で塗り分けたマップ（ID マップ）も作ります">ID マップも作る</label></div>
+      <div class="row"><label for="bakeNrm">法線マップの形式</label><select id="bakeNrm"><option value="gl">OpenGL（Blender・Unity）</option><option value="dx">DirectX（Unreal・Substance 既定）</option></select></div>
+      <div class="row"><label for="bakeDist" title="低ポリゴンの面から高ポリゴンの面を探す距離（ケージの厚さ）。届かない点が出るときは大きく、隣の面を拾うときは小さく">探す距離（%）</label><output id="bakeDistOut">3.0</output></div>
+      <input type="range" id="bakeDist" min="0.5" max="12" step="0.5" value="3">
       <div class="row"><label for="bakeSize">テクスチャの大きさ</label><select id="bakeSize"><option value="512">512</option><option value="1024" selected>1024</option><option value="2048">2048</option></select></div>
       <button class="btn primary full" id="bakeGo">法線マップと色を焼き付け</button>
       <div class="row"><input type="checkbox" id="texPreview"><label for="texPreview">焼き付けたテクスチャで表示</label></div>
@@ -1002,7 +1019,7 @@ import { createSim } from './dynamics.js';
 import { nanoMesh, microPoly, MICRO_TILES, microTile } from './nanomesh.js';
 import { encodeProject, decodeProject, encodeProjectStream, decodeProjectStream } from './project.js';
 import { remesh, remeshGrid, quadRemesh, booleanMesh, voxelize, surfaceNets, setAccel, accelTimes, tryAccel } from './remesh.js';
-import { unwrap, drawUV } from './uv.js';
+import { unwrap, drawUV, uvStretch } from './uv.js';
 import { bakeMaps } from './bake.js';
 import { MeshoptSimplifier } from 'meshopt-simplifier';
 import { fieldRetopo } from './fieldretopo.js';
@@ -1303,7 +1320,7 @@ function recData(r) {
     dens: densOf(r),
     topo: topoPack(r.topo),
     vdmPlate: r.vdmPlate || null,
-    nano: r.nano ? { kind: r.nano.kind, hostName: (r.nano.host && r.nano.host.name) || r.nano.hostName, params: r.nano.params } : null,
+    nano: r.nano ? { kind: r.nano.kind, hostName: (r.nano.host && r.nano.host.name) || r.nano.hostName, params: r.nano.params, over: r.nano.over || undefined } : null,
     fiber: r.fiber && r.fiber.dir instanceof Float32Array ? { n: r.fiber.n, seg: r.fiber.seg, sides: r.fiber.sides, dir: r.fiber.dir, hostName: (r.fiber.host && r.fiber.host.name) || r.fiber.hostName || '' } : null,
     layers: (r.layers || []).filter(l => l.delta.length === r.pos.length).map(l => ({ name: l.name, I: l.I, on: l.on, delta: l.delta })),
     levels: r.levels.map((L, k) => k === r.lv
@@ -1313,12 +1330,12 @@ function recData(r) {
 }
 // uv + baked textures (PNG bytes) stored on a level
 const polyData = L => ({ ...(L.polys ? { polys: { start: L.polys.start, idx: L.polys.idx } } : {}), ...(L.crease ? { crease: L.crease } : {}) });
-const texData = L => L.uv ? { uvIdx: L.uvIdx, uv: L.uv, bake: L.bake ? { size: L.bake.size, normalPng: L.bake.normalPng, colorPng: L.bake.colorPng || null, heightPng: L.bake.heightPng || null, aoPng: L.bake.aoPng || null, cavPng: L.bake.cavPng || null, heightRange: L.bake.heightRange || 0 } : null } : {};
+const texData = L => L.uv ? { uvIdx: L.uvIdx, uv: L.uv, bake: L.bake ? { size: L.bake.size, normalPng: L.bake.normalPng, colorPng: L.bake.colorPng || null, heightPng: L.bake.heightPng || null, aoPng: L.bake.aoPng || null, cavPng: L.bake.cavPng || null, idPng: L.bake.idPng || null, nrmFmt: L.bake.nrmFmt || 'gl', heightRange: L.bake.heightRange || 0 } : null } : {};
 function texFromData(L, d, ix) {
   if (!(d.uv instanceof Float32Array) || !(d.uvIdx instanceof Uint32Array) || d.uvIdx.length !== ix.length || d.uv.length !== ix.length * 2) return;
   L.uvIdx = d.uvIdx; L.uv = d.uv;
   const b = d.bake;
-  if (b && b.normalPng instanceof Uint8Array) L.bake = { size: b.size | 0, normalPng: b.normalPng, colorPng: b.colorPng instanceof Uint8Array ? b.colorPng : null, heightPng: b.heightPng instanceof Uint8Array ? b.heightPng : null, aoPng: b.aoPng instanceof Uint8Array ? b.aoPng : null, cavPng: b.cavPng instanceof Uint8Array ? b.cavPng : null, heightRange: +b.heightRange || 0 };
+  if (b && b.normalPng instanceof Uint8Array) L.bake = { size: b.size | 0, normalPng: b.normalPng, colorPng: b.colorPng instanceof Uint8Array ? b.colorPng : null, heightPng: b.heightPng instanceof Uint8Array ? b.heightPng : null, aoPng: b.aoPng instanceof Uint8Array ? b.aoPng : null, cavPng: b.cavPng instanceof Uint8Array ? b.cavPng : null, idPng: b.idPng instanceof Uint8Array ? b.idPng : null, nrmFmt: b.nrmFmt === 'dx' ? 'dx' : 'gl', heightRange: +b.heightRange || 0 };
 }
 function recFromData(s) {
   const r = newRec(s.name, s.pos, s.idx, s.mask, s.mirror && s.mirror.length === s.pos.length / 3 ? s.mirror : null);
@@ -1330,7 +1347,7 @@ function recFromData(s) {
   r.topo = topoUnpack(s.topo);
   r.dens = s.dens instanceof Float32Array && s.dens.length === s.pos.length / 3 ? s.dens : null;
   r.vdmPlate = s.vdmPlate && s.vdmPlate.ref instanceof Float32Array ? { ref: s.vdmPlate.ref, h: +s.vdmPlate.h || 1 } : null;
-  r.nano = s.nano && (s.nano.kind === 'nano' || s.nano.kind === 'micro') && s.nano.params ? { kind: s.nano.kind, host: null, hostName: String(s.nano.hostName || ''), params: s.nano.params } : null;
+  r.nano = s.nano && (s.nano.kind === 'nano' || s.nano.kind === 'micro') && s.nano.params ? { kind: s.nano.kind, host: null, hostName: String(s.nano.hostName || ''), params: s.nano.params, ...(s.nano.over && typeof s.nano.over === 'object' ? { over: s.nano.over } : {}) } : null;
   { const f = s.fiber; r.fiber = f && f.dir instanceof Float32Array && f.n > 0 && f.dir.length === f.n * 3 && s.pos.length === f.n * (f.seg * f.sides + 1) * 3 ? { n: f.n | 0, seg: f.seg | 0, sides: f.sides | 0, dir: f.dir, host: null, hostName: String(f.hostName || '') } : null; }
   r.layers = Array.isArray(s.layers) ? s.layers.filter(l => l && l.delta instanceof Float32Array && l.delta.length === s.pos.length)
     .map((l, k) => ({ name: String(l.name || `レイヤー ${k + 1}`), delta: l.delta, I: Number.isFinite(l.I) ? l.I : 1, on: l.on !== false, rec: false })) : [];
@@ -2299,6 +2316,7 @@ function onDown(e) {
   if (groom.on && e.button === 0 && fiberValid()) { if (!e.ctrlKey && !e.shiftKey) { groomDown(e); return; } }
   if (pe.on && e.button === 0) { if (peAvailable()) peSet(false); else { peDown(e); return; } }   // a miss leaves the background to the view controls
   if (nz && e.button === 0) noiseCancel();   // sculpting ends a noise preview
+  if ($('nmEdit').checked && e.button === 0 && !e.ctrlKey && !e.shiftKey && nmEditDown(e)) return;   // per-instance NanoMesh edit
   if (dfp && e.button === 0 && dfHandleDown(e)) return;   // a deformer handle
   if (dfp && e.button === 0) deformCommit(true);   // ...and commits a deformer preview
   if (dyn && e.button === 0) dynStop();
@@ -3936,54 +3954,75 @@ function dynStop() {
 let nmPrev = null, nmRaf = 0;   // preview mesh: { mesh, rec, kind }
 const nmMat = new THREE.MeshStandardMaterial({ color: 0xd9a35b, roughness: 0.5, metalness: 0.05 });
 function nmFill() {
-  const sel = $('nmInst'), keep = sel.value;
-  const items = [...BUILTIN_IMM.map(b => [b.id, b.name]), ...customIMMs.map(a => [a.id, a.name]), ...subtools.filter(r => r !== active).map(r => ['s:' + r.id, 'パーツ：' + r.name])];
-  sel.replaceChildren(...items.map(([v, t]) => { const o = document.createElement('option'); o.value = v; o.textContent = t; return o; }));
-  if ([...sel.options].some(o => o.value === keep)) sel.value = keep;
+  const parts = subtools.filter(r => r !== active && !(r.nano && r.nano.host === active)).map(r => ['s:' + r.id, 'パーツ：' + r.name]);
+  const items = [...BUILTIN_IMM.map(b => [b.id, b.name]), ...customIMMs.map(a => [a.id, a.name]), ...parts];
+  const fill = (sel, list) => { const keep = sel.value; sel.replaceChildren(...list.map(([v, t]) => { const o = document.createElement('option'); o.value = v; o.textContent = t; return o; })); if ([...sel.options].some(o => o.value === keep)) sel.value = keep; };
+  fill($('nmInst'), items); fill($('nmInst2'), [['', 'なし'], ...items]);
+  fill($('mpTile'), [...MICRO_TILES.map(t => [t.id, t.name]), ...parts]);
 }
-function nmInstance() {
-  const id = $('nmInst').value;
+function nmInstance(id) {
+  if (!id) return null;
   if (id.startsWith('s:')) { const r = subtools.find(x => 's:' + x.id === id); return r ? { p: r.pos, ix: r.idx } : null; }
   return getIMM(id);
 }
+// a part as a MicroPoly tile: its footprint stretched over the unit quad (x = u, z = v), height by the larger extent
+function partTile(id) {
+  const r = subtools.find(x => 's:' + x.id === id); if (!r) return null;
+  const P = r.pos, n = P.length / 3, mn = [Infinity, Infinity, Infinity], mx = [-Infinity, -Infinity, -Infinity];
+  for (let i = 0; i < n; i++) for (let k = 0; k < 3; k++) { const c = P[i*3+k]; if (c < mn[k]) mn[k] = c; if (c > mx[k]) mx[k] = c; }
+  const ex = mx[0] - mn[0] || 1, ez = mx[2] - mn[2] || 1, eh = Math.max(ex, ez), p = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) { p[i*3] = (P[i*3] - mn[0]) / ex; p[i*3+1] = (P[i*3+1] - mn[1]) / eh; p[i*3+2] = (P[i*3+2] - mn[2]) / ez; }
+  return { p, ix: r.idx };
+}
 // the host polygons of the active part at its current level, and which ones are masked
-const NM_IDS = ['nmInst', 'nmFit', 'nmScale', 'nmHeight', 'nmOffset', 'nmRot', 'nmRandS', 'nmRandR', 'nmSeed', 'nmFlip', 'mpTile', 'mpThick', 'mpTris', 'nmMasked'];
+const NM_IDS = ['nmInst', 'nmInst2', 'nmMix', 'nmFit', 'nmScale', 'nmHeight', 'nmOffset', 'nmRot', 'nmRandS', 'nmRandR', 'nmSeed', 'nmFlip', 'mpTile', 'mpThick', 'mpTris', 'nmMasked', 'nmFollow'];
 const nmParams = () => Object.fromEntries(NM_IDS.map(id => [id, $(id).type === 'checkbox' ? $(id).checked : $(id).value]));
 function nmSetParams(o) {
   if (!o) return; nmFill();
   for (const id of NM_IDS) if (id in o) { const e = $(id); if (e.type === 'checkbox') e.checked = !!o[id]; else e.value = o[id]; e.dispatchEvent(new Event('input')); }
 }
 const nmHostOf = r => r && r.nano ? (r.nano.host && subtools.includes(r.nano.host) ? r.nano.host : subtools.find(x => x !== r && x.name === r.nano.hostName) || null) : null;
-function nmUI() { const r = active, ok = !!(r && r.nano && nmHostOf(r)); $('nmRebuild').disabled = !ok; if (ok && nmUI.last !== r) nmSetParams(r.nano.params); nmUI.last = r; }
-function nmHost(H = active) {
+function nmUI() {
+  const r = active, ok = !!(r && r.nano && nmHostOf(r));
+  $('nmRebuild').disabled = !ok; $('nmEdit').disabled = !(ok && r.nano.kind === 'nano');
+  if (!ok || r.nano.kind !== 'nano') $('nmEdit').checked = false;
+  if (ok && nmUI.last !== r) nmSetParams(r.nano.params); nmUI.last = r;
+  const n = ok && r.nano.over ? Object.keys(r.nano.over).length : 0;
+  $('nmEditInfo').textContent = n ? `個別に変えた部品 ${n} 個` : '';
+}
+function nmHost(H = active, p = nmParams()) {
   if (H === active) flushNormals();
-  const P0 = H === active ? pos.subarray(0, nV * 3) : H.pos, M0 = H === active ? mask : H.mask;
+  const P0 = H === active ? pos.subarray(0, nV * 3) : H.pos, M0 = H === active ? mask : H.mask, G0 = H === active ? pg : H.pg;
   const F = facesOf(H.levels[H.lv]);
   if (!F || F.start.length < 2) return null;
   const n = F.start.length - 1;
   let sel = null;
-  if ($('nmMasked').checked) {
+  if (p.nmMasked) {
     sel = new Uint8Array(n); let any = 0;
     for (let f = 0; f < n; f++) { let ok = 1; for (let j = F.start[f]; j < F.start[f+1]; j++) if (!M0 || M0[F.idx[j]] < 0.5) { ok = 0; break; } sel[f] = ok; any |= ok; }
     if (!any) return { err: 'マスクした面がありません' };
   }
-  return { P: P0, F, n, sel };
+  // polygroup per polygon (the group of its first corner) for the per-group instance choice
+  let group = null;
+  if (G0 && G0.length === P0.length / 3) { group = new Int32Array(n); for (let f = 0; f < n; f++) group[f] = G0[F.idx[F.start[f]]]; }
+  return { P: P0, F, n, sel, group };
 }
-function nmBuild(kind, host = active) {
-  const H = nmHost(host); if (!H) return null; if (H.err) return H;
+function nmBuild(kind, host = active, p = nmParams(), over = null) {
+  const H = nmHost(host, p); if (!H) return null; if (H.err) return H;
   if (kind === 'nano') {
-    const inst = nmInstance(); if (!inst) return { err: '置く部品を選んでください' };
-    const tri = H.F.idx.length / 3;
+    const i1 = nmInstance(p.nmInst), i2 = nmInstance(p.nmInst2); if (!i1) return { err: '置く部品を選んでください' };
+    const inst = i2 ? [i1, i2] : i1, big = Math.max(i1.ix.length, i2 ? i2.ix.length : 0) / 3;
     if (H.n > 200000) return { err: `面が多すぎます（${H.n.toLocaleString()} 面）。低ポリゴンのパーツで使ってください` };
-    if ((inst.ix.length / 3) * (H.sel ? H.sel.reduce((a, b) => a + b, 0) : H.n) > 30_000_000) return { err: '結果のポリゴン数が多すぎます（部品を軽くするか、面を減らしてください）' };
-    return nanoMesh(H.P, H.F, inst, { fit: $('nmFit').value, scale: +$('nmScale').value, height: +$('nmHeight').value, offset: +$('nmOffset').value,
-      rotate: +$('nmRot').value, randScale: +$('nmRandS').value, randRot: +$('nmRandR').value, seed: (+$('nmSeed').value | 0) || 1, sel: H.sel, flip: $('nmFlip').checked });
+    if (big * (H.sel ? H.sel.reduce((a, b) => a + b, 0) : H.n) > 30_000_000) return { err: '結果のポリゴン数が多すぎます（部品を軽くするか、面を減らしてください）' };
+    return nanoMesh(H.P, H.F, inst, { fit: p.nmFit, scale: +p.nmScale, height: +p.nmHeight, offset: +p.nmOffset,
+      rotate: +p.nmRot, randScale: +p.nmRandS, randRot: +p.nmRandR, seed: (+p.nmSeed | 0) || 1, sel: H.sel, flip: !!p.nmFlip,
+      mix: p.nmMix, group: H.group, over });
   }
-  const tile = microTile($('mpTile').value); if (!tile) return null;
+  const tile = String(p.mpTile).startsWith('s:') ? partTile(p.mpTile) : microTile(p.mpTile); if (!tile) return { err: 'タイルにするパーツが見つかりません' };
   if (H.n * (tile.ix.length / 3) > 30_000_000) return { err: '結果のポリゴン数が多すぎます（低ポリゴンのパーツで使ってください）' };
   let F = H.F;
   if (H.sel) { const keep = []; for (let f = 0; f < H.n; f++) if (H.sel[f]) keep.push(Array.from(F.idx.subarray(F.start[f], F.start[f+1]))); F = PE.fromPolys(keep); }
-  return microPoly(H.P, F, tile, { thickness: +$('mpThick').value, weld: true, tris: $('mpTris').checked });
+  return microPoly(H.P, F, tile, { thickness: +p.mpThick, weld: true, tris: !!p.mpTris });
 }
 function nmClear() {
   cancelAnimationFrame(nmRaf);
@@ -4004,20 +4043,66 @@ function nmPreview(kind = nmPrev && nmPrev.kind) {
     $('nmInfo').textContent = `${kind === 'nano' ? '部品' : 'タイル'} ${r.count.toLocaleString()} 個・${(r.idx.length / 3).toLocaleString()} 三角形`;
   });
 }
-// rebuild the selected NanoMesh / MicroPoly part from its host with the current settings
+// rebuild a NanoMesh / MicroPoly part from its host (given settings, else its saved ones)
+function nmRebuildRec(old, { params, undo = true, quiet = false } = {}) {
+  const host = nmHostOf(old); if (!host) return null;
+  const p = params || old.nano.params, over = old.nano.kind === 'nano' ? old.nano.over || null : null;
+  const r = nmBuild(old.nano.kind, host, p, over);
+  if (!r) return null; if (r.err) { if (!quiet) toast(r.err); return null; }
+  if (!r.count) { if (!quiet) toast('置ける面がありませんでした'); return null; }
+  if (undo) pushStruct();
+  const rec = newRec(old.name, r.pos, dropDegenerate(r.idx));
+  rec.visible = old.visible; if (old.mat !== undefined) rec.mat = old.mat;
+  rec.nano = { kind: old.nano.kind, host, hostName: host.name, params: p, ...(over ? { over } : {}) }; rec.nanoFace = r.face || null;
+  subtools[subtools.indexOf(old)] = rec; dropView(old);
+  return rec;
+}
 function nmRebuild() {
-  const old = active, host = nmHostOf(old); if (!host || stroke) return;
+  const old = active; if (!nmHostOf(old) || stroke) return;
   return busy(() => {
-    const r = nmBuild(old.nano.kind, host);
-    if (!r) return; if (r.err) { toast(r.err); return; }
-    if (!r.count) { toast('置ける面がありませんでした'); return; }
-    nmClear(); pushStruct();
-    const rec = newRec(old.name, r.pos, dropDegenerate(r.idx));
-    rec.nano = { kind: old.nano.kind, host, hostName: host.name, params: nmParams() };
-    subtools[subtools.indexOf(old)] = rec; dropView(old);
+    nmClear();
+    const rec = nmRebuildRec(old, { params: nmParams() }); if (!rec) return;
     activate(rec, true); syncScene(); renderSubtoolList(); scheduleSave();
-    toast(`「${rec.name}」を今の設定で作り直しました（${(r.idx.length / 3).toLocaleString()} 三角形）`);
+    toast(`「${rec.name}」を今の設定で作り直しました（${(rec.idx.length / 3).toLocaleString()} 三角形）`);
   });
+}
+// follow the host: parts with 「追従する」 are rebuilt a moment after their host changes
+var nmFollowT = 0, nmFollowing = false, nmFollowOK = true;   // var: scheduleSave may run before this line
+const nmFollowers = host => subtools.filter(r => r !== host && r.nano && r.nano.params && r.nano.params.nmFollow && nmHostOf(r) === host);
+function nmFollowSoon() {
+  if (!nmFollowOK || nmFollowing || !active || !nmFollowers(active).length) return;
+  const host = active;
+  clearTimeout(nmFollowT);
+  nmFollowT = setTimeout(() => {
+    if (active !== host) return;
+    if (stroke) { nmFollowSoon(); return; }
+    nmFollowing = true;
+    try {
+      let n = 0;
+      for (const r of nmFollowers(host)) if (nmRebuildRec(r, { undo: false, quiet: true })) n++;
+      if (n) { syncScene(); renderSubtoolList(); scheduleSave(); }
+    } finally { nmFollowing = false; }
+  }, 350);
+}
+// per-instance edits: click a piece of the active NanoMesh (delete / bigger / smaller / turn / lift / back; Alt = back)
+function nmEditDown(e) {
+  const r = active; if (!r || !r.nano || r.nano.kind !== 'nano' || !nmHostOf(r)) return false;
+  setNDC(e); ensureBVH(); camera.updateMatrixWorld(); raycaster.setFromCamera(ndc, camera);
+  const h = raycaster.intersectObject(mesh, false)[0]; if (!h) return false;
+  if (!r.nanoFace || r.nanoFace.length !== nV) {   // after loading a project: rebuild once to get the piece -> polygon map
+    const rec = nmRebuildRec(r, { params: r.nano.params, undo: false, quiet: true });
+    if (rec) { activate(rec, true); syncScene(); renderSubtoolList(); }
+    toast('もう一度クリックすると部品を編集できます'); return true;
+  }
+  const f = r.nanoFace[idx[h.faceIndex * 3]];
+  const op = e.altKey ? 'reset' : $('nmEditOp').value, over = { ...(r.nano.over || {}) }, o = { ...(over[f] || {}) };
+  if (op === 'del') o.d = 1; else if (op === 'big') o.s = (o.s || 1) * 1.25; else if (op === 'small') o.s = (o.s || 1) / 1.25;
+  else if (op === 'rot') o.r = ((o.r || 0) + 45) % 360; else if (op === 'up') o.o = (o.o || 0) + 0.1; else if (op === 'down') o.o = (o.o || 0) - 0.1;
+  if (op === 'reset') delete over[f]; else over[f] = o;
+  r.nano.over = over;
+  const rec = nmRebuildRec(r, { params: r.nano.params }); if (!rec) return true;
+  activate(rec, true); syncScene(); renderSubtoolList(); scheduleSave(); nmUI();
+  return true;
 }
 function nmMake(kind) {
   if (!active || stroke) return;
@@ -4027,9 +4112,9 @@ function nmMake(kind) {
     if (!r.count) { toast('置ける面がありませんでした（MicroPoly は四角ポリゴンの面に置きます）'); return; }
     nmClear();
     pushStruct();
-    const name = kind === 'nano' ? 'NanoMesh' : 'MicroPoly_' + ((MICRO_TILES.find(t => t.id === $('mpTile').value) || {}).name || '');
+    const name = kind === 'nano' ? 'NanoMesh' : 'MicroPoly_' + ((MICRO_TILES.find(t => t.id === $('mpTile').value) || {}).name || (subtools.find(x => 's:' + x.id === $('mpTile').value) || {}).name || '');
     const rec = newRec(uniqueName(name), r.pos, dropDegenerate(r.idx));
-    rec.nano = { kind, host: active, hostName: active.name, params: nmParams() };
+    rec.nano = { kind, host: active, hostName: active.name, params: nmParams() }; rec.nanoFace = r.face || null;
     insertAfterActive(rec);
     if ($('nmHide').checked) active.visible = false;
     activate(rec); scheduleSave(); renderSubtoolList();
@@ -6793,11 +6878,48 @@ function peHit() {
 }
 function peSelection(f, h) {
   const M = peMeshOf(), t = $('peTarget').value;
-  if (t === 'flat') return PE.flatIsland(pos, M.polys, f);
-  if (t === 'ring' && h) return PE.faceRing(pos, M.polys, h.edge[0], h.edge[1]) || [f];
-  if (t === 'group' && pg) return PE.groupFaces(M.polys, pg, f);
-  return [f];
+  const sel = t === 'flat' ? PE.flatIsland(pos, M.polys, f) : t === 'ring' && h ? PE.faceRing(pos, M.polys, h.edge[0], h.edge[1]) || [f] : t === 'group' && pg ? PE.groupFaces(M.polys, pg, f) : [f];
+  return peMirrorSel(sel);
 }
+// X symmetry: the mirrored faces / edges (by the part's vertex mirror pairs) join the edit
+const peSym = () => $('peSym').checked && mirror && mirror.length === nV;
+function peMirrorSel(sel) {
+  if (!peSym()) return sel;
+  const M = peMeshOf(), S = new Set(sel);
+  for (const f of sel) {
+    const g = M.polys[f], mv = g.map(v => mirror[v]); if (mv.some(v => v < 0)) continue;
+    const set = new Set(mv), c = M.vf[mv[0]].find(i => M.polys[i].length === g.length && M.polys[i].every(v => set.has(v)));
+    if (c !== undefined) S.add(c);
+  }
+  return [...S];
+}
+const peIsEdge = (polys, vf, a, b) => (vf[a] || []).some(i => { const g = polys[i], k = g.indexOf(a); return k >= 0 && (g[(k + 1) % g.length] === b || g[(k + g.length - 1) % g.length] === b); });
+function peSymEdges(edges) {
+  if (!peSym()) return edges;
+  const M = peMeshOf(), keys = new Set(edges.map(([u, w]) => PE.edgeKey(u, w))), out = edges.slice();
+  for (const [u, w] of edges) {
+    const a = mirror[u], b = mirror[w]; if (a < 0 || b < 0 || a === b) continue;
+    const k = PE.edgeKey(a, b); if (keys.has(k) || !peIsEdge(M.polys, M.vf, a, b)) continue;
+    keys.add(k); out.push([a, b]);
+  }
+  return out;
+}
+// run a second topology edit on the result of a first one, as one result (src composed back to the original)
+function peChain(r, f) {
+  if (!r) return r;
+  const r2 = f(r); if (!r2) return r;
+  const src = new Int32Array(r2.src.length); for (let v = 0; v < src.length; v++) src[v] = r.src[r2.src[v]];
+  return { ...r2, src, moved: [...(r.moved || []), ...(r2.moved || [])] };
+}
+// the mirrored edge of (a, b) in a result whose first vertices are the current ones (null if none or the same loop)
+function peMirEdge(r, a, b) {
+  if (!peSym()) return null;
+  const ma = mirror[a], mb = mirror[b]; if (ma < 0 || mb < 0 || (ma === a && mb === b) || (ma === b && mb === a)) return null;
+  const vf = PE.vertFaces(r.polys, r.pos.length / 3);
+  return peIsEdge(r.polys, vf, ma, mb) ? [ma, mb] : null;
+}
+// typed amount (% of the part size for extrude / move, % of the face for inset / bevel); empty = drag
+const peNum = () => { const v = $('peAmt').value.trim(); return v === '' || !Number.isFinite(+v) ? null : +v; };
 // highlight: polygon outlines, a loop preview, or one edge
 function peShow(segs) {
   if (!pe.line) {
@@ -6867,15 +6989,26 @@ function peDown(e) {
   const M = peMeshOf(), a = pe.action;
   e.preventDefault();
   if (a === 'loop') {
-    const r = PE.insertLoop(pos, M.polys, h.edge[0], h.edge[1], h.edge[2]);
+    let r = PE.insertLoop(pos, M.polys, h.edge[0], h.edge[1], h.edge[2]);
     if (!r) { toast('四角の面の辺をクリックしてください'); return true; }
-    peReplace(r); toast(`ループを入れました（${r.loop} 枚の四角を分割）`);
+    const [ea, eb] = h.edge, t = h.edge[2], n1 = r.loop;
+    let me = peMirEdge(r, ea, eb), sym = !!me;
+    if (me) r = peChain(r, q => PE.insertLoop(q.pos, q.polys, me[0], me[1], t));
+    else if (peSym() && mirror[ea] === eb && Math.abs(t - 0.5) > 0.02 && r.at !== undefined) {   // an edge across the mirror plane: the mirrored cut is on the same edge at 1 - t
+      const at = r.at; sym = true;
+      r = peChain(r, q => t < 0.5 ? PE.insertLoop(q.pos, q.polys, at, eb, (1 - 2 * t) / (1 - t)) : PE.insertLoop(q.pos, q.polys, ea, at, (1 - t) / t));
+    }
+    peReplace(r); toast(`ループを入れました（${n1} 枚の四角を分割${sym ? '・反対側にも' : ''}）`);
   } else if (a === 'delete') {
     const sel = peSelection(h.f, h);
     if (sel.length >= M.polys.length) { toast('すべての面は消せません'); return true; }
     peReplace(PE.deleteFaces(pos, M.polys, sel)); toast(`${sel.length} 枚の面を消しました`);
   } else if (a === 'crease') {
     creaseToggleLoop(h.edge[0], h.edge[1]);
+    if (peSym()) {
+      const ma = mirror[h.edge[0]], mb = mirror[h.edge[1]], loop = PE.edgeLoop(M.polys, nV, h.edge[0], h.edge[1], M.vf);
+      if (ma >= 0 && mb >= 0 && peIsEdge(M.polys, M.vf, ma, mb) && !loop.edges.some(([u, w]) => PE.edgeKey(u, w) === PE.edgeKey(ma, mb))) creaseToggleLoop(ma, mb);
+    }
   } else if (a === 'bridge') {
     const fs = M.vf[h.edge[0]].filter(i => M.polys[i].includes(h.edge[1]));
     if (fs.length !== 1) { toast('穴のふちの辺をクリックしてください'); return true; }
@@ -6887,7 +7020,7 @@ function peDown(e) {
     else if (r.error) toast('穴のふちの辺をクリックしてください');
     else { peReplace(r); toast(`2つの穴をつなぎました（${r.size} 枚の四角）`); }
   } else if (a === 'bevel') {
-    const loop = PE.edgeLoop(M.polys, nV, h.edge[0], h.edge[1], M.vf);
+    const loop = PE.edgeLoop(M.polys, nV, h.edge[0], h.edge[1], M.vf); loop.edges = peSymEdges(loop.edges);
     const base = pos.slice(), polys = M.polys, t0 = 0.12;
     const r = PE.bevel(base, polys, loop.edges, t0);
     if (!r) { toast('この辺は面取りできません（穴のふちや、3枚以上の面が集まる辺）'); return true; }
@@ -6900,19 +7033,21 @@ function peDown(e) {
     controls.enabled = false; try { canvas.setPointerCapture(e.pointerId); } catch {} peShow(null);
     toast(`${loop.edges.length} 本の辺を面取りします（上下にドラッグで幅）`);
   } else if (a === 'slide') {
-    const loop = PE.edgeLoop(M.polys, nV, h.edge[0], h.edge[1], M.vf);
+    const loop = PE.edgeLoop(M.polys, nV, h.edge[0], h.edge[1], M.vf); loop.edges = peSymEdges(loop.edges);
     pushUndo();
     pe.drag = { id: e.pointerId, y0: e.clientY, kind: 'slide', base: pos.slice(), polys: M.polys, edges: loop.edges, rec: active, amt: 0 };
     controls.enabled = false; try { canvas.setPointerCapture(e.pointerId); } catch {} peShow(null);
     toast(`${loop.edges.length} 本の辺の輪を滑らせます（上下にドラッグ）`);
   } else if (a === 'dissolve') {
     const loop = PE.edgeLoop(M.polys, nV, h.edge[0], h.edge[1], M.vf);
-    const r = PE.dissolveLoop(pos, M.polys, loop.edges);
+    const r = PE.dissolveLoop(pos, M.polys, peSymEdges(loop.edges));
     if (!r) { toast('この辺の輪は消せません（穴のふちや、消すと面がつながらなくなる所）'); return true; }
     peReplace(r); toast(`辺の輪を消しました（${r.removed} 本・${r.polys.length.toLocaleString()} 面）`);
   } else if (a === 'loops') {
-    const r = PE.insertLoops(pos, M.polys, h.edge[0], h.edge[1], +$('peLoops').value);
+    let r = PE.insertLoops(pos, M.polys, h.edge[0], h.edge[1], +$('peLoops').value);
     if (!r) { toast('四角の面の辺をクリックしてください'); return true; }
+    const me = peMirEdge(r, h.edge[0], h.edge[1]);
+    if (me) r = peChain(r, q => PE.insertLoops(q.pos, q.polys, me[0], me[1], +$('peLoops').value));
     peReplace(r); toast(`${$('peLoops').value} 本のループを入れました`);
   } else if (a === 'spin') {
     const r = PE.spinEdge(pos, M.polys, h.edge[0], h.edge[1]);
@@ -6968,11 +7103,34 @@ function peDown(e) {
       const vn = new Map();
       for (const f of sel) { const n = PE.polyNormal(pos, M.polys[f]); for (const v of M.polys[f]) { const s0 = vn.get(v) || [0, 0, 0]; vn.set(v, [s0[0] + n[0], s0[1] + n[1], s0[2] + n[2]]); } }
       moved = [...vn].map(([v, n]) => { const l = Math.hypot(...n) || 1; return [v, v, [n[0] / l, n[1] / l, n[2] / l]]; });
+      const R = (+$('peSoft').value || 0) / 100 * sceneBounds([active]).getSize(new V3()).length();
+      if (R > 0) {   // soft selection: the vertices around follow with a smooth falloff (along the average normal)
+        const A = [0, 0, 0]; for (const [, , n] of moved) for (let k = 0; k < 3; k++) A[k] += n[k];
+        const al = Math.hypot(...A) || 1, An = A.map(x => x / al), sv = [...vn.keys()];
+        for (let v = 0; v < nV; v++) {
+          if (vn.has(v)) continue;
+          let d2 = Infinity; for (const u of sv) { const dx = pos[v*3] - pos[u*3], dy = pos[v*3+1] - pos[u*3+1], dz = pos[v*3+2] - pos[u*3+2], q = dx*dx + dy*dy + dz*dz; if (q < d2) d2 = q; }
+          const t = 1 - Math.sqrt(d2) / R; if (t <= 0) continue;
+          const w = t * t * (3 - 2 * t); moved.push([v, v, An.map(x => x * w)]);
+        }
+      }
       pushUndo(); rec = active;
     } else {
-      const r = PE.extrude(pos, M.polys, sel);
+      // 「面ごとに」: every face is its own region (its own walls and inset centre)
+      let r = $('peEach').checked && sel.length > 1 ? sel.reduce((q, f) => q ? peChain(q, x => PE.extrude(x.pos, x.polys, [f])) : PE.extrude(pos, M.polys, [f]), null) : PE.extrude(pos, M.polys, sel);
       moved = r.moved; rec = peReplace(r);
       if (a === 'qmesh') extra = { nOld: M.polys.length, polys: r.polys };
+      if (a === 'inset') {   // inset towards the centre of each connected region (or each face)
+        const each = $('peEach').checked, par = new Map(), find = v => { while (par.get(v) !== v) v = par.get(v); return v; };
+        for (const f of sel) { const g = M.polys[f]; for (const v of g) if (!par.has(v)) par.set(v, v); if (!each) for (const v of g) { const x = find(g[0]), y = find(v); if (x !== y) par.set(y, x); } }
+        const cs = new Map();
+        if (each) { const ctr = new Map(); for (const f of sel) { const c = PE.polyCenter(P0, M.polys[f]); ctr.set(f, c); } extra = { ...extra, faceCtr: ctr }; }
+        else { for (const v of par.keys()) { const k = find(v), c = cs.get(k) || [0, 0, 0, 0]; c[0] += P0[v*3]; c[1] += P0[v*3+1]; c[2] += P0[v*3+2]; c[3]++; cs.set(k, c); } }
+        const ctrOf = new Map();
+        if (each) { let i = 0; const nb = moved.length; for (const f of sel) { const c = extra.faceCtr.get(f); for (let j = 0; j < M.polys[f].length && i < nb; j++, i++) ctrOf.set(moved[i][0], c); } }
+        else for (const [c, v] of moved) { const q = cs.get(find(v)); ctrOf.set(c, [q[0] / q[3], q[1] / q[3], q[2] / q[3]]); }
+        extra = { ...extra, ctr: ctrOf };
+      }
     }
     let cx = 0, cy = 0, cz = 0; for (const [, v] of moved) { cx += P0[v*3]; cy += P0[v*3+1]; cz += P0[v*3+2]; }
     const k = moved.length || 1, size = sceneBounds([active]).getSize(new V3()).length();
@@ -6980,12 +7138,16 @@ function peDown(e) {
     controls.enabled = false; try { canvas.setPointerCapture(e.pointerId); } catch {}
     peShow(null);
   }
+  const typed = peNum();
+  if (typed !== null && pe.drag && ['extrude', 'inset', 'move', 'qmesh', 'bevel'].includes(pe.drag.kind)) { peDragTo(null, typed); peUp(); }
   pe.cache = null;
   return true;
 }
-function peDragTo(e) {
+function peDragTo(e, typed = null) {
   const d = pe.drag; if (!d || active !== d.rec) return;
-  const dy = (d.y0 - e.clientY) / Math.max(200, view.clientHeight);   // fraction of the view height
+  // typed: inset / bevel % of the face, extrude / move % of the part size -> the same dy the drag would need
+  const dy = typed === null ? (d.y0 - e.clientY) / Math.max(200, view.clientHeight)
+    : d.kind === 'bevel' ? (typed / 100 - d.t) / 1.2 : d.kind === 'inset' ? typed / 200 : typed / 100 / 0.6;
   const B = d.base;
   if (d.kind === 'bevel') {
     const t = Math.max(0.02, Math.min(0.48, d.t + dy * 1.2)); d.amt = t;
@@ -7006,7 +7168,7 @@ function peDragTo(e) {
   }
   if (d.kind === 'inset') {
     const t = Math.max(0, Math.min(0.95, dy * 2)); d.amt = t;
-    for (const [c, v] of d.moved) for (let k = 0; k < 3; k++) pos[c*3+k] = B[v*3+k] + (d.center[k] - B[v*3+k]) * t;
+    for (const [c, v] of d.moved) { const C = d.ctr && d.ctr.get(c) || d.center; for (let k = 0; k < 3; k++) pos[c*3+k] = B[v*3+k] + (C[k] - B[v*3+k]) * t; }
   } else {
     const off = dy * d.size * 0.6; d.amt = off;
     for (const [c, v, n] of d.moved) for (let k = 0; k < 3; k++) pos[c*3+k] = B[v*3+k] + n[k] * off;
@@ -7174,7 +7336,7 @@ const curLevel = () => active.levels[active.lv];
 const hasUV = L => L && L.uv && L.uvIdx && L.uvIdx.length === L.idx.length;
 function updateTexUI() {
   const L = curLevel(), ok = hasUV(L), cv = $('uvCv');
-  if (ok) drawUV(cv, L.uvIdx, L.uv); else { const g = cv.getContext('2d'); g.fillStyle = '#18191c'; g.fillRect(0, 0, cv.width, cv.height); }
+  if (ok) drawUV(cv, L.uvIdx, L.uv, $('uvDist').checked ? uvStretch(pos, L.uvIdx, L.uv) : null); else { const g = cv.getContext('2d'); g.fillStyle = '#18191c'; g.fillRect(0, 0, cv.width, cv.height); }
   $('uvInfo').textContent = ok ? `UV あり（${L.uvCharts ? L.uvCharts + ' 個に分割・' : ''}${L.bake ? `テクスチャ ${L.bake.size}px 焼き付け済み` : 'テクスチャ未作成'}）` : nF > 300000 ? 'UV がありません（ポリゴンが多すぎます。リトポかポリゴン削減で軽くしてから展開してください）' : 'UV はまだありません';
   $('bakeGo').disabled = !ok || !$('bakeSrc').options.length;
   $('texPreview').disabled = $('texSave').disabled = !(ok && L.bake);
@@ -7184,7 +7346,12 @@ function unwrapUV() {
   if (nF > 300000) { toast('ポリゴンが多すぎます。リトポかポリゴン削減で軽くしてから展開してください'); return; }
   return busy(() => {
     const t0 = performance.now(), size = +$('bakeSize').value;
-    const r = unwrap(pos, idx, { angle: +$('uvAngle').value, size, padding: 4 });
+    // seams: along polygroup borders, or along the border of the mask (painted where the seam should run)
+    const how = $('uvSeams').value, nT = idx.length / 3;
+    let group = null;
+    if (how === 'group' && pg) { group = new Int32Array(nT); for (let f = 0; f < nT; f++) group[f] = pg[idx[f*3]]; }
+    else if (how === 'mask') { group = new Int32Array(nT); for (let f = 0; f < nT; f++) group[f] = mask[idx[f*3]] + mask[idx[f*3+1]] + mask[idx[f*3+2]] >= 1.5 ? 1 : 0; }
+    const r = unwrap(pos, idx, { angle: +$('uvAngle').value, size, padding: 4, group });
     pushEntry(lvSnap());   // level objects are shared with the snapshot, so record uv in a fresh object
     const L = { ...curLevel(), uvIdx: r.uvIdx, uv: r.uv, uvCharts: r.charts, bake: null };
     active.levels = active.levels.slice(); active.levels[active.lv] = L;
@@ -7237,6 +7404,22 @@ function aoCavityPaint(hp, hi) {
   g.dispose();
   return paint;
 }
+function idMap(L, S) {
+  const out = new Uint8ClampedArray(S * S * 4), ui = L.uvIdx, uv = L.uv;
+  for (let f = 0; f < ui.length / 3; f++) {
+    const c = pgColor(pg[ui[f*3]]).map(x => lin2srgb(x) * 255), o = f * 6;
+    const u0 = uv[o] * S, v0 = uv[o+1] * S, u1 = uv[o+2] * S, v1 = uv[o+3] * S, u2 = uv[o+4] * S, v2 = uv[o+5] * S, det = (u1 - u0) * (v2 - v0) - (u2 - u0) * (v1 - v0);
+    if (Math.abs(det) < 1e-12) continue;
+    const x0 = Math.max(0, Math.floor(Math.min(u0, u1, u2)) - 1), x1 = Math.min(S - 1, Math.ceil(Math.max(u0, u1, u2)) + 1);
+    const y0 = Math.max(0, Math.floor(Math.min(v0, v1, v2)) - 1), y1 = Math.min(S - 1, Math.ceil(Math.max(v0, v1, v2)) + 1), eps = -1.5 / Math.sqrt(Math.abs(det));
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+      const px = x + 0.5, py = y + 0.5, w1 = ((px - u0) * (v2 - v0) - (u2 - u0) * (py - v0)) / det, w2 = ((u1 - u0) * (py - v0) - (px - u0) * (v1 - v0)) / det;
+      if (w1 < eps || w2 < eps || 1 - w1 - w2 < eps) continue;
+      const k = ((S - 1 - y) * S + x) * 4; out[k] = c[0]; out[k+1] = c[1]; out[k+2] = c[2]; out[k+3] = 255;
+    }
+  }
+  return out;
+}
 const splitChannel = (rgba, ch) => { const o = new Uint8ClampedArray(rgba.length); for (let i = 0; i < rgba.length; i += 4) { o[i] = o[i+1] = o[i+2] = rgba[i + ch]; o[i+3] = rgba[i+3]; } return o; };
 async function bakeTextures() {
   const L = curLevel();
@@ -7250,24 +7433,26 @@ async function bakeTextures() {
     flushNormals();
     const t0 = performance.now();
     if (!high) high = materializeLevel(active.levels.length - 1);
-    const box = sceneBounds([active]), maxDist = box.getSize(new V3()).length() * 0.03;
+    const box = sceneBounds([active]), maxDist = box.getSize(new V3()).length() * (+$('bakeDist').value || 3) / 100;
     res = bakeMaps({ pos, uvIdx: L.uvIdx, uv: L.uv }, high, { size, maxDist });
     if ($('bakeAO').checked) {   // AO + cavity: a second pass with the maps as colours
       busyText('AO と凹みのマップを焼き付けています…');
       const r2 = bakeMaps({ pos, uvIdx: L.uvIdx, uv: L.uv }, { pos: high.pos, idx: high.idx, paint: aoCavityPaint(high.pos, high.idx) }, { size, maxDist });
       if (r2 && r2.color) { res.ao = splitChannel(r2.color, 0); res.cav = splitChannel(r2.color, 1); }
     }
+    if ($('bakeNrm').value === 'dx') for (let i = 1; i < res.normal.length; i += 4) if (res.normal[i + 2]) res.normal[i] = 255 - res.normal[i];   // flip green
+    if ($('bakeID').checked && pg) res.id = idMap(L, size);
     res.t = performance.now() - t0;
   });
   if (!res) return;
   const normalPng = await pngFromRGBA(res.normal, size), colorPng = res.color ? await pngFromRGBA(res.color, size) : null, heightPng = await pngFromRGBA(res.height, size);
-  const aoPng = res.ao ? await pngFromRGBA(res.ao, size) : null, cavPng = res.cav ? await pngFromRGBA(res.cav, size) : null;
+  const aoPng = res.ao ? await pngFromRGBA(res.ao, size) : null, cavPng = res.cav ? await pngFromRGBA(res.cav, size) : null, idPng = res.id ? await pngFromRGBA(res.id, size) : null;
   pushEntry(lvSnap());
-  const NL = { ...L, bake: { size, normalPng, colorPng, heightPng, heightRange: res.heightRange, aoPng, cavPng } };
+  const NL = { ...L, bake: { size, normalPng, colorPng, heightPng, heightRange: res.heightRange, aoPng, cavPng, idPng, nrmFmt: $('bakeNrm').value } };
   active.levels = active.levels.slice(); active.levels[active.lv] = NL;
   texCache.delete(L); updateTexUI(); scheduleSave();
   $('texPreview').checked = true; await setTexPreview(true);
-  toast(`焼き付けました（${size}px・${res.color ? '法線・高さ・色' : '法線・高さ'}${res.ao ? '・AO・凹み' : ''}・${(res.t / 1000).toFixed(1)}秒${res.misses ? `・届かなかった点 ${res.misses.toLocaleString()}` : ''}）`);
+  toast(`焼き付けました（${size}px・${res.color ? '法線・高さ・色' : '法線・高さ'}${res.ao ? '・AO・凹み' : ''}${res.id ? '・ID' : ''}${$('bakeNrm').value === 'dx' ? '・DirectX 法線' : ''}・${(res.t / 1000).toFixed(1)}秒${res.misses ? `・届かなかった点 ${res.misses.toLocaleString()}` : ''}）`);
 }
 // textures for preview / GLB export
 const texCache = new WeakMap();
@@ -7336,10 +7521,11 @@ function computeDisplacement(S, smooth) {
 }
 async function saveTextures() {
   const L = curLevel(); if (!hasUV(L) || !L.bake) return;
-  const base = fileBase(), files = [{ name: `${base}_normal.png`, data: L.bake.normalPng.slice().buffer }];
+  const base = fileBase(), files = [{ name: `${base}_normal${L.bake.nrmFmt === 'dx' ? '_dx' : ''}.png`, data: L.bake.normalPng.slice().buffer }];
   if (L.bake.colorPng) files.push({ name: `${base}_color.png`, data: L.bake.colorPng.slice().buffer });
   if (L.bake.aoPng) files.push({ name: `${base}_ao.png`, data: L.bake.aoPng.slice().buffer });
   if (L.bake.cavPng) files.push({ name: `${base}_cavity.png`, data: L.bake.cavPng.slice().buffer });
+  if (L.bake.idPng) files.push({ name: `${base}_id.png`, data: L.bake.idPng.slice().buffer });
   if (L.bake.heightPng) { files.push({ name: `${base}_height.png`, data: L.bake.heightPng.slice().buffer }); toast(`高さマップ：灰色 128 が面の位置、白／黒が ±${(L.bake.heightRange * mmPerUnit()).toFixed(2)} mm（印刷サイズ換算）`); }
   const dir = await native.saveMany(files);
   if (dir) toast(`テクスチャを保存しました: ${dir}`);
@@ -7697,7 +7883,7 @@ let saveTimer = 0;
 function autosaveSoon() { clearTimeout(saveTimer); saveTimer = setTimeout(() => stroke ? autosaveSoon() : saveNow(), nF > 2_000_000 ? 3000 : 1200); }
 // called after every change to the model
 let estT = 0;
-function scheduleSave() { setDirty(true); autosaveSoon(); liveSoon(); clearTimeout(estT); estT = setTimeout(updateRemeshEstimate, 400); }
+function scheduleSave() { nmFollowSoon(); setDirty(true); autosaveSoon(); liveSoon(); clearTimeout(estT); estT = setTimeout(updateRemeshEstimate, 400); }
 // One save at a time; a request while saving queues exactly one more (with the newest state).
 let saveChain = Promise.resolve(), saveQueued = false, idbCleared = false;
 function saveNow() {
@@ -7995,6 +8181,9 @@ $('boolTidyNow').onclick = () => busy(tidyActive);
 $('boolSub').onclick = () => runBoolean('subtract');
 $('boolInt').onclick = () => runBoolean('intersect');
 $('uvAngle').addEventListener('input', () => { $('uvAngleOut').textContent = $('uvAngle').value; });
+$('uvDist').addEventListener('change', () => updateTexUI());
+$('peSoft').addEventListener('input', e => { $('peSoftOut').textContent = e.target.value; });
+$('bakeDist').addEventListener('input', e => { $('bakeDistOut').textContent = (+e.target.value).toFixed(1); });
 $('uvGo').onclick = () => unwrapUV();
 $('bakeGo').onclick = () => bakeTextures();
 $('bakeSrc').addEventListener('change', updateTexUI);
@@ -8273,10 +8462,10 @@ for (const [id, d] of [['dynGrav', 1], ['dynPress', 1], ['dynStiff', 2], ['dynBe
 $('dynGo').onclick = () => dynStart();
 $('tpmGo').onclick = () => tpmStart(); $('tpmBack').onclick = () => tpmEnd();
 $('rtCurv').addEventListener('input', e => { $('rtCurvOut').textContent = (+e.target.value).toFixed(2); });
-$('mpTile').replaceChildren(...MICRO_TILES.map(t => { const o = document.createElement('option'); o.value = t.id; o.textContent = t.name; return o; }));
 for (const [id, d] of [['nmScale', 2], ['nmHeight', 2], ['nmOffset', 2], ['nmRot', 0], ['nmRandS', 2], ['nmRandR', 2], ['mpThick', 2]]) $(id).addEventListener('input', e => { $(id + 'Out').textContent = (+e.target.value).toFixed(d); if (nmPrev) nmPreview(); });
-for (const id of ['nmInst', 'nmFit', 'nmSeed', 'nmFlip', 'mpTile', 'mpTris', 'nmMasked']) $(id).addEventListener('change', () => { if (nmPrev) nmPreview(); });
-$('nmInst').addEventListener('pointerdown', nmFill); $('nmInst').addEventListener('focus', nmFill); nmFill();
+for (const id of ['nmInst', 'nmInst2', 'nmMix', 'nmFit', 'nmSeed', 'nmFlip', 'mpTile', 'mpTris', 'nmMasked']) $(id).addEventListener('change', () => { if (nmPrev) nmPreview(); });
+for (const id of ['nmInst', 'nmInst2', 'mpTile']) { $(id).addEventListener('pointerdown', nmFill); $(id).addEventListener('focus', nmFill); } nmFill();
+$('nmEditClear').onclick = () => { const r = active; if (!r || !r.nano || !r.nano.over) return; delete r.nano.over; busy(() => { const rec = nmRebuildRec(r, { params: r.nano.params }); if (rec) { activate(rec, true); syncScene(); renderSubtoolList(); scheduleSave(); } nmUI(); }); };
 $('nmPrevBtn').onclick = () => nmPreview('nano'); $('mpPrevBtn').onclick = () => nmPreview('micro');
 $('nmGo').onclick = () => nmMake('nano'); $('mpGo').onclick = () => nmMake('micro');
 $('nmCancel').onclick = () => nmClear(); $('nmRebuild').onclick = () => nmRebuild();

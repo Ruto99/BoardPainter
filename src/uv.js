@@ -3,6 +3,8 @@
 //     within `angle` degrees of the chart's average normal (so each chart is nearly flat)
 //  2. project each chart onto its own plane, rotated so its bounding box is tight (PCA)
 //  3. pack the chart rectangles into the unit square (shelf packing, uniform texel density)
+// opt.group (Int32Array per triangle): charts never cross a change of group, so polygroup borders or a painted
+// mask border become seams.
 // The result is per face corner (uv: 6 floats per face) so seams don't split the sculpt mesh's vertices.
 
 export function unwrap(pos, idx, opt = {}) {
@@ -27,7 +29,7 @@ export function unwrap(pos, idx, opt = {}) {
   // region growing, largest faces first as seeds
   const chart = new Int32Array(nF).fill(-1), order = Array.from({ length: nF }, (_, i) => i).sort((p, q) => area[q] - area[p]);
   const charts = [];
-  const maxFaces = opt.maxChartFaces ?? 4000;
+  const maxFaces = opt.maxChartFaces ?? 4000, grp = opt.group && opt.group.length === nF ? opt.group : null;
   for (const seed of order) {
     if (chart[seed] >= 0) continue;
     const id = charts.length, faces = [seed];
@@ -38,7 +40,7 @@ export function unwrap(pos, idx, opt = {}) {
       const l = Math.hypot(nx, ny, nz) || 1, ax = nx / l, ay = ny / l, az = nz / l;
       for (let k = 0; k < 3; k++) {
         const g = adj[f*3+k];
-        if (g < 0 || chart[g] >= 0) continue;
+        if (g < 0 || chart[g] >= 0 || grp && grp[g] !== grp[f]) continue;
         // zero-area faces have no normal: let them join the neighbouring chart instead of forming their own
         if (area[g] === 0) { chart[g] = id; faces.push(g); continue; }
         if (fn[g*3]*ax + fn[g*3+1]*ay + fn[g*3+2]*az < cosA) continue;
@@ -104,10 +106,32 @@ export function unwrap(pos, idx, opt = {}) {
   return { uvIdx: idx.slice(), uv, charts: charts.length, coverage: used };
 }
 
-// Draw the UV layout (for the panel preview)
-export function drawUV(canvas, uvIdx, uv) {
+// per-triangle stretch: sqrt(uv area / 3D area) relative to the area-weighted mean (1 = even texel density)
+export function uvStretch(pos, uvIdx, uv) {
+  const nF = uvIdx.length / 3, r = new Float32Array(nF); let su = 0, sa = 0;
+  for (let f = 0; f < nF; f++) {
+    const a = uvIdx[f*3]*3, b = uvIdx[f*3+1]*3, c = uvIdx[f*3+2]*3;
+    const ux = pos[b]-pos[a], uy = pos[b+1]-pos[a+1], uz = pos[b+2]-pos[a+2], wx = pos[c]-pos[a], wy = pos[c+1]-pos[a+1], wz = pos[c+2]-pos[a+2];
+    const A = Math.hypot(uy*wz - uz*wy, uz*wx - ux*wz, ux*wy - uy*wx) / 2, o = f * 6;
+    const U = Math.abs((uv[o+2]-uv[o]) * (uv[o+5]-uv[o+1]) - (uv[o+4]-uv[o]) * (uv[o+3]-uv[o+1])) / 2;
+    r[f] = A > 0 ? Math.sqrt(U / A) : 1; su += U; sa += A;
+  }
+  const m = sa > 0 ? Math.sqrt(su / sa) : 1;
+  for (let f = 0; f < nF; f++) r[f] = m > 0 ? r[f] / m : 1;
+  return r;
+}
+// Draw the UV layout (for the panel preview); with `stretch`, faces are coloured blue (squeezed) .. grey .. red (stretched)
+export function drawUV(canvas, uvIdx, uv, stretch = null) {
   const g = canvas.getContext('2d'), W = canvas.width, H = canvas.height;
   g.fillStyle = '#18191c'; g.fillRect(0, 0, W, H);
+  if (stretch) {
+    for (let f = 0; f < uv.length / 6; f++) {
+      const o = f * 6, t = Math.max(-1, Math.min(1, Math.log2(stretch[f] || 1) * 1.5));
+      g.fillStyle = t >= 0 ? `rgb(${120 + 135 * t | 0},${120 - 70 * t | 0},${120 - 70 * t | 0})` : `rgb(${120 + 70 * t | 0},${120 + 30 * t | 0},${120 - 135 * t | 0})`;
+      g.beginPath(); g.moveTo(uv[o] * W, (1 - uv[o+1]) * H); g.lineTo(uv[o+2] * W, (1 - uv[o+3]) * H); g.lineTo(uv[o+4] * W, (1 - uv[o+5]) * H); g.closePath(); g.fill();
+    }
+    return;
+  }
   g.strokeStyle = 'rgba(217,163,91,.75)'; g.lineWidth = 0.6; g.fillStyle = 'rgba(217,163,91,.12)';
   g.beginPath();
   for (let f = 0; f < uv.length / 6; f++) {
