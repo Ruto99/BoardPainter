@@ -3487,7 +3487,7 @@ function zsStart() {
   for (const o of [mesh, wireMesh, drawMesh, ...subtools.map(x => x.view)]) if (o && o.visible) { zs.hidden.push(o); o.visible = false; }
   scene.add(zs.group); zsRebuild();
   $('zsTools').hidden = false; $('zsStart').hidden = true;
-  $('zsNote').textContent = '球をドラッグ：子の球を作って引き出す。Alt+ドラッグ：球を動かす。Shift+ドラッグ：大きさを変える。Ctrl+クリック：球を消す（先の球も）。背景ドラッグで回転。左右対称（X）がオンなら反対側にも作られます。';
+  $('zsNote').textContent = '球をドラッグ：子の球を作って引き出す。Alt+ドラッグ：球を動かす。Shift+ドラッグ：大きさを変える。Ctrl+クリック：球を消す（先の球も）。Alt+Shift+ドラッグ：その球から先を親のまわりに回す（ポーズ）。つなぎをクリック：球を足す。背景ドラッグで回転。左右対称（X）がオンなら反対側にも作られます。';
   toast('ZSphere：赤い球からドラッグして骨組みを作ってください');
 }
 function zsEnd() {
@@ -3509,7 +3509,7 @@ function zsRebuild() {
     if (n.parent >= 0) {
       const q = zs.nodes[n.parent], d = n.p.clone().sub(q.p), L = d.length(); if (L < 1e-6) return;
       const cyl = new THREE.Mesh(new THREE.CylinderGeometry(n.r * 0.55, q.r * 0.55, L, 16, 1, true), zsLinkMat);
-      cyl.position.copy(q.p).addScaledVector(d, 0.5); cyl.quaternion.setFromUnitVectors(new V3(0, 1, 0), d.normalize()); cyl.raycast = () => {};
+      cyl.position.copy(q.p).addScaledVector(d, 0.5); cyl.quaternion.setFromUnitVectors(new V3(0, 1, 0), d.normalize()); cyl.userData.link = i;
       g.add(cyl);
     }
   });
@@ -3521,7 +3521,9 @@ function zsUndo() { if (!zs || !zs.undo.length) return; zs.nodes = zs.undo.pop()
 function zsPick() {
   camera.updateMatrixWorld(); raycaster.setFromCamera(ndc, camera);
   const h = raycaster.intersectObjects(zs.group.children.filter(o => o.userData.i !== undefined), false);
-  return h[0] || null;
+  if (h[0]) return h[0];
+  const l = raycaster.intersectObjects(zs.group.children.filter(o => o.userData.link !== undefined), false);   // a link: insert a sphere there
+  return l[0] || null;
 }
 function zsDelete(i) {
   if (zs.nodes[i].parent < 0) { toast('最初の球は消せません'); return; }
@@ -3537,10 +3539,15 @@ function zsDown(e) {
   setNDC(e);
   const hit = zsPick(); if (!hit) return;   // background: orbit
   controls.enabled = false; e.preventDefault(); canvas.setPointerCapture(e.pointerId);
+  if (hit.object.userData.link !== undefined) { zsPush(); zsInsert(hit.object.userData.link, hit.point); return; }
   const i = hit.object.userData.i, node = zs.nodes[i];
   zsPush();
   if (e.ctrlKey || e.metaKey) { zsDelete(i); controls.enabled = true; return; }
   const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(camera.getWorldDirection(new V3()), hit.point);
+  if (e.altKey && e.shiftKey && node.parent >= 0) {   // rotate this sphere and everything after it around its parent (posing)
+    const sub = zsSubtree(i), msub = node.mirror >= 0 ? zsSubtree(node.mirror) : [];
+    zs.drag = { mode: 'rot', i, x0: e.clientX, y0: e.clientY, sub, msub, start: zs.nodes.map(n => n.p.clone()) }; return;
+  }
   if (e.altKey) { zs.drag = { mode: 'move', i, plane, P0: hit.point.clone(), start: node.p.clone() }; return; }
   if (e.shiftKey) { zs.drag = { mode: 'scale', i, x0: e.clientX, r0: node.r }; return; }
   // new child sphere where the parent was grabbed, then dragged out
@@ -3557,6 +3564,19 @@ function zsDown(e) {
 function zsMove(e) {
   const D = zs.drag; if (!D) return;
   const n = zs.nodes[D.i];
+  if (D.mode === 'rot') {
+    // angle around the parent on screen, axis = view direction
+    const par = zs.nodes[n.parent].p, ps = par.clone().project(camera), rect = canvas.getBoundingClientRect();
+    const cx = rect.left + (ps.x + 1) / 2 * rect.width, cy = rect.top + (1 - ps.y) / 2 * rect.height;
+    const a = Math.atan2(e.clientY - cy, e.clientX - cx) - Math.atan2(D.y0 - cy, D.x0 - cx);
+    const ax = camera.getWorldDirection(new V3()), q = new THREE.Quaternion().setFromAxisAngle(ax, -a);
+    for (const j of D.sub) zs.nodes[j].p.copy(D.start[j]).sub(par).applyQuaternion(q).add(par);
+    if (D.msub.length) {   // the mirror chain turns the mirrored way
+      const mp = zs.nodes[zs.nodes[n.mirror].parent].p, mq = new THREE.Quaternion(-q.x, q.y, q.z, -q.w);
+      for (const j of D.msub) zs.nodes[j].p.copy(D.start[j]).sub(mp).applyQuaternion(mq).add(mp);
+    }
+    zsRebuild(); return;
+  }
   if (D.mode === 'scale') n.r = Math.max(0.01, D.r0 * Math.exp((e.clientX - D.x0) / 120));
   else {
     setNDC(e); raycaster.setFromCamera(ndc, camera);
@@ -3566,6 +3586,20 @@ function zsMove(e) {
   }
   if (n.mirror >= 0) { const m = zs.nodes[n.mirror]; m.p.set(-n.p.x, n.p.y, n.p.z); m.r = n.r; }
   zsRebuild();
+}
+// all spheres from i outward (i and its descendants)
+function zsSubtree(i) { const out = [i]; for (let k = 0; k < out.length; k++) zs.nodes.forEach((n, j) => { if (n.parent === out[k]) out.push(j); }); return out; }
+// insert a sphere on the link into node c (between c and its parent) at the clicked point; mirrored too
+function zsInsert(c, at) {
+  const add = (ci, P) => {
+    const ch = zs.nodes[ci], pa = zs.nodes[ch.parent], d = ch.p.clone().sub(pa.p), L2 = d.lengthSq() || 1;
+    const t = Math.max(0.05, Math.min(0.95, P.clone().sub(pa.p).dot(d) / L2));
+    zs.nodes.push({ p: pa.p.clone().addScaledVector(d, t), r: pa.r + (ch.r - pa.r) * t, parent: ch.parent, mirror: -1 });
+    const ni = zs.nodes.length - 1; ch.parent = ni; return ni;
+  };
+  const ni = add(c, at), m = zs.nodes[c].mirror;
+  if (m >= 0) { const mi = add(m, new V3(-at.x, at.y, at.z)); zs.nodes[ni].mirror = mi; zs.nodes[mi].mirror = ni; }
+  zsRebuild(); toast('つなぎに球を足しました（Alt+ドラッグで動かせます）');
 }
 function zsUp() { if (zs) zs.drag = null; controls.enabled = true; }
 // ---------------- mannequins: ready-made ZSphere skeletons (right side listed, the left side is mirrored) ----------------
