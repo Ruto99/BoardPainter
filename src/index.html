@@ -900,7 +900,11 @@ dl.keys dd{margin:0;color:var(--muted)}
       <input type="range" id="tlSecs" min="2" max="60" step="1" value="8">
       <div class="row"><input type="checkbox" id="tlVis" checked><label for="tlVis" title="キーを追加したときに表示していたパーツを、そのキーから表示します">パーツの表示もキーにする</label></div>
       <div class="row"><input type="checkbox" id="tlLoop"><label for="tlLoop">最後のキーから最初に戻る（ループ）</label></div>
+      <div class="row"><label for="tlEase">動きの緩急</label><select id="tlEase"><option value="mix">ふつう</option><option value="smooth">キーでゆっくり</option><option value="linear">一定の速さ</option></select></div>
+      <div class="row"><label for="tlHold" title="各キーで止まる秒数">キーで止まる時間（秒）</label><output id="tlHoldOut">0.0</output></div>
+      <input type="range" id="tlHold" min="0" max="3" step="0.1" value="0">
       <button class="btn full" id="tlRec" disabled>タイムラインを動画に書き出す（WebM）</button>
+      <div class="row"><label for="tlFps">連番の fps</label><select id="tlFps"><option>24</option><option selected>30</option><option>60</option></select><button class="btn" id="tlPng" title="1 コマずつ描いて PNG の連番を ZIP にします（動画編集ソフト用・コマ落ちなし）">連番 PNG（ZIP）</button></div>
       <p class="note">今見ている角度で、影と隙間の陰影（アンビエントオクルージョン）を付けた高画質の画像を作ります。色はポリペイントの色を使います。</p>
     </section>
 
@@ -5222,7 +5226,13 @@ const crom = (a, b, c, d, t) => { const t2 = t * t, t3 = t2 * t; return 0.5 * (2
 function tlPose(k) {
   const K = tlKeys, n = K.length;
   if (n === 1) return K[0];
-  const loop = $('tlLoop').checked, segs = loop ? n : n - 1, x = Math.min(segs - 1e-9, k * segs), s = Math.floor(x), t = sstep(x - s) * 0.35 + (x - s) * 0.65;
+  const loop = $('tlLoop').checked, segs = loop ? n : n - 1;
+  // pause at each key: a share `hold` of the time is spent standing on keys (one hold per segment start + the end)
+  const hold = Math.min(0.8, Math.max(0, +$('tlHold').value || 0) * (loop ? n : n) / Math.max(1, +$('tlSecs').value || 8));
+  const stops = loop ? n : n, move = 1 - hold, per = segs ? move / segs : 1, hs = stops ? hold / stops : 0;
+  let s = 0, u = 0, kk = Math.max(0, Math.min(1, k));
+  for (s = 0; s < segs; s++) { if (kk < hs) { u = 0; break; } kk -= hs; if (kk < per || s === segs - 1) { u = Math.min(1, kk / (per || 1)); break; } kk -= per; }
+  const ease = $('tlEase').value, t = ease === 'linear' ? u : ease === 'smooth' ? sstep(u) : sstep(u) * 0.35 + u * 0.65;
   const at = i => loop ? K[((i % n) + n) % n] : K[Math.max(0, Math.min(n - 1, i))];
   const q = [at(s - 1), at(s), at(s + 1), at(s + 2)], sp = q.map(tlSph);
   // unwrap the azimuth so the camera takes the short way round
@@ -5232,6 +5242,41 @@ function tlPose(k) {
   const el = Math.max(-1.55, Math.min(1.55, crom(sp[0][2], sp[1][2], sp[2][2], sp[3][2], t)));
   const p = [tg[0] + r * Math.cos(el) * Math.sin(az), tg[1] + r * Math.sin(el), tg[2] + r * Math.cos(el) * Math.cos(az)];
   return { p, t: tg, fov: crom(q[0].fov, q[1].fov, q[2].fov, q[3].fov, t), vis: k >= 1 ? (loop ? K[0] : K[n - 1]).vis : q[1].vis };
+}
+// minimal ZIP writer (stored, no compression) for frame sequences
+const CRC_T = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+const crc32 = b => { let c = 0xffffffff; for (let i = 0; i < b.length; i++) c = CRC_T[(c ^ b[i]) & 255] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
+function zipStore(files) {   // files: [{ name, data: Uint8Array }]
+  const parts = [], cen = []; let off = 0;
+  const u16 = v => [v & 255, v >>> 8 & 255], u32 = v => [v & 255, v >>> 8 & 255, v >>> 16 & 255, v >>> 24 & 255];
+  for (const f of files) {
+    const nm = new TextEncoder().encode(f.name), c = crc32(f.data), sz = f.data.length;
+    const head = [0x50, 0x4b, 3, 4, ...u16(20), ...u16(0), ...u16(0), ...u16(0), ...u16(0x21), ...u32(c), ...u32(sz), ...u32(sz), ...u16(nm.length), ...u16(0)];
+    parts.push(new Uint8Array(head), nm, f.data);
+    cen.push(new Uint8Array([0x50, 0x4b, 1, 2, ...u16(20), ...u16(20), ...u16(0), ...u16(0), ...u16(0), ...u16(0x21), ...u32(c), ...u32(sz), ...u32(sz), ...u16(nm.length), ...u16(0), ...u16(0), ...u16(0), ...u16(0), ...u32(0), ...u32(off)]), nm);
+    off += head.length + nm.length + sz;
+  }
+  const cl = cen.reduce((a, b) => a + b.length, 0);
+  return new Blob([...parts, ...cen, new Uint8Array([0x50, 0x4b, 5, 6, 0, 0, 0, 0, ...u16(files.length), ...u16(files.length), ...u32(cl), ...u32(off), 0, 0])], { type: 'application/zip' });
+}
+// frame-by-frame render of the timeline (exact timing, any length), PNGs in one ZIP
+async function tlFrames() {
+  if (tlKeys.length < 2 || turning || stroke) return;
+  const fps = +$('tlFps').value || 30, N = Math.max(2, Math.round((+$('tlSecs').value || 8) * fps)), keep = camSnap(), files = [];
+  turning = true;
+  const keepClear = renderer.getClearAlpha(), keepCol = renderer.getClearColor(new THREE.Color());
+  renderer.setClearColor(0x2b2c31, 1); ring.visible = ring2.visible = quad.visible = quad2.visible = false;
+  try {
+    for (let f = 0; f < N; f++) {
+      camApply(tlPose(f / (N - 1)), true); camera.updateMatrixWorld();
+      renderer.render(scene, camera);
+      const blob = await new Promise(res => canvas.toBlob(res, 'image/png'));
+      files.push({ name: `frame_${String(f).padStart(5, '0')}.png`, data: new Uint8Array(await blob.arrayBuffer()) });
+      if (f % 10 === 0) busyText(`連番画像を作っています… ${f + 1} / ${N}`);
+    }
+  } finally { busyText(null); renderer.setClearColor(keepCol, keepClear); camApply(keep); turning = false; }
+  saveOne(async () => ({ name: `${fileBase()}_frames.zip`, blob: zipStore(files) }));
+  toast(`${N} 枚の連番画像（${fps} fps）を ZIP にまとめました`);
 }
 function tlRefresh() {
   const n = tlKeys.length;
@@ -7955,6 +8000,7 @@ $('rdGo').onclick = () => busy(() => renderImage().catch(err => { console.error(
 $('rdSave').onclick = () => { if (lastRender) saveOne(async () => ({ name: `${fileBase()}_render${lastRender.suffix || ''}.png`, blob: lastRender.blob })); };
 $('rdClose').onclick = () => { $('rdView').hidden = true; };
 $('tlAdd').onclick = () => tlAdd();
+$('tlPng').onclick = () => tlFrames(); $('tlHold').addEventListener('input', e => { $('tlHoldOut').textContent = (+e.target.value).toFixed(1); });
 $('tlClear').onclick = () => { tlKeys = []; tlRefresh(); scheduleSave(); };
 $('tlPlay').onclick = () => tlPlayNow();
 $('tlRec').onclick = () => { if (tlKeys.length >= 2) recordCamera(+$('tlSecs').value || 8, tlPose, 'timeline'); };
