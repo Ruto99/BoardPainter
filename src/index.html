@@ -6,32 +6,36 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' blob: data:; worker-src 'self' blob:">
 <title>BoardPainter</title>
 <style>
-/* Layout: 3-column workbench — brush rail / viewport / settings panel, header across the top */
+/* Layout (ZBrush-style workbench): header and brush shelf across the top, brush rail left, viewport, view shelf, palette tray right */
 :root{
-  --bg:#1b1c1f; --panel:#232428; --panel-2:#2c2d32; --line:#3a3b42;
-  --fg:#ebe7e0; --muted:#9d998f; --accent:#d9a35b; --accent-ink:#1b1c1f; --mask:#7fa3d6;
+  --bg:#1e1e1e; --panel:#2b2b2b; --panel-2:#383838; --line:#161616; --edge:#474747;
+  --fg:#e2e2e2; --muted:#9a9a9a; --accent:#f08c28; --accent-ink:#1a1a1a; --mask:#7fa3d6;
+  --sl-bg:#1d1d1d; --sl-fill:#585858; --on-a:#f39a3e; --on-b:#d97a1a; --on-edge:#8a4c0e;
   --ui:'Yu Gothic UI','Meiryo UI','Hiragino Sans','Noto Sans CJK JP','Noto Sans JP',system-ui,'Segoe UI',sans-serif;
   --mono:'Cascadia Mono',Consolas,'SF Mono',Menlo,'DejaVu Sans Mono',ui-monospace,monospace;
   color-scheme: dark;
 }
 *{box-sizing:border-box}
 [hidden]{display:none!important}
-nav.tools{grid-column:1}
-#view{grid-column:2;grid-row:2}
-aside{grid-column:3}
+nav.tools{grid-column:1;grid-row:2/4}
+.zshelf{grid-column:2/4;grid-row:2}
+#view{grid-column:2;grid-row:3}
+.rshelf{grid-column:3;grid-row:3}
+aside{grid-column:4;grid-row:2/4}
 html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font:13px/1.5 var(--ui);overflow:hidden}
 /* app UI: dragging across panels shouldn't select text (inputs stay selectable) */
 .app{-webkit-user-select:none;user-select:none}
 .app input,.app textarea{-webkit-user-select:text;user-select:text}
 button,select,input{font:inherit;color:inherit}
-.app{display:grid;grid-template-columns:64px minmax(0,1fr) 288px;grid-template-rows:48px minmax(0,1fr);height:100%}
+.app{display:grid;grid-template-columns:64px minmax(0,1fr) 62px 300px;grid-template-rows:44px 40px minmax(0,1fr);height:100%}
 header{grid-column:1/-1;display:flex;align-items:center;gap:8px;padding:0 12px;background:var(--panel);border-bottom:1px solid var(--line);overflow-x:auto;white-space:nowrap}
 .brand{font-weight:700;letter-spacing:.02em;margin-right:10px;font-size:15px}
 .brand span{color:var(--accent);margin-left:4px}
 .sep{width:1px;height:24px;background:var(--line);margin:0 4px;flex:none}
 .spacer{flex:1}
-.btn{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;border:1px solid var(--line);background:var(--panel-2);border-radius:6px;cursor:pointer;flex:none}
-.btn:hover{border-color:#55565e}
+.btn{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 11px;border:1px solid var(--line);background:linear-gradient(#424242,#363636);border-radius:3px;cursor:pointer;flex:none;box-shadow:inset 0 1px 0 rgba(255,255,255,.06)}
+.btn:hover{background:linear-gradient(#4c4c4c,#3e3e3e)}
+.btn:active{background:#2e2e2e}
 .btn:focus-visible,.tool:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .btn.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:700}
 .btn:disabled{opacity:.4;cursor:default}
@@ -40,8 +44,8 @@ header{grid-column:1/-1;display:flex;align-items:center;gap:8px;padding:0 12px;b
 .btn.primary small{color:#5a4120}
 #btnPanel{display:none}
 
-nav.tools{grid-row:2;display:flex;flex-direction:column;gap:3px;padding:6px 6px;scrollbar-width:none;background:var(--panel);border-right:1px solid var(--line);overflow-y:auto}
-.tool{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;height:42px;border:1px solid transparent;border-radius:8px;background:transparent;cursor:pointer;flex:none}
+nav.tools{display:flex;flex-direction:column;gap:3px;padding:6px 6px;scrollbar-width:none;background:var(--panel);border-right:1px solid var(--line);overflow-y:auto}
+.tool{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;height:42px;border:1px solid transparent;border-radius:3px;background:transparent;cursor:pointer;flex:none}
 .tool b{font-family:var(--mono);font-size:15px;line-height:1}
 .tool span{font-size:9.5px;color:var(--muted);margin-top:4px;line-height:1}
 .tool i{position:absolute;top:3px;right:5px;font-style:normal;font-size:9px;color:var(--muted);font-family:var(--mono)}
@@ -100,7 +104,7 @@ select.wide{width:100%}
 .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px}
 .grid3 .btn{justify-content:center;padding:0 4px;height:auto;min-height:30px}
 .chip.gz{display:none}
-.app.gizmo-on .chip.gz{display:inline-block}
+.app.gizmo-on .chip.gz{display:block}
 #projInfo{word-break:break-all;margin:0 0 6px}
 .swatches{display:grid;grid-template-columns:repeat(10,1fr);gap:4px;margin:4px 0 8px}
 .swatch{aspect-ratio:1;border-radius:4px;border:1px solid var(--line);cursor:pointer;padding:0}
@@ -109,28 +113,73 @@ input[type=color]{width:64px;height:28px;padding:0 2px;border:1px solid var(--li
 #uvCv{width:100%;aspect-ratio:1;display:block;border:1px solid var(--line);border-radius:6px;background:#18191c;margin-bottom:6px}
 #lazyLine{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible}
 
-#view{position:relative;overflow:hidden;background:radial-gradient(ellipse at 50% 42%,#3c3d44 0%,#25262b 58%,#1b1c1f 100%)}
+#view{position:relative;overflow:hidden;background:radial-gradient(ellipse at 50% 40%,#5a5a5a 0%,#3a3a3a 55%,#252525 100%)}
 #view canvas{position:absolute;inset:0;display:block;cursor:crosshair}
 .overlay{position:absolute;pointer-events:none;font-size:12px;color:var(--muted)}
 #stats{left:12px;bottom:10px;font-family:var(--mono);font-variant-numeric:tabular-nums}
 #stats em{font-style:normal;color:var(--fg)}
 #hint{right:12px;bottom:10px;text-align:right;max-width:60%}
 #hint kbd{font-family:var(--mono);font-size:10.5px;padding:0 4px;border:1px solid var(--line);border-radius:3px;color:var(--fg)}
-.chips{position:absolute;left:12px;top:10px;display:flex;gap:6px}
-.chip{pointer-events:auto;height:26px;padding:0 10px;border-radius:13px;border:1px solid var(--line);background:rgba(27,28,31,.7);cursor:pointer;font-size:12px}
-.chip.on{border-color:var(--accent);color:var(--accent)}
+/* right view shelf: a column of square view buttons */
+.rshelf{display:flex;flex-direction:column;gap:4px;padding:6px 5px;background:var(--panel);border-left:1px solid var(--line);overflow-y:auto;scrollbar-width:none}
+.rshelf hr{border:0;border-top:1px solid var(--edge);margin:3px 2px;flex:none}
+.app:not(.gizmo-on) .rshelf hr.gz{display:none}
+.chip{flex:none;min-height:40px;padding:3px 2px;border-radius:3px;border:1px solid var(--line);background:linear-gradient(#434343,#353535);cursor:pointer;font-size:11px;line-height:1.25;overflow-wrap:anywhere}
+.chip:hover{background:linear-gradient(#4d4d4d,#3f3f3f)}
+.chip.on{background:linear-gradient(var(--on-a),var(--on-b));border-color:var(--on-edge);color:#1a1a1a;font-weight:700}
+/* top brush shelf */
+.zshelf{display:flex;align-items:center;gap:10px;padding:0 10px;background:var(--panel);border-bottom:1px solid var(--line);overflow-x:auto;white-space:nowrap;scrollbar-width:none}
+.zs-brush{display:flex;align-items:center;gap:7px;height:32px;padding:0 10px 0 3px;border:1px solid var(--line);border-radius:3px;background:linear-gradient(#434343,#353535);cursor:pointer;flex:none;max-width:200px}
+.zs-brush b{display:grid;place-items:center;width:26px;height:26px;border-radius:3px;background:#1a1a1a;color:var(--accent);font-family:var(--mono);font-size:13px}
+.zs-brush span{overflow:hidden;text-overflow:ellipsis}
+.zs-seg{display:flex;flex:none}
+.zs-tg{height:28px;padding:0 12px;border:1px solid var(--line);background:linear-gradient(#434343,#353535);cursor:pointer}
+.zs-tg:first-child{border-radius:3px 0 0 3px}
+.zs-tg:last-child{border-radius:0 3px 3px 0;border-left:0}
+.zs-tg.on{background:linear-gradient(var(--on-a),var(--on-b));color:#1a1a1a;font-weight:700;border-color:var(--on-edge)}
+.zs-w{width:160px;flex:none}
+.zshelf .zsl{margin:0}
+.zs-sel{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px;flex:none}
+.zs-sel select{max-width:150px;color:var(--fg)}
 #toast{position:absolute;left:50%;top:14px;transform:translateX(-50%);background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:6px 14px;color:var(--fg);opacity:0;transition:opacity .2s;pointer-events:none;white-space:nowrap}
 #toast.show{opacity:1}
 #busy{position:absolute;inset:0;display:grid;place-items:center;background:rgba(20,20,22,.55);font-size:14px}
 
-aside{grid-row:2;overflow-y:auto;background:var(--panel);border-left:1px solid var(--line);padding:12px 14px 24px;display:flex;flex-direction:column;gap:18px}
-section h2{margin:0 0 8px;font-size:11px;font-weight:700;letter-spacing:.08em;color:var(--muted)}
+aside{overflow-y:auto;background:var(--panel);border-left:1px solid var(--line);padding:12px 10px 24px;display:flex;flex-direction:column;gap:5px}
+/* palette tray: each section is a collapsible sub-palette */
+aside section{background:#303030;border:1px solid var(--line);border-radius:3px;padding:0 9px 9px}
+section h2{margin:0 -9px 8px;padding:5px 9px 5px 24px;position:relative;font-size:12px;font-weight:700;letter-spacing:.02em;color:var(--fg);background:linear-gradient(#454545,#3a3a3a);border-radius:3px 3px 0 0;cursor:pointer}
+section h2::before{content:"";position:absolute;left:9px;top:50%;margin-top:-2px;border:5px solid transparent;border-top-color:var(--accent);border-bottom:0}
+section h2:hover{background:linear-gradient(#4c4c4c,#414141)}
+aside:not(.searching) section.shut{padding-bottom:0}
+aside:not(.searching) section.shut>h2{margin-bottom:0;border-radius:3px}
+aside:not(.searching) section.shut>h2::before{margin-top:-5px;border:5px solid transparent;border-left-color:var(--muted);border-right:0}
+aside:not(.searching) section.shut>:not(h2){display:none!important}
+/* sliders: flat bar, filled part lighter, label and value drawn inside the bar */
+input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:18px;margin:2px 0;border:1px solid var(--line);border-radius:3px;background:linear-gradient(90deg,var(--sl-fill) var(--p,50%),var(--sl-bg) var(--p,50%));cursor:ew-resize}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:3px;height:18px;background:var(--accent);border-radius:1px}
+input[type=range]::-moz-range-thumb{width:3px;height:16px;border:0;border-radius:1px;background:var(--accent)}
+input[type=range]:disabled{opacity:.45;cursor:default}
+.zsl{position:relative;height:24px;margin:5px 0}
+.zsl input[type=range]{position:absolute;inset:0;height:100%;margin:0}
+.zsl input[type=range]::-webkit-slider-thumb{height:22px}
+.zsl label,.zsl output{position:absolute;top:0;line-height:22px;pointer-events:none;font-size:12px;text-shadow:0 1px 1px rgba(0,0,0,.8);white-space:nowrap}
+.zsl label{left:8px;right:58px;overflow:hidden;text-overflow:ellipsis}
+.zsl output{right:8px;font-family:var(--mono);font-variant-numeric:tabular-nums}
+.zsl:has(input[hidden]){display:none}
+.ptabs{position:sticky;top:-12px;z-index:2;margin:-12px -10px 4px;padding:8px 10px 8px;background:var(--panel);border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:6px}
+.ptab-row{display:grid;grid-template-columns:repeat(3,1fr);gap:4px}
+.ptab{height:26px;padding:0 4px;border:1px solid var(--line);border-radius:3px;background:linear-gradient(#3f3f3f,#333);color:var(--muted);cursor:pointer;font-size:12px;white-space:nowrap}
+.ptab:hover{color:var(--fg)}
+.ptab.on{color:#1a1a1a;font-weight:700;background:linear-gradient(var(--on-a),var(--on-b));border-color:var(--on-edge)}
+.ptab.dim{opacity:.4}
+#ptabQ{width:100%;height:26px;border-radius:3px;border:1px solid var(--line);background:var(--bg);padding:0 8px;color:inherit}
+aside section.tab-off{display:none}
 .row{display:flex;align-items:center;gap:8px;margin:6px 0}
 .row label{flex:1;min-width:0}
 .row output{font-family:var(--mono);font-size:12px;width:44px;text-align:right;font-variant-numeric:tabular-nums}
-input[type=range]{width:100%;accent-color:var(--accent)}
 input[type=checkbox]{accent-color:var(--accent);width:15px;height:15px}
-input[type=number],input[type=text],select{height:28px;border-radius:5px;border:1px solid var(--line);background:var(--bg);padding:0 8px;min-width:0}
+input[type=number],input[type=text],select{height:26px;border-radius:3px;border:1px solid var(--line);background:var(--bg);padding:0 8px;min-width:0}
 input[type=number]{width:76px}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:6px}
 .grid2 .btn{justify-content:center;padding:0 6px}
@@ -143,9 +192,10 @@ dl.keys{display:grid;grid-template-columns:auto 1fr;gap:3px 10px;margin:0;font-s
 dl.keys dt{font-family:var(--mono);color:var(--fg);font-size:11px}
 dl.keys dd{margin:0;color:var(--muted)}
 
+@media (max-width:1300px){#hint{display:none}}
 @media (max-width:900px){
-  .app{grid-template-columns:56px minmax(0,1fr)}
-  aside{grid-column:auto;position:absolute;right:0;top:48px;bottom:0;width:min(300px,88vw);transform:translateX(100%);transition:transform .2s;z-index:5;box-shadow:-8px 0 24px rgba(0,0,0,.4)}
+  .app{grid-template-columns:56px minmax(0,1fr) 56px}
+  aside{grid-column:auto;position:absolute;right:0;top:44px;bottom:0;width:min(300px,88vw);transform:translateX(100%);transition:transform .2s;z-index:5;box-shadow:-8px 0 24px rgba(0,0,0,.4)}
   .app.panel-open aside{transform:none}
   #btnPanel{display:inline-flex}
   #hint{display:none}
@@ -187,22 +237,34 @@ dl.keys dd{margin:0;color:var(--muted)}
 
   <nav class="tools" id="tools" aria-label="ブラシ"></nav>
 
-  <main id="view">
-    <div class="chips">
-      <button class="chip on" id="chipSym" title="X">対称 X</button>
-      <button class="chip" id="chipWire" title="W">ワイヤー</button>
-      <button class="chip" id="chipFrame" title="F">全体表示</button>
-      <button class="chip" id="chipSolo" title="選択中のサブツールだけ表示">ソロ</button>
-      <button class="chip" id="chipPG" title="ポリグループを色分け表示（Shift+F）">グループ</button>
-      <button class="chip" id="chipGizmo" title="G（Escで終了）">ギズモ G</button>
-      <button class="chip" data-view="front" title="正面から見る">正面</button>
-      <button class="chip" data-view="right" title="右から見る">右</button>
-      <button class="chip" data-view="top" title="上から見る">上</button>
-      <button class="chip" data-view="back" title="後ろから見る">後ろ</button>
-      <button class="chip gz on" id="gzMove" data-mode="translate">移動</button>
-      <button class="chip gz" id="gzRot" data-mode="rotate">回転</button>
-      <button class="chip gz" id="gzScale" data-mode="scale">拡大縮小</button>
+  <div class="zshelf" id="zshelf" role="toolbar" aria-label="ブラシの設定">
+    <button class="zs-brush" id="zsBrush" title="ブラシを選ぶ（B）"><b id="zsBrushKey"></b><span id="zsBrushName"></span></button>
+    <div class="zs-seg" role="group" aria-label="盛る・掘る">
+      <button class="zs-tg" id="zsAdd" title="盛る（Zadd）">盛る</button><button class="zs-tg" id="zsSub" title="掘る・マスク解除（Zsub）。Alt を押している間も反転します">掘る</button>
     </div>
+    <div class="zsl zs-w"><input type="range" id="zsSize" min="5" max="300" step="1" aria-label="ブラシのサイズ"><label for="zsSize">サイズ</label><output id="zsSizeOut"></output></div>
+    <div class="zsl zs-w"><input type="range" id="zsStr" min="0.02" max="1" step="0.01" aria-label="ブラシの強さ"><label for="zsStr">強さ</label><output id="zsStrOut"></output></div>
+    <label class="zs-sel" title="減衰カーブ（Focal Shift に相当）">減衰<select id="zsFall"></select></label>
+    <label class="zs-sel" title="ストローク">ストローク<select id="zsStroke"></select></label>
+  </div>
+  <nav class="chips rshelf" id="rshelf" aria-label="表示">
+    <button class="chip on" id="chipSym" title="X">対称 X</button>
+    <button class="chip" id="chipWire" title="W">ワイヤー</button>
+    <button class="chip" id="chipFrame" title="F">全体表示</button>
+    <button class="chip" id="chipSolo" title="選択中のサブツールだけ表示">ソロ</button>
+    <button class="chip" id="chipPG" title="ポリグループを色分け表示（Shift+F）">グループ</button>
+    <button class="chip" id="chipGizmo" title="G（Escで終了）">ギズモ G</button>
+    <hr>
+    <button class="chip" data-view="front" title="正面から見る">正面</button>
+    <button class="chip" data-view="right" title="右から見る">右</button>
+    <button class="chip" data-view="top" title="上から見る">上</button>
+    <button class="chip" data-view="back" title="後ろから見る">後ろ</button>
+    <hr class="gz">
+    <button class="chip gz on" id="gzMove" data-mode="translate">移動</button>
+    <button class="chip gz" id="gzRot" data-mode="rotate">回転</button>
+    <button class="chip gz" id="gzScale" data-mode="scale">拡大縮小</button>
+  </nav>
+  <main id="view">
     <div id="toast"></div>
     <svg id="lazyLine" aria-hidden="true"><line id="lazyL" stroke="#ffd49a" stroke-width="1.5" stroke-dasharray="3 3" opacity=".8" visibility="hidden"/><polygon id="lassoPoly" points="" visibility="hidden"/></svg>
     <div class="overlay" id="stats"></div>
@@ -220,7 +282,18 @@ dl.keys dd{margin:0;color:var(--muted)}
   </main>
 
   <aside id="panel">
-    <section id="subSec">
+    <div class="ptabs" id="ptabs">
+      <div class="ptab-row" role="tablist" aria-label="プロパティの分類">
+        <button class="ptab" role="tab" data-tab="parts" title="サブツール・細分化・マスク・ポリグループ・レイヤー（Alt+1）">パーツ</button>
+        <button class="ptab" role="tab" data-tab="brush" title="ブラシ・アルファ・ノイズ・色塗り（Alt+2）">ブラシ</button>
+        <button class="ptab" role="tab" data-tab="model" title="ポリゴン編集・変形・ZSphere・ブーリアンなど（Alt+3）">モデル</button>
+        <button class="ptab" role="tab" data-tab="mesh" title="リメッシュ・リトポ・削減・修復（Alt+4）">メッシュ</button>
+        <button class="ptab" role="tab" data-tab="view" title="表示の設定・マテリアル・下絵・レンダリング（Alt+5）">表示</button>
+        <button class="ptab" role="tab" data-tab="file" title="プロジェクト・書き出し・UV・連携（Alt+6）">ファイル</button>
+      </div>
+      <input type="search" id="ptabQ" placeholder="設定を探す（すべてのタブから）" autocomplete="off" aria-label="設定を探す">
+    </div>
+    <section data-tab="parts" id="subSec">
       <h2>サブツール <span id="subCount"></span></h2>
       <ul class="subs" id="subList" role="listbox" aria-label="サブツール"></ul>
       <div class="grid2">
@@ -239,7 +312,7 @@ dl.keys dd{margin:0;color:var(--muted)}
       <p class="note">クリックで選択、名前をダブルクリックで名前変更。ビュー上で別のパーツをダブルクリックしても切り替えられます。造形できるのは選択中のサブツールだけです。</p>
     </section>
 
-    <section id="lvSec">
+    <section data-tab="parts" id="lvSec">
       <h2>細分化レベル <span id="lvLabel"></span></h2>
       <div class="grid2">
         <button class="btn" id="lvDown" title="Shift+D">↓ 下げる <small>Shift+D</small></button>
@@ -256,7 +329,7 @@ dl.keys dd{margin:0;color:var(--muted)}
       <p class="note">低いレベルで大きな形を直すと、高いレベルの細部はそのまま付いてきます。高いレベルで彫った内容も低いレベルに反映されます。リトポしたパーツを細分化して「形を写す」と、元の細部を写し取れます。</p>
     </section>
 
-    <section>
+    <section data-tab="brush">
       <h2>ブラシ</h2>
       <div><span id="brushName"></span> <span id="brushDesc"></span></div>
       <div class="row"><label for="size">サイズ (px)</label><output id="sizeOut"></output></div>
@@ -307,7 +380,7 @@ dl.keys dd{margin:0;color:var(--muted)}
       <p class="note">強さ・減衰カーブ・ストローク・アルファはブラシごとに記憶されます。ペンタブレットの筆圧で強さが変わります。よく使う組み合わせ（ブラシ・サイズ・アルファなど）は名前を付けて保存できます。</p>
     </section>
 
-    <section>
+    <section data-tab="model">
       <h2>ポリゴン編集（ZModeler 風）</h2>
       <div class="row"><input type="checkbox" id="peOn"><label for="peOn">ポリゴン編集モード <span class="note">Q</span></label></div>
       <div class="grid3" id="peActs">
@@ -343,7 +416,7 @@ dl.keys dd{margin:0;color:var(--muted)}
       <p class="note">低ポリゴンのパーツを、面と辺の単位で直接作り変えます。カーソルの下の対象が光り、クリック（押し出す・はめ込む・面を動かすはドラッグ）で実行します。背景のドラッグで視点は回せます。細分化レベルがないパーツで使えます（三角形のパーツは自動で四角にまとめます）。「なめらか表示」は細分化した仕上がりを低ポリゴンのまま見せます（ダイナミック細分化）。クリースした辺（水色）は細分化しても丸くなりません。</p>
     </section>
 
-    <section id="defSec">
+    <section data-tab="model" id="defSec">
       <h2>変形・モーフ・抜き出し・クリップ</h2>
       <div class="row"><label for="dfAxis">軸</label><select id="dfAxis"><option value="1">Y（縦）</option><option value="0">X（横）</option><option value="2">Z（奥）</option></select></div>
       <div class="row"><label for="dfAmt">量</label><output id="dfAmtOut">0.30</output></div>
@@ -444,7 +517,7 @@ dl.keys dd{margin:0;color:var(--muted)}
       <p class="note">選択中のパーツを布や風船のように動かします（Dynamics 風）。マスクした所は固定されます。「布をかける」は表示中のほかのパーツと床にぶつかります。服やカーテンは、薄い板（平面・抜き出したパーツなど）をパーツの上に置いてから使います。途中で「止める」を押すと、その形で止まります。元に戻すで始める前に戻ります。</p>
     </section>
 
-    <section>
+    <section data-tab="brush">
       <h2>表面ノイズ</h2>
       <div class="row"><label for="nzType">種類</label><select id="nzType"><option value="smooth">なめらか（凹凸）</option><option value="rock">岩肌（尾根）</option><option value="cell">細胞（ウロコ・石畳）</option><option value="pore">細かい粒（肌・鋳物）</option></select></div>
       <div class="row"><label for="nzScale">模様の大きさ</label><output id="nzScaleOut">0.10</output></div>
@@ -460,7 +533,7 @@ dl.keys dd{margin:0;color:var(--muted)}
       <p class="note">選択中のパーツの表面を、法線の方向にノイズで凹凸にします（NoiseMaker 風）。大きさと強さはモデルの大きさに対する割合です。プレビュー中にスライダーを動かすと表示が変わります。マスクした所は変わりません。</p>
     </section>
 
-    <section id="refSec">
+    <section data-tab="view" id="refSec">
       <h2>下絵（参考画像）</h2>
       <div class="grid2"><button class="btn" id="refLoad">画像を読み込む…</button><button class="btn" id="refClear" disabled>下絵を消す</button></div>
       <input type="file" id="refFile" accept="image/png,image/jpeg,image/webp,image/bmp,image/gif" hidden>
@@ -476,7 +549,7 @@ dl.keys dd{margin:0;color:var(--muted)}
       <p class="note">正面・横の写真や三面図を置いて、形を合わせるのに使います。「画面に重ねる」で見えている位置のまま「投影」すると、手前に見えている面にその画像の色がポリペイントとして塗られます（マスクした所は塗られません）。</p>
     </section>
 
-    <section id="toolSec">
+    <section data-tab="parts" id="toolSec">
       <h2>パーツの道具</h2>
       <div class="row"><label for="arCount">配列：個数</label><input type="number" id="arCount" min="2" max="50" value="5"></div>
       <div class="row"><label for="arAxis">並べる向き</label><select id="arAxis"><option value="0">X（横）</option><option value="1">Y（縦）</option><option value="2">Z（奥）</option></select></div>
@@ -495,7 +568,7 @@ dl.keys dd{margin:0;color:var(--muted)}
       <p class="note">配列は元のパーツを並べた新しいサブツールを作ります（元は非表示）。「片側を写してつなぐ」は左右対称でないパーツを、残す側に合わせて左右対称に作り直します。</p>
     </section>
 
-    <section id="fbSec">
+    <section data-tab="model" id="fbSec">
       <h2>毛（FiberMesh 風）</h2>
       <div class="row"><label for="fbCount">本数</label><input type="number" id="fbCount" min="10" max="20000" step="100" value="1500"></div>
       <div class="row"><label for="fbLen">長さ</label><output id="fbLenOut">0.15</output></div>
@@ -512,7 +585,7 @@ dl.keys dd{margin:0;color:var(--muted)}
       <p class="note">マスクした所から毛（髪・毛皮・草）を生やして、新しいサブツールにします。根元の色はポリペイントの色を引き継ぎます。</p>
     </section>
 
-    <section id="t3Sec">
+    <section data-tab="model" id="t3Sec">
       <h2>文字・画像から立体</h2>
       <div class="row"><label for="t3Text">文字</label><input type="text" id="t3Text" value="BOARD" style="width:150px"></div>
       <div class="row"><label for="t3Font">書体</label><select id="t3Font"><option value="sans bold">ゴシック（太字）</option><option value="sans">ゴシック</option><option value="serif bold">明朝（太字）</option><option value="mono bold">等幅（太字）</option></select></div>
@@ -523,7 +596,7 @@ dl.keys dd{margin:0;color:var(--muted)}
       <p class="note">文字やロゴ・シルエット画像を、厚みのある立体にして新しいサブツールにします（看板・ネームプレート・エンブレム）。画像は透明な所を除いた部分、透明がない画像は暗い部分が形になります。</p>
     </section>
 
-    <section id="rpSec">
+    <section data-tab="mesh" id="rpSec">
       <h2>修復・3Dプリントの確認</h2>
       <div class="grid3">
         <button class="btn" id="rpHoles" title="開いている穴をふさぎます">穴を埋める</button>
@@ -536,7 +609,7 @@ dl.keys dd{margin:0;color:var(--muted)}
       <p class="note">取り込んだスキャンデータや、3Dプリント前の確認に使います。オーバーハングは STL と同じく上方向に積み上げる場合で、赤い所にはサポートが必要です。距離は STL の高さ設定で書き出したときの mm です。</p>
     </section>
 
-    <section id="curveSec">
+    <section data-tab="model" id="curveSec">
       <h2>チューブ・並べる（線に沿って作る）</h2>
       <div class="row"><label for="cvThick">太さ（ブラシサイズに対する割合）</label><output id="cvThickOut">0.35</output></div>
       <input type="range" id="cvThick" min="0.05" max="1" step="0.01" value="0.35">
@@ -549,7 +622,7 @@ dl.keys dd{margin:0;color:var(--muted)}
       <p class="note">ツールバーの「チューブ」「並べる」で、モデルの表面をなぞると新しいサブツールとして作られます（左右対称がオンなら反対側にも）。太さはブラシサイズで決まります。</p>
     </section>
 
-    <section id="zsSec">
+    <section data-tab="model" id="zsSec">
       <h2>ZSphere（球をつないで形を作る）</h2>
       <button class="btn primary full" id="zsStart">ZSphere を始める</button>
       <div class="row" style="margin-top:6px"><label for="zsPreset" title="人・動物などの骨組みを ZSphere で置きます（マネキン）">マネキン</label><select id="zsPreset"><option value="human">人（Aポーズ）</option><option value="bust">胸像（頭と肩）</option><option value="quad">四足動物</option><option value="bird">鳥</option><option value="hand">手（右手）</option></select><button class="btn" id="zsPresetGo">置く</button></div>
@@ -567,13 +640,13 @@ dl.keys dd{margin:0;color:var(--muted)}
       <p class="note" id="zsNote">人や動物の骨組みのように、球をつないでベースの形を作ります。</p>
     </section>
 
-    <section id="matSec">
+    <section data-tab="view" id="matSec">
       <h2>マテリアル（素材）</h2>
       <div class="mats" id="matGrid" role="listbox" aria-label="マテリアル"></div>
       <p class="note" id="matName"></p>
     </section>
 
-    <section id="vsSec">
+    <section data-tab="view" id="vsSec">
       <h2>表示の設定</h2>
       <div class="row"><label for="vsFov">画角（小さいほど望遠・ゆがみが少ない）</label><output id="vsFovOut">35</output></div>
       <input type="range" id="vsFov" min="10" max="90" step="1" value="35">
@@ -588,7 +661,7 @@ dl.keys dd{margin:0;color:var(--muted)}
       <p class="note">光の向きと強さは「標準（ライト）」マテリアルとレンダリングに効きます。元に戻せる回数を増やすと、細かいメッシュではメモリを多く使います。</p>
     </section>
 
-    <section id="maskSec">
+    <section data-tab="parts" id="maskSec">
       <h2>マスク</h2>
       <div class="row"><label for="lassoMode">背景を Ctrl+ドラッグ</label><select id="lassoMode"><option value="lasso">投げ縄</option><option value="rect">四角</option></select></div>
       <div class="grid3">
@@ -604,7 +677,7 @@ dl.keys dd{margin:0;color:var(--muted)}
       <p class="note">背景で Ctrl+ドラッグ：囲んだ所をマスク（Ctrl+Alt で解除）。背景で Ctrl+クリック：マスク反転。モデル上の Ctrl+ドラッグはマスクブラシです。</p>
     </section>
 
-    <section id="pgSec">
+    <section data-tab="parts" id="pgSec">
       <h2>ポリグループ <span id="pgCount"></span></h2>
       <div class="row"><input type="checkbox" id="pgShow"><label for="pgShow">グループを色分け表示 <span class="note">Shift+F</span></label></div>
       <div class="grid2">
@@ -624,7 +697,7 @@ dl.keys dd{margin:0;color:var(--muted)}
       <p class="note">Ctrl+Shift+クリック：そのグループだけ表示。Ctrl+Shift+Alt+クリック：そのグループを隠す。背景で Ctrl+Shift+ドラッグ：囲んだ所だけ表示（+Alt で囲んだ所を隠す）。背景で Ctrl+Shift+クリック：すべて表示。隠した所はブラシで変形しません。グループは細分化レベル・プロジェクト保存に引き継がれます。</p>
     </section>
 
-    <section id="laySec">
+    <section data-tab="parts" id="laySec">
       <h2>レイヤー <span id="layCount"></span></h2>
       <ul class="subs" id="layList" aria-label="レイヤー"></ul>
       <div class="row"><label for="layI">強さ</label><output id="layIOut">1.00</output></div>
@@ -637,7 +710,7 @@ dl.keys dd{margin:0;color:var(--muted)}
       <p class="note">赤い●が付いたレイヤーに、造形の結果が記録されます。あとから「強さ」で効き具合を変えたり、目のアイコンで一時的に消したりできます。細分化レベルを変えたり作り直したりすると、レイヤーは確定されます。</p>
     </section>
 
-    <section id="paintSec">
+    <section data-tab="brush" id="paintSec">
       <h2>ポリペイント（色塗り）</h2>
       <div class="row"><label for="paintColor">塗る色</label><input type="color" id="paintColor" value="#9c4a3c"></div>
       <div class="swatches" id="swatches" aria-label="色見本"></div>
@@ -651,7 +724,7 @@ dl.keys dd{margin:0;color:var(--muted)}
       <p class="note">ツールバーの「ペイント」ブラシで塗ります（Alt で元の色に戻す）。マスクした所には塗られません。色は細分化レベル・リメッシュ・リトポにも引き継がれ、OBJ（頂点カラー）と GLB に書き出されます。</p>
     </section>
 
-    <section id="alphaSec">
+    <section data-tab="brush" id="alphaSec">
       <h2>アルファ（ブラシの型）</h2>
       <div class="alphas" id="alphaGrid" role="listbox" aria-label="アルファ"></div>
       <div class="alpha-opts">
@@ -663,7 +736,7 @@ dl.keys dd{margin:0;color:var(--muted)}
       <p class="note" id="alphaNote">白い所ほど強く効きます。画像はビューにドラッグ＆ドロップでも追加できます。細かい模様は「細分化」でポリゴンを増やすときれいに出ます。</p>
     </section>
 
-    <section>
+    <section data-tab="mesh">
       <h2>ワンクリック処理</h2>
       <div class="row"><label for="smoothIter">全体スムーズの回数</label><input type="number" id="smoothIter" min="1" max="50" value="3"></div>
       <div class="grid2">
@@ -678,7 +751,7 @@ dl.keys dd{margin:0;color:var(--muted)}
       <p class="note">マスクした部分はブラシや全体スムーズで変形しません。</p>
     </section>
 
-    <section>
+    <section data-tab="mesh">
       <h2>リメッシュ（作り直し）</h2>
       <div class="row"><label for="rmRes">細かさ</label><output id="rmResOut"></output></div>
       <input type="range" id="rmRes" min="32" max="320" step="8" value="128">
@@ -691,7 +764,7 @@ dl.keys dd{margin:0;color:var(--muted)}
       <p class="note">ポリゴンを均一な細かさで作り直します。引き伸ばして荒くなった所が直り、重なったパーツは1つにつながります。「細かさ」より細い部分は消えることがあります。</p>
     </section>
 
-    <section>
+    <section data-tab="mesh">
       <h2>自動リトポ（四角ポリゴン）</h2>
       <div class="row"><label for="rtMode">並び方</label><select id="rtMode"><option value="flow" selected>形に沿う</option><option value="grid">格子状</option></select></div>
       <div class="row"><label for="rtTarget">目標ポリゴン数</label><input type="number" id="rtTarget" min="100" max="200000" step="100" value="3000"></div>
@@ -712,7 +785,7 @@ dl.keys dd{margin:0;color:var(--muted)}
       <p class="note">選択中のパーツを、指定した数前後の四角ポリゴンで作り直した新しいサブツールを作ります（元のパーツは非表示で残ります）。四角ポリゴンは OBJ 書き出しでも四角のまま出力されます。「形に沿う」は面の向きに沿って四角を並べ、角やエッジに沿ってループを通します。左右対称にすると X=0 の面にループが乗り、左右がぴったり同じになります。「格子状」は流れが格子に沿う、より単純な方式です。</p>
     </section>
 
-    <section>
+    <section data-tab="mesh">
       <h2>ポリゴン削減</h2>
       <div class="row"><label for="decRatio">残す割合 (%)</label><output id="decRatioOut">25</output></div>
       <input type="range" id="decRatio" min="2" max="90" step="1" value="25">
@@ -722,7 +795,7 @@ dl.keys dd{margin:0;color:var(--muted)}
       <p class="note">形・色・マスクの境目をできるだけ保ったまま三角形を減らします（ゲームや Web 用の軽量化向け）。</p>
     </section>
 
-    <section id="agentSec">
+    <section data-tab="file" id="agentSec">
       <h2>Claude と連携（MCP）</h2>
       <div class="row"><input type="checkbox" id="agentOn"><label for="agentOn">Claude からの操作を許可</label></div>
       <div class="grid2"><button class="btn" id="agentCopyDesktop" title="Claude Desktop の設定ファイル（claude_desktop_config.json）に貼り付ける内容をコピーします">Claude Desktop 用の設定をコピー</button><button class="btn" id="agentCopyCode" title="Claude Code のターミナルで実行するコマンドをコピーします">Claude Code 用のコマンドをコピー</button></div>
@@ -730,7 +803,7 @@ dl.keys dd{margin:0;color:var(--muted)}
       <p class="note">Claude Desktop や Claude Code から、チャットで頼んで BoardPainter を操作できます（形を置く・押し出す・面取り・ブーリアン・細分化・色・画面の確認・書き出し）。設定をコピーして Claude 側に追加し、ここで「許可」をオンにしてください。受け付けるのはこのパソコンの中からの接続だけです。書き出したファイルはホームの BoardPainterLink/exports に保存されます。</p>
     </section>
 
-    <section id="linkSec">
+    <section data-tab="file" id="linkSec">
       <h2>Blender と連携（GoZ 風）</h2>
       <div class="grid2"><button class="btn primary" id="linkSend" title="選択中のパーツ（今のレベル）を Blender へ送ります">Blender へ送る</button><button class="btn" id="linkSendAll" title="表示中のパーツをすべて Blender へ送ります">表示中を全部送る</button></div>
       <div class="row" style="margin-top:6px"><input type="checkbox" id="linkOn"><label for="linkOn">Blender から受け取る（送られたらすぐ読み込む）</label></div>
@@ -738,7 +811,7 @@ dl.keys dd{margin:0;color:var(--muted)}
       <p class="note" id="linkInfo">Blender に付属のアドオン（boardpainter_link.py）を入れると、ボタン1つでパーツをやり取りできます（Blender の 3D ビューのサイドバー →「BoardPainter」タブ）。同じ名前で頂点の数が同じパーツが戻ってきたら、形だけを更新します（細分化レベル・色・マスクはそのまま）。受け渡しはホームの「BoardPainterLink」フォルダーで行います。</p>
     </section>
 
-    <section>
+    <section data-tab="model">
       <h2>ブーリアン（パーツ同士の演算）</h2>
       <div class="row"><label for="boolOther">相手のパーツ</label><select id="boolOther" style="width:150px"></select></div>
       <div class="row"><label for="boolMethod">方式</label><select id="boolMethod" style="width:150px"><option value="exact">正確（角を残す）</option><option value="voxel">ボクセル（穴があっても可）</option></select></div>
@@ -756,7 +829,7 @@ dl.keys dd{margin:0;color:var(--muted)}
       <p class="note" id="boolLiveInfo">オンにした時の「選択中のパーツ」と「相手のパーツ」の演算結果を、軽い精度で表示し続けます。どちらかをギズモで動かしたり彫ったりすると、すぐに結果が変わります。「確定」で、リメッシュの「細かさ」の精度で作り直します。</p>
     </section>
 
-    <section id="texSec">
+    <section data-tab="file" id="texSec">
       <h2>UV とテクスチャ</h2>
       <canvas id="uvCv" width="512" height="512" aria-label="UV 配置"></canvas>
       <p class="note" id="uvInfo">UV はまだありません</p>
@@ -774,7 +847,7 @@ dl.keys dd{margin:0;color:var(--muted)}
       <p class="note">リトポした軽いパーツで使います：UV を展開 → 「焼き付け元」に元の細かいパーツ（または同じパーツの一番上の細分化レベル）を選んで焼き付け。細部と色がテクスチャになり、GLB にはテクスチャ込み、OBJ には UV 付きで書き出されます。ディスプレイスメント（EXR・32bit）は、UV のあるレベルから一番上の細分化レベルまでの細部を、レイを飛ばさずに正確に写します（単位はモデルの座標＝FBX / OBJ と同じ）。</p>
     </section>
 
-    <section>
+    <section data-tab="view">
       <h2>レンダリング（画像に書き出し）</h2>
       <div class="row"><label for="rdScale">大きさ</label><select id="rdScale"><option value="1">画面と同じ</option><option value="2" selected>2倍</option><option value="3">3倍</option></select></div>
       <div class="row"><label for="rdAO">陰影（AO）の品質</label><select id="rdAO"><option value="0">なし</option><option value="8">標準</option><option value="16" selected>高い</option></select></div>
@@ -799,7 +872,7 @@ dl.keys dd{margin:0;color:var(--muted)}
       <p class="note">今見ている角度で、影と隙間の陰影（アンビエントオクルージョン）を付けた高画質の画像を作ります。色はポリペイントの色を使います。</p>
     </section>
 
-    <section>
+    <section data-tab="file">
       <h2>書き出し</h2>
       <div class="row"><label for="hlThick">中空にする壁の厚さ (mm)</label><input type="number" id="hlThick" min="0.5" max="20" step="0.1" value="2"></div>
       <button class="btn full" id="hlGo" title="3Dプリントのレジンや材料を減らすため、中を空洞にします">中を空ける（3Dプリント用）</button>
@@ -809,7 +882,7 @@ dl.keys dd{margin:0;color:var(--muted)}
       <p class="note">表示中のサブツールを書き出します（OBJ/GLBはパーツごとに分かれ、STLは1つにまとまります）。STLはZ軸上向き・底面Z=0・指定の高さに自動で合わせます。OBJ/GLBは見たままの向き（Y軸上向き）で書き出します。</p>
     </section>
 
-    <section>
+    <section data-tab="file">
       <h2>プロジェクト</h2>
       <p class="note" id="projInfo"></p>
       <div class="grid2">
@@ -819,7 +892,7 @@ dl.keys dd{margin:0;color:var(--muted)}
       <p class="note">.bpp ファイルに、すべてのサブツール・マスク・表示状態・カメラ位置を保存します。作業は自動でも保存され、次に起動したときに復元されます。</p>
     </section>
 
-    <section>
+    <section data-tab="view">
       <h2>ショートカット</h2>
       <dl class="keys">
         <dt>1–9, 0</dt><dd>ブラシ切り替え</dd>
@@ -846,6 +919,7 @@ dl.keys dd{margin:0;color:var(--muted)}
         <dt>Ctrl+R</dt><dd>リメッシュ</dd>
         <dt>G</dt><dd>ギズモ（移動・回転・拡大）</dd>
         <dt>ダブルクリック</dt><dd>パーツを選択</dd>
+        <dt>Alt+1–6</dt><dd>右パネルのタブ切り替え</dd>
         <dt>F11</dt><dd>全画面表示</dd>
       </dl>
     </section>
@@ -4672,7 +4746,7 @@ const VIEW_DEF = { fov: 35, lightAng: 54, lightK: 1, bg: 'dark', undo: 40 };
 let VS = { ...VIEW_DEF };
 try { VS = { ...VIEW_DEF, ...JSON.parse(localStorage.getItem('bp-view') || '{}') }; } catch {}
 const BGS = {
-  dark:  'radial-gradient(ellipse at 50% 42%,#3c3d44 0%,#25262b 58%,#1b1c1f 100%)',
+  dark:  'radial-gradient(ellipse at 50% 40%,#525252 0%,#353535 58%,#232323 100%)',
   gray:  'radial-gradient(ellipse at 50% 42%,#8d8f96 0%,#5f6168 70%,#4a4c52 100%)',
   light: 'radial-gradient(ellipse at 50% 42%,#f2f1ee 0%,#d9d8d3 70%,#c6c5c0 100%)',
   black: '#000',
@@ -7075,6 +7149,7 @@ function refreshBrushUI() {
     ? '白い所ほど強く効きます。画像はビューにドラッグ＆ドロップでも追加できます。細かい模様は「細分化」でポリゴンを増やすときれいに出ます。'
     : `「${b.name}」ではアルファは使われません。`;
   syncAlphaGrid();
+  syncShelf();
   updateStats();
 }
 function bindRange(id, outId, key, fmt) {
@@ -7324,7 +7399,119 @@ function renameSub(r, nm) {
   inp.onblur = () => finish(true);
   inp.onclick = ev => ev.stopPropagation();
 }
-$('btnPanel').onclick = () => $('app').classList.toggle('panel-open');
+// Right panel tabs: show only the sections of the chosen tab; the search box searches every tab
+(() => {
+  const aside = $('panel'), secs = [...aside.querySelectorAll('section[data-tab]')], btns = [...aside.querySelectorAll('.ptab')], q = $('ptabQ');
+  // project first in the file tab
+  aside.insertBefore($('projSave').closest('section'), aside.querySelector('section[data-tab="file"]'));
+  let tab = 'parts';
+  try { const t = localStorage.getItem('bp-ptab'); if (btns.some(b => b.dataset.tab === t)) tab = t; } catch {}
+  const apply = () => {
+    const k = q.value.trim().toLowerCase();
+    const hit = new Set();
+    for (const s of secs) {
+      const show = k ? s.textContent.toLowerCase().includes(k) || [...s.querySelectorAll('[title],[placeholder]')].some(e => ((e.title || '') + (e.placeholder || '')).toLowerCase().includes(k)) : s.dataset.tab === tab;
+      s.classList.toggle('tab-off', !show);
+      if (show && !s.hidden) hit.add(s.dataset.tab);
+    }
+    for (const b of btns) { const on = !k && b.dataset.tab === tab; b.classList.toggle('on', on); b.setAttribute('aria-selected', on); b.classList.toggle('dim', !!k && !hit.has(b.dataset.tab)); }
+    aside.classList.toggle('searching', !!k); // search results show folded sub-palettes open
+  };
+  const setTab = t => { tab = t; q.value = ''; try { localStorage.setItem('bp-ptab', t); } catch {} apply(); aside.scrollTop = 0; };
+  for (const b of btns) b.onclick = () => setTab(b.dataset.tab);
+  q.addEventListener('input', apply);
+  q.addEventListener('keydown', e => { if (e.key === 'Escape') { q.value = ''; apply(); q.blur(); } e.stopPropagation(); });
+  addEventListener('keydown', e => {
+    if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+    const n = +e.key; if (n >= 1 && n <= btns.length) { e.preventDefault(); setTab(btns[n - 1].dataset.tab); }
+  });
+  apply();
+})();
+
+// ---------------- ZBrush-style chrome: slider bars, top brush shelf, folding sub-palettes ----------------
+var shelfReady = false; // refreshBrushUI() can run before this block; syncShelf() waits for it
+function paintRange(el) {
+  const mn = el.min === '' ? 0 : +el.min, mx = el.max === '' ? 100 : +el.max;
+  el.style.setProperty('--p', (Math.min(1, Math.max(0, (+el.value - mn) / ((mx - mn) || 1))) * 100).toFixed(2) + '%');
+}
+function syncShelf() {
+  if (!shelfReady) return;
+  for (const id of ['size', 'strength', 'falloff', 'strokeType']) $(id)._mirror.sync();
+  const b = BRUSH[S.brush];
+  $('zsBrushKey').textContent = b.short || ''; $('zsBrushName').textContent = b.name;
+  const inv = $('invert').checked;
+  $('zsAdd').classList.toggle('on', !inv); $('zsSub').classList.toggle('on', inv);
+}
+(() => {
+  const aside = $('panel');
+  // Code sets slider values directly in many places; hook the setter so the bar fill and the shelf copies follow.
+  for (const proto of [HTMLInputElement.prototype, HTMLSelectElement.prototype]) {
+    const d = Object.getOwnPropertyDescriptor(proto, 'value');
+    Object.defineProperty(proto, 'value', { configurable: true, enumerable: d.enumerable, get: d.get,
+      set(v) { d.set.call(this, v); if (this.type === 'range') paintRange(this); if (this._mirror) this._mirror.sync(); } });
+  }
+  document.addEventListener('input', e => { if (e.target.type === 'range') paintRange(e.target); }, true);
+  new MutationObserver(ms => { for (const m of ms) for (const n of m.addedNodes) if (n.querySelectorAll) { if (n.type === 'range') paintRange(n); n.querySelectorAll('input[type=range]').forEach(paintRange); } })
+    .observe(document.body, { childList: true, subtree: true });
+
+  // "label [bar] value" rows → one bar with the label and value drawn inside it
+  for (const r of aside.querySelectorAll('input[type=range]')) {
+    const row = r.previousElementSibling;
+    if (!row || !row.classList.contains('row') || row.id || row.hidden || row.children.length !== 2) continue;
+    const lab = row.querySelector(':scope > label'), out = row.querySelector(':scope > output');
+    if (!lab || !out) continue;
+    const w = document.createElement('div'); w.className = 'zsl';
+    if (r.title) w.title = r.title;
+    row.replaceWith(w); w.append(r, lab, out);
+  }
+  document.querySelectorAll('input[type=range]').forEach(paintRange);
+
+  // top shelf: copies of the brush controls; the panel controls stay the source of truth
+  const mirror = (shelf, real, evt, out, fmt) => {
+    real._mirror = { sync() {
+      if (shelf.tagName === 'SELECT' && shelf.options.length !== real.options.length) shelf.innerHTML = real.innerHTML;
+      shelf.value = real.value; shelf.disabled = real.disabled;
+      if (out) out.textContent = fmt(+real.value);
+    } };
+    shelf.addEventListener(evt, () => { real.value = shelf.value; real.dispatchEvent(new Event(evt, { bubbles: true })); });
+    real.addEventListener(evt, () => real._mirror.sync());
+  };
+  mirror($('zsSize'), $('size'), 'input', $('zsSizeOut'), v => Math.round(v));
+  mirror($('zsStr'), $('strength'), 'input', $('zsStrOut'), v => v.toFixed(2));
+  mirror($('zsFall'), $('falloff'), 'change');
+  mirror($('zsStroke'), $('strokeType'), 'change');
+  const setInv = v => { const c = $('invert'); c.checked = v; c.dispatchEvent(new Event('change', { bubbles: true })); syncShelf(); };
+  $('zsAdd').onclick = () => setInv(false);
+  $('zsSub').onclick = () => setInv(true);
+  $('invert').addEventListener('change', () => syncShelf());
+  $('zsBrush').onclick = () => pickerOpen();
+  shelfReady = true; syncShelf();
+
+  // folding sub-palettes: click a heading to fold it, Shift+click to open only that one in its tab
+  let shut;
+  try { shut = new Set(JSON.parse(localStorage.getItem('bp-shut') || '[]')); } catch { shut = new Set(); }
+  const secs = [...aside.querySelectorAll('section[data-tab]')];
+  const keyOf = s => s.id || s.dataset.tab + ':' + s.querySelector('h2').firstChild.textContent.trim();
+  const setShut = (s, v) => {
+    s.classList.toggle('shut', v); s.querySelector('h2').setAttribute('aria-expanded', !v);
+    v ? shut.add(keyOf(s)) : shut.delete(keyOf(s));
+  };
+  const save = () => { try { localStorage.setItem('bp-shut', JSON.stringify([...shut])); } catch {} };
+  for (const s of secs) {
+    const h = s.querySelector('h2');
+    h.tabIndex = 0; h.setAttribute('role', 'button');
+    h.title = 'クリックで折りたたむ／開く（Shift+クリックでこれだけ開く）';
+    setShut(s, shut.has(keyOf(s)));
+    const toggle = e => {
+      if (e.shiftKey) for (const o of secs) { if (o.dataset.tab === s.dataset.tab) setShut(o, o !== s); }
+      else setShut(s, !s.classList.contains('shut'));
+      save();
+    };
+    h.addEventListener('click', toggle);
+    h.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); toggle(e); } });
+  }
+})();
+$('btnPanel').onclick =() => $('app').classList.toggle('panel-open');
 
 // mask / polygroup / layer / material panels
 $('mkGrow').onclick = () => maskOp('grow'); $('mkShrink').onclick = () => maskOp('shrink');
