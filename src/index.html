@@ -382,6 +382,13 @@ dl.keys dd{margin:0;color:var(--muted)}
       <p class="note">強さ・減衰カーブ・ストローク・アルファはブラシごとに記憶されます。ペンタブレットの筆圧で強さが変わります。よく使う組み合わせ（ブラシ・サイズ・アルファなど）は名前を付けて保存できます。</p>
     </section>
 
+    <section data-tab="brush" id="symSec">
+      <h2>対称（シンメトリー）</h2>
+      <div class="row"><span style="flex:1">X は画面上の「対称 X」（X キー）</span><input type="checkbox" id="symY"><label for="symY">Y</label><input type="checkbox" id="symZ"><label for="symZ">Z</label></div>
+      <div class="row"><label for="symRad" title="軸のまわりに同じ形を等間隔に繰り返して彫ります（花・ホイール・装飾）">放射状（回数）</label><select id="symRad"><option value="0">オフ</option><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option><option>8</option><option>10</option><option>12</option><option>16</option><option>24</option></select><select id="symRadAx"><option value="1">Y 軸</option><option value="0">X 軸</option><option value="2">Z 軸</option></select></div>
+      <p class="note">彫る・盛る・整える系のブラシで、X・Y・Z の鏡写しと放射状の繰り返しを組み合わせて使えます（例：対称 X＋放射状 8）。ムーブ系・ポーズ・部品を置く などは X の対称だけに対応しています。</p>
+    </section>
+
     <section data-tab="model">
       <h2>ポリゴン編集（ZModeler 風）</h2>
       <div class="row"><input type="checkbox" id="peOn"><label for="peOn">ポリゴン編集モード <span class="note">Q</span></label></div>
@@ -559,6 +566,8 @@ dl.keys dd{margin:0;color:var(--muted)}
 
     <section data-tab="parts" id="toolSec">
       <h2>パーツの道具</h2>
+      <button class="btn full" id="tpmGo" title="表示中のパーツを 1 つにまとめて、まとめてポーズを付けます（Transpose Master 風）">全パーツでポーズ（まとめる）</button>
+      <button class="btn primary full" id="tpmBack" hidden>元のパーツに戻す</button>
       <div class="row"><label for="arCount">配列：個数</label><input type="number" id="arCount" min="2" max="50" value="5"></div>
       <div class="row"><label for="arAxis">並べる向き</label><select id="arAxis"><option value="0">X（横）</option><option value="1">Y（縦）</option><option value="2">Z（奥）</option></select></div>
       <div class="row"><label for="arGap">間隔（大きさに対して）</label><output id="arGapOut">1.20</output></div>
@@ -889,6 +898,7 @@ dl.keys dd{margin:0;color:var(--muted)}
       <div class="row"><span id="tlInfo" class="note" style="margin:0">キーはありません</span></div>
       <div class="row"><label for="tlSecs">動画の長さ（秒）</label><output id="tlSecsOut">8</output></div>
       <input type="range" id="tlSecs" min="2" max="60" step="1" value="8">
+      <div class="row"><input type="checkbox" id="tlVis" checked><label for="tlVis" title="キーを追加したときに表示していたパーツを、そのキーから表示します">パーツの表示もキーにする</label></div>
       <div class="row"><input type="checkbox" id="tlLoop"><label for="tlLoop">最後のキーから最初に戻る（ループ）</label></div>
       <button class="btn full" id="tlRec" disabled>タイムラインを動画に書き出す（WebM）</button>
       <p class="note">今見ている角度で、影と隙間の陰影（アンビエントオクルージョン）を付けた高画質の画像を作ります。色はポリペイントの色を使います。</p>
@@ -2213,6 +2223,31 @@ function makeFrame(N, ref, cfg, brush) {
     gm: cfg.groupMask && stroke && stroke.gm !== undefined ? stroke.gm : -1, gmM: cfg.groupMask && stroke && stroke.gmM !== undefined ? stroke.gmM : -1, cav: cfg.cavity === 'cavity' ? 1 : cfg.cavity === 'peak' ? -1 : 0,
   };
 }
+// symmetry: reflections across the chosen axes combined with radial copies around an axis (3x3 orthogonal
+// matrices, row-major, identity left out). X alone = the classic mirror.
+let symCache = null;
+function symTransforms() {
+  const key = `${S.sym}|${S.symY}|${S.symZ}|${S.radial}|${S.radAx}`;
+  if (symCache && symCache.key === key) return symCache.T;
+  const mul = (a, b) => { const o = new Array(9).fill(0); for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) for (let k = 0; k < 3; k++) o[i*3+j] += a[i*3+k] * b[k*3+j]; return o; };
+  const refl = a => { const m = [1, 0, 0, 0, 1, 0, 0, 0, 1]; m[a*4] = -1; return m; };
+  let M = [[1, 0, 0, 0, 1, 0, 0, 0, 1]];
+  for (const [on, a] of [[S.sym, 0], [S.symY, 1], [S.symZ, 2]]) if (on) M = M.concat(M.map(m => mul(refl(a), m)));
+  const n = S.radial | 0, ax = S.radAx | 0, out = [];
+  for (let k = 0; k < Math.max(1, n); k++) {
+    const t = k * 2 * Math.PI / Math.max(1, n), c = Math.cos(t), sn = Math.sin(t), b = (ax + 1) % 3, d = (ax + 2) % 3, R = [1, 0, 0, 0, 1, 0, 0, 0, 1];
+    R[b*3+b] = c; R[b*3+d] = -sn; R[d*3+b] = sn; R[d*3+d] = c;
+    for (const m of M) out.push(mul(R, m));
+  }
+  const T = out.filter(m => Math.abs(m[0] - 1) + Math.abs(m[4] - 1) + Math.abs(m[8] - 1) + Math.abs(m[1]) + Math.abs(m[2]) + Math.abs(m[3]) + Math.abs(m[5]) + Math.abs(m[6]) + Math.abs(m[7]) > 1e-9);
+  symCache = { key, T }; return T;
+}
+const symApply = (m, v) => new V3(m[0] * v.x + m[1] * v.y + m[2] * v.z, m[3] * v.x + m[4] * v.y + m[5] * v.z, m[6] * v.x + m[7] * v.y + m[8] * v.z);
+function symFrame(m, F) {
+  const det = m[0] * (m[4] * m[8] - m[5] * m[7]) - m[1] * (m[3] * m[8] - m[5] * m[6]) + m[2] * (m[3] * m[7] - m[4] * m[6]);
+  const u = symApply(m, { x: F.ux, y: F.uy, z: F.uz }), v = symApply(m, { x: F.vx, y: F.vy, z: F.vz }), d = symApply(m, { x: F.sdx, y: F.sdy, z: F.sdz });
+  return { ...F, ux: u.x, uy: u.y, uz: u.z, vx: v.x, vy: v.y, vz: v.z, sdx: d.x, sdy: d.y, sdz: d.z, mir: det < 0, gm: det < 0 && F.gmM !== undefined ? F.gmM : F.gm };
+}
 const mirrorFrame = F => ({ ...F, ux:-F.ux, vx:-F.vx, sdx:-F.sdx, mir:true, gm: F.gmM !== undefined ? F.gmM : F.gm });
 
 function dabSym(P, N, r, ref, reps = 0) {
@@ -2220,10 +2255,10 @@ function dabSym(P, N, r, ref, reps = 0) {
   if (!reps) reps = BRUSH[st.brush].reps || 1;
   const F = makeFrame(N, ref || (st.cfg.follow && st.dirVec ? st.dirVec : st.refUp), st.cfg, st.brush);
   if (st.dirVec) { F.sdx = st.dirVec.x; F.sdy = st.dirVec.y; F.sdz = st.dirVec.z; }
-  const mP = new V3(-P.x, P.y, P.z), mN = new V3(-N.x, N.y, N.z), mF = mirrorFrame(F);
+  const T = symTransforms(), copies = T.map(m => [symApply(m, P), symApply(m, N), symFrame(m, F)]);
   for (let k = 0; k < reps; k++) {
     applyDab(P, N, r, s, st.dir, st.brush, F);
-    if (S.sym) applyDab(mP, mN, r, s, st.dir, st.brush, mF);
+    for (const [cP, cN, cF] of copies) applyDab(cP, cN, r, s, st.dir, st.brush, cF);
   }
   return F;
 }
@@ -3963,6 +3998,53 @@ function ffdCancel() {
 function ffdReset() { if (!ffdValid()) return; ffd.cp.set(ffd.cp0); ffd.sel.clear(); ffdSync(); ffdApply(); }
 function ffdUI() { const on = !!ffd; $('ffdGo').hidden = on; $('ffdTools').hidden = !on; }
 
+// ---------------- Transpose Master: pose every visible part together as one temporary part, then write back ----------------
+let tpm = null;   // { rec: the merged part, parts: [{ rec, start, n }], vis: Map(rec -> visible) }
+function tpmStart() {
+  if (tpm && subtools.includes(tpm.rec)) { toast('すでにまとめています（「元のパーツに戻す」で戻します）'); return; }
+  if (stroke) return;
+  flushNormals();
+  const recs = shownRecs(); if (recs.length < 2) { toast('2 つ以上のパーツを表示してください'); return; }
+  let nv = 0, ni = 0; for (const r of recs) { nv += r.pos.length / 3; ni += r.idx.length; }
+  if (nv > 8_000_000) { toast('頂点が多すぎます。細分化レベルを下げてから使ってください'); return; }
+  const P = new Float32Array(nv * 3), I = new Uint32Array(ni), G = new Int32Array(nv), M = new Float32Array(nv), parts = [];
+  let vo = 0, io = 0;
+  recs.forEach((r, k) => {
+    const n = r.pos.length / 3; P.set(r.pos, vo * 3);
+    for (let i = 0; i < r.idx.length; i++) I[io + i] = r.idx[i] + vo;
+    G.fill(k + 1, vo, vo + n); if (r.mask && r.mask.length === n) M.set(r.mask, vo);
+    parts.push({ rec: r, start: vo, n }); vo += n; io += r.idx.length;
+  });
+  pushStruct();
+  const vis = new Map(subtools.map(r => [r, r.visible]));
+  const rec = newRec(uniqueName('Transpose Master'), P, I, M); rec.pg = G;
+  insertAfterActive(rec);
+  for (const r of recs) r.visible = false;
+  tpm = { rec, parts, vis };
+  activate(rec); syncScene(); renderSubtoolList(); tpmUI();
+  toast(`${recs.length} 個のパーツをまとめました。マスクとポーズ・ギズモ・変形で形を変え、「元のパーツに戻す」で各パーツに写します（パーツごとにポリグループ分け済み）`);
+}
+function tpmEnd() {
+  if (!tpm) return;
+  const T = tpm;
+  if (!subtools.includes(T.rec)) { tpm = null; tpmUI(); return; }
+  if (T.rec === active) flushNormals();
+  const src = T.rec === active ? pos : T.rec.pos, total = T.parts.reduce((a, p) => a + p.n, 0);
+  if (src.length !== total * 3 || T.parts.some(p => !subtools.includes(p.rec) || p.rec.pos.length !== p.n * 3)) { toast('頂点の数が変わったので戻せません（リメッシュ・細分化などをしないでください）'); return; }
+  pushEntry(allSnap());
+  for (const p of T.parts) {
+    const r = p.rec; r.pos.set(src.subarray(p.start * 3, (p.start + p.n) * 3));
+    r.mirror = r.levels[r.lv].mirror = computeMirror(r.pos); dropView(r);
+  }
+  pushStruct();
+  for (const [r, v] of T.vis) if (subtools.includes(r)) r.visible = v;
+  subtools.splice(subtools.indexOf(T.rec), 1); dropView(T.rec);
+  tpm = null;
+  activate(T.parts[0].rec, true); syncScene(); renderSubtoolList(); scheduleSave(); tpmUI();
+  toast('ポーズを元のパーツに写しました（細分化レベルの細部も付いてきます）');
+}
+function tpmUI() { const on = !!(tpm && subtools.includes(tpm.rec)); $('tpmGo').hidden = on; $('tpmBack').hidden = !on; }
+
 // ---------------- morph target ----------------
 function morphStore() { flushNormals(); active.morph = pos.slice(); toast('今の形をモーフとして保存しました（「モーフ」ブラシで塗ると戻せます）'); scheduleSave(); }
 function morphRestore() {
@@ -5119,11 +5201,15 @@ function playCamera(secs, poseAt) {
     requestAnimationFrame(step);
   });
 }
-const camSnap = () => ({ p: camera.position.toArray(), t: controls.target.toArray(), fov: camera.fov });
+const camSnap = () => ({ p: camera.position.toArray(), t: controls.target.toArray(), fov: camera.fov, vis: subtools.filter(r => r.visible || r === active).map(r => r.name) });
 function camApply(c, live = false) {
   camera.position.fromArray(c.p); controls.target.fromArray(c.t);
   if (c.fov && Math.abs(camera.fov - c.fov) > 1e-6) { camera.fov = c.fov; camera.updateProjectionMatrix(); }
   camera.lookAt(controls.target); if (!live) controls.update();
+  if (Array.isArray(c.vis) && $('tlVis').checked) {   // keyed part visibility (the active part always shows)
+    let ch = false; for (const r of subtools) { const v = c.vis.includes(r.name); if (r !== active && r.visible !== v) { r.visible = v; ch = true; } }
+    if (ch) { syncScene(); renderSubtoolList(); }
+  }
 }
 function recordTurntable() {
   const start = camera.position.clone().sub(controls.target), t = controls.target.toArray(), fov = camera.fov;
@@ -5145,7 +5231,7 @@ function tlPose(k) {
   const r = Math.max(1e-4, crom(sp[0][0], sp[1][0], sp[2][0], sp[3][0], t)), az = crom(sp[0][1], sp[1][1], sp[2][1], sp[3][1], t);
   const el = Math.max(-1.55, Math.min(1.55, crom(sp[0][2], sp[1][2], sp[2][2], sp[3][2], t)));
   const p = [tg[0] + r * Math.cos(el) * Math.sin(az), tg[1] + r * Math.sin(el), tg[2] + r * Math.cos(el) * Math.cos(az)];
-  return { p, t: tg, fov: crom(q[0].fov, q[1].fov, q[2].fov, q[3].fov, t) };
+  return { p, t: tg, fov: crom(q[0].fov, q[1].fov, q[2].fov, q[3].fov, t), vis: k >= 1 ? (loop ? K[0] : K[n - 1]).vis : q[1].vis };
 }
 function tlRefresh() {
   const n = tlKeys.length;
@@ -7065,7 +7151,7 @@ function applyProject(meta, subs, opts) {
     const dist = camera.position.distanceTo(controls.target);
     camera.near = dist / 100; camera.far = dist * 20; camera.updateProjectionMatrix(); controls.update();
   } else frame();
-  tlKeys = Array.isArray(meta.timeline) ? meta.timeline.filter(c => c && Array.isArray(c.p) && Array.isArray(c.t)).map(c => ({ p: c.p, t: c.t, fov: +c.fov || camera.fov })) : []; tlRefresh();
+  tlKeys = Array.isArray(meta.timeline) ? meta.timeline.filter(c => c && Array.isArray(c.p) && Array.isArray(c.t)).map(c => ({ p: c.p, t: c.t, fov: +c.fov || camera.fov, vis: Array.isArray(c.vis) ? c.vis.map(String) : undefined })) : []; tlRefresh();
   if (meta.settings) { if (meta.settings.fname) $('fname').value = meta.settings.fname; if (meta.settings.stlH) $('stlH').value = meta.settings.stlH; }
   projectPath = opts.path || null; projectName = opts.name || '無題';
   dirty = !!opts.dirty; fresh = !!opts.fresh; updateTitle();
@@ -7540,6 +7626,8 @@ $('alphaDel').onclick = () => {
 $('invert').onchange = e => S.invert = e.target.checked;
 $('backface').onchange = e => S.backface = e.target.checked;
 function setSym(v) { S.sym = v; $('chipSym').classList.toggle('on', v); updateStats(); }
+for (const [id, k] of [['symY', 'symY'], ['symZ', 'symZ']]) $(id).onchange = e => { S[k] = e.target.checked; };
+$('symRad').onchange = e => { S.radial = +e.target.value; }; $('symRadAx').onchange = e => { S.radAx = +e.target.value; };
 function setWire(v) { S.wire = v; $('chipWire').classList.toggle('on', v); if (wireMesh) wireMesh.visible = v || S.dynSub > 0; if (creaseLines) creaseLines.visible = pe.on || v || S.dynSub > 0; }
 $('chipSym').onclick = () => setSym(!S.sym);
 $('chipWire').onclick = () => setWire(!S.wire);
@@ -7878,6 +7966,7 @@ $('dfAxis').addEventListener('change', () => { if (dfp) { dfp.R = dfp.Rc = null;
 $('dfApply').onclick = () => deformCommit();
 for (const [id, d] of [['dynGrav', 1], ['dynPress', 1], ['dynStiff', 2], ['dynBend', 2], ['dynFric', 2], ['dynFrames', 0]]) $(id).addEventListener('input', e => { $(id + 'Out').textContent = (+e.target.value).toFixed(d); });
 $('dynGo').onclick = () => dynStart();
+$('tpmGo').onclick = () => tpmStart(); $('tpmBack').onclick = () => tpmEnd();
 $('rtCurv').addEventListener('input', e => { $('rtCurvOut').textContent = (+e.target.value).toFixed(2); });
 $('mpTile').replaceChildren(...MICRO_TILES.map(t => { const o = document.createElement('option'); o.value = t.id; o.textContent = t.name; return o; }));
 for (const [id, d] of [['nmScale', 2], ['nmHeight', 2], ['nmOffset', 2], ['nmRot', 0], ['nmRandS', 2], ['nmRandR', 2], ['mpThick', 2]]) $(id).addEventListener('input', e => { $(id + 'Out').textContent = (+e.target.value).toFixed(d); if (nmPrev) nmPreview(); });
