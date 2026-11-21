@@ -507,6 +507,7 @@ dl.keys dd{margin:0;color:var(--muted)}
       <div class="grid2"><button class="btn" id="mpPrevBtn">プレビュー</button><button class="btn primary" id="mpGo">MicroPoly を作る</button></div>
       <div class="row" style="margin-top:6px"><input type="checkbox" id="nmMasked"><label for="nmMasked">マスクした面だけに置く</label></div>
       <div class="row"><input type="checkbox" id="nmHide" checked><label for="nmHide">作ったあと元のパーツを隠す</label></div>
+      <button class="btn full" id="nmRebuild" disabled title="選んでいる NanoMesh / MicroPoly のパーツを、元のパーツから今の設定で作り直します">選んだ NanoMesh・MicroPoly を今の設定で作り直す</button>
       <div class="grid2"><button class="btn" id="nmCancel" disabled>プレビューを消す</button><span id="nmInfo" class="note" style="margin:0;align-self:center"></span></div>
       <p class="note">選択中のパーツ（低ポリゴンがおすすめ）の面ひとつひとつに部品を置きます（NanoMesh 風）。部品は内蔵の部品・登録した部品・ほかのパーツから選べます。MicroPoly は四角ポリゴンの面を、格子・織り目・鎖かたびら・鋲・ウロコ・レンガのタイルで置き換えます（鎧・メッシュ・布地）。結果は新しいパーツになります。プレビュー中はスライダーを動かすとすぐに変わります。</p>
     </section>
@@ -606,11 +607,12 @@ dl.keys dd{margin:0;color:var(--muted)}
       <h3 style="margin:10px 0 4px;font-size:12px">グルーミング（毛を整える）</h3>
       <div class="row"><input type="checkbox" id="groomOn" disabled><label for="groomOn">グルーミングする</label></div>
       <div class="row"><label for="groomTool">ブラシ</label><select id="groomTool"><option value="comb">くし（とかす）</option><option value="lift">立てる</option><option value="gravity">たらす</option><option value="length">長さ（Alt で短く）</option><option value="cut">切りそろえる</option><option value="clump">束ねる</option><option value="curl">巻く（Alt で逆向き）</option><option value="smooth">なめらか</option><option value="frizz">乱す</option></select></div>
+      <div class="row"><input type="checkbox" id="groomCollide" checked><label for="groomCollide" title="毛が、生やした元のパーツにめり込まないようにします">元のパーツにめり込ませない</label></div>
       <div class="row"><label for="groomStr">強さ</label><output id="groomStrOut">0.60</output></div>
       <input type="range" id="groomStr" min="0.05" max="1" step="0.01" value="0.6">
       <p class="note" id="groomNote">毛のパーツを選ぶと使えます</p>
       <p class="note">マスクした所から毛（髪・毛皮・草）を生やして、新しいサブツールにします。根元の色はポリペイントの色を引き継ぎます。</p>
-          <p class="note">毛は節ごとの線として覚えているので、あとから整えられます。「グルーミングする」をオンにして、毛のパーツの上をドラッグします（円の大きさ＝ブラシサイズ）。根元は動かず、毛の長さは保たれます（「長さ」「切りそろえる」以外）。元に戻す・保存に対応しています。</p>
+          <p class="note">毛は節ごとの線として覚えているので、あとから整えられます。「グルーミングする」をオンにして、毛のパーツの上をドラッグします（円の大きさ＝ブラシサイズ）。根元は動かず、毛の長さは保たれます（「長さ」「切りそろえる」以外）。対称 X がオンなら反対側も同じように整います。元に戻す・保存に対応しています。</p>
     </section>
 
     <section data-tab="model" id="t3Sec">
@@ -868,6 +870,7 @@ dl.keys dd{margin:0;color:var(--muted)}
       <input type="range" id="uvAngle" min="20" max="80" step="1" value="45">
       <button class="btn full" id="uvGo">UV を自動展開</button>
       <div class="row" style="margin-top:10px"><label for="bakeSrc">焼き付け元</label><select id="bakeSrc" style="width:150px"></select></div>
+      <div class="row"><input type="checkbox" id="bakeAO"><label for="bakeAO" title="隙間の暗さ（アンビエントオクルージョン）と凹み（キャビティ）のマップも作ります。少し時間がかかります">AO・凹みのマップも作る</label></div>
       <div class="row"><label for="bakeSize">テクスチャの大きさ</label><select id="bakeSize"><option value="512">512</option><option value="1024" selected>1024</option><option value="2048">2048</option></select></div>
       <button class="btn primary full" id="bakeGo">法線マップと色を焼き付け</button>
       <div class="row"><input type="checkbox" id="texPreview"><label for="texPreview">焼き付けたテクスチャで表示</label></div>
@@ -884,6 +887,9 @@ dl.keys dd{margin:0;color:var(--muted)}
       <div class="row"><label for="rdAO">陰影（AO）の品質</label><select id="rdAO"><option value="0">なし</option><option value="8">標準</option><option value="16" selected>高い</option></select></div>
       <div class="row"><input type="checkbox" id="rdShadow" checked><label for="rdShadow">床に影を落とす</label></div>
       <div class="row"><input type="checkbox" id="rdTransp"><label for="rdTransp">背景を透明にする</label></div>
+      <div class="row"><label for="rdMat">材質</label><select id="rdMat"><option value="clay">粘土（つや消し）</option><option value="view">表示中のマテリアル（MatCap）</option><option value="gloss">つやあり</option><option value="metal">金属</option></select></div>
+      <div class="row"><label for="rdLight">光</label><select id="rdLight"><option value="studio">スタジオ（3 灯）</option><option value="front">正面から</option><option value="drama">ドラマチック（横から強く）</option><option value="warm">暖かい光</option></select></div>
+      <div class="row"><label for="rdBg">背景</label><select id="rdBg"><option value="dark">暗い</option><option value="grad">グラデーション</option><option value="gray">グレー</option><option value="white">白</option><option value="black">黒</option></select></div>
       <div class="row"><input type="checkbox" id="rdRim"><label for="rdRim" title="後ろから当てる光で輪郭を明るくします">リムライト（逆光）</label></div>
       <div class="row"><input type="checkbox" id="rdOutline"><label for="rdOutline" title="シルエットと鋭い折れ目に線を描きます（イラスト風）">輪郭線を描く</label></div>
       <div class="row"><label for="rdDOF" title="モデルの中心にピントを合わせ、手前と奥をぼかします">被写界深度（ぼけ）</label><select id="rdDOF"><option value="0">なし</option><option value="0.5">弱い</option><option value="1">標準</option><option value="2">強い</option></select></div>
@@ -900,7 +906,11 @@ dl.keys dd{margin:0;color:var(--muted)}
       <input type="range" id="tlSecs" min="2" max="60" step="1" value="8">
       <div class="row"><input type="checkbox" id="tlVis" checked><label for="tlVis" title="キーを追加したときに表示していたパーツを、そのキーから表示します">パーツの表示もキーにする</label></div>
       <div class="row"><input type="checkbox" id="tlLoop"><label for="tlLoop">最後のキーから最初に戻る（ループ）</label></div>
+      <div class="row"><label for="tlEase">動きの緩急</label><select id="tlEase"><option value="mix">ふつう</option><option value="smooth">キーでゆっくり</option><option value="linear">一定の速さ</option></select></div>
+      <div class="row"><label for="tlHold" title="各キーで止まる秒数">キーで止まる時間（秒）</label><output id="tlHoldOut">0.0</output></div>
+      <input type="range" id="tlHold" min="0" max="3" step="0.1" value="0">
       <button class="btn full" id="tlRec" disabled>タイムラインを動画に書き出す（WebM）</button>
+      <div class="row"><label for="tlFps">連番の fps</label><select id="tlFps"><option>24</option><option selected>30</option><option>60</option></select><button class="btn" id="tlPng" title="1 コマずつ描いて PNG の連番を ZIP にします（動画編集ソフト用・コマ落ちなし）">連番 PNG（ZIP）</button></div>
       <p class="note">今見ている角度で、影と隙間の陰影（アンビエントオクルージョン）を付けた高画質の画像を作ります。色はポリペイントの色を使います。</p>
     </section>
 
@@ -977,6 +987,7 @@ import { ccTopology, ccPositions, ccAttr, ccMirror, ccGroups } from './subdiv.js
 import { slicePlane, panelLoops } from './hardsurface.js';
 import { BUILTIN_VDM, builtinVDM, sampleVDM, vdmPreview, stampFromEXR, captureStamp } from './vdmstamp.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { mergeVertices, mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { computeBoundsTree, acceleratedRaycast, MeshBVH, INTERSECTED, NOT_INTERSECTED } from 'three-mesh-bvh';
 import { zsphereMesh } from './zspheres.js';
@@ -1275,7 +1286,8 @@ function recData(r) {
     dens: densOf(r),
     topo: topoPack(r.topo),
     vdmPlate: r.vdmPlate || null,
-    fiber: r.fiber && r.fiber.dir instanceof Float32Array ? { n: r.fiber.n, seg: r.fiber.seg, sides: r.fiber.sides, dir: r.fiber.dir } : null,
+    nano: r.nano ? { kind: r.nano.kind, hostName: (r.nano.host && r.nano.host.name) || r.nano.hostName, params: r.nano.params } : null,
+    fiber: r.fiber && r.fiber.dir instanceof Float32Array ? { n: r.fiber.n, seg: r.fiber.seg, sides: r.fiber.sides, dir: r.fiber.dir, hostName: (r.fiber.host && r.fiber.host.name) || r.fiber.hostName || '' } : null,
     layers: (r.layers || []).filter(l => l.delta.length === r.pos.length).map(l => ({ name: l.name, I: l.I, on: l.on, delta: l.delta })),
     levels: r.levels.map((L, k) => k === r.lv
       ? { current: true, ev: L.ev || null, quads: L.quads || null, ref0: L.ref0 || null, ...texData(L), ...polyData(L), ...(L.cc !== undefined ? { cc: L.cc } : {}) }
@@ -1284,12 +1296,12 @@ function recData(r) {
 }
 // uv + baked textures (PNG bytes) stored on a level
 const polyData = L => ({ ...(L.polys ? { polys: { start: L.polys.start, idx: L.polys.idx } } : {}), ...(L.crease ? { crease: L.crease } : {}) });
-const texData = L => L.uv ? { uvIdx: L.uvIdx, uv: L.uv, bake: L.bake ? { size: L.bake.size, normalPng: L.bake.normalPng, colorPng: L.bake.colorPng || null, heightPng: L.bake.heightPng || null, heightRange: L.bake.heightRange || 0 } : null } : {};
+const texData = L => L.uv ? { uvIdx: L.uvIdx, uv: L.uv, bake: L.bake ? { size: L.bake.size, normalPng: L.bake.normalPng, colorPng: L.bake.colorPng || null, heightPng: L.bake.heightPng || null, aoPng: L.bake.aoPng || null, cavPng: L.bake.cavPng || null, heightRange: L.bake.heightRange || 0 } : null } : {};
 function texFromData(L, d, ix) {
   if (!(d.uv instanceof Float32Array) || !(d.uvIdx instanceof Uint32Array) || d.uvIdx.length !== ix.length || d.uv.length !== ix.length * 2) return;
   L.uvIdx = d.uvIdx; L.uv = d.uv;
   const b = d.bake;
-  if (b && b.normalPng instanceof Uint8Array) L.bake = { size: b.size | 0, normalPng: b.normalPng, colorPng: b.colorPng instanceof Uint8Array ? b.colorPng : null, heightPng: b.heightPng instanceof Uint8Array ? b.heightPng : null, heightRange: +b.heightRange || 0 };
+  if (b && b.normalPng instanceof Uint8Array) L.bake = { size: b.size | 0, normalPng: b.normalPng, colorPng: b.colorPng instanceof Uint8Array ? b.colorPng : null, heightPng: b.heightPng instanceof Uint8Array ? b.heightPng : null, aoPng: b.aoPng instanceof Uint8Array ? b.aoPng : null, cavPng: b.cavPng instanceof Uint8Array ? b.cavPng : null, heightRange: +b.heightRange || 0 };
 }
 function recFromData(s) {
   const r = newRec(s.name, s.pos, s.idx, s.mask, s.mirror && s.mirror.length === s.pos.length / 3 ? s.mirror : null);
@@ -1301,7 +1313,8 @@ function recFromData(s) {
   r.topo = topoUnpack(s.topo);
   r.dens = s.dens instanceof Float32Array && s.dens.length === s.pos.length / 3 ? s.dens : null;
   r.vdmPlate = s.vdmPlate && s.vdmPlate.ref instanceof Float32Array ? { ref: s.vdmPlate.ref, h: +s.vdmPlate.h || 1 } : null;
-  { const f = s.fiber; r.fiber = f && f.dir instanceof Float32Array && f.n > 0 && f.dir.length === f.n * 3 && s.pos.length === f.n * (f.seg * f.sides + 1) * 3 ? { n: f.n | 0, seg: f.seg | 0, sides: f.sides | 0, dir: f.dir } : null; }
+  r.nano = s.nano && (s.nano.kind === 'nano' || s.nano.kind === 'micro') && s.nano.params ? { kind: s.nano.kind, host: null, hostName: String(s.nano.hostName || ''), params: s.nano.params } : null;
+  { const f = s.fiber; r.fiber = f && f.dir instanceof Float32Array && f.n > 0 && f.dir.length === f.n * 3 && s.pos.length === f.n * (f.seg * f.sides + 1) * 3 ? { n: f.n | 0, seg: f.seg | 0, sides: f.sides | 0, dir: f.dir, host: null, hostName: String(f.hostName || '') } : null; }
   r.layers = Array.isArray(s.layers) ? s.layers.filter(l => l && l.delta instanceof Float32Array && l.delta.length === s.pos.length)
     .map((l, k) => ({ name: String(l.name || `レイヤー ${k + 1}`), delta: l.delta, I: Number.isFinite(l.I) ? l.I : 1, on: l.on !== false, rec: false })) : [];
   const Ls = Array.isArray(s.levels) ? s.levels : null, lv = s.lv | 0;
@@ -1394,7 +1407,7 @@ function activate(rec, force = false) {
   dropView(rec);
   active = rec;
   setMesh(rec.pos, rec.idx, rec.mask, rec.mirror, rec.paint);
-  queueMicrotask(groomUI);
+  queueMicrotask(groomUI); queueMicrotask(nmUI);
   syncScene();
   if (gizmoOn) attachGizmo();
 }
@@ -3201,22 +3214,34 @@ async function renderImage() {
   const bvhs = parts.map(x => x.bvh);
   const rs = new THREE.Scene(), meshes = [];
   const transparent = $('rdTransp').checked || pass !== 'beauty' && pass !== 'ao';
-  if (!transparent) rs.background = new THREE.Color(pass === 'depth' ? 0x000000 : pass === 'ao' ? 0xffffff : 0x2b2c31);
+  const bgSel = $('rdBg').value, rdMat = $('rdMat').value, mc = rdMat === 'view' && matId !== 'std' ? MATCAPS.find(x => x.id === matId) : null;
+  if (!transparent) {
+    if (pass === 'beauty' && bgSel === 'grad') { const g = document.createElement('canvas'); g.width = 2; g.height = 256; const c = g.getContext('2d'), gr = c.createLinearGradient(0, 0, 0, 256); gr.addColorStop(0, '#5a5f6b'); gr.addColorStop(1, '#17181c'); c.fillStyle = gr; c.fillRect(0, 0, 2, 256); const t = new THREE.CanvasTexture(g); t.colorSpace = THREE.SRGBColorSpace; rs.background = t; }
+    else rs.background = new THREE.Color(pass === 'depth' ? 0x000000 : pass === 'ao' ? 0xffffff : ({ dark: 0x2b2c31, gray: 0x8a8c91, white: 0xf4f4f2, black: 0x000000 })[bgSel] ?? 0x2b2c31);
+  }
   for (const x of parts) {
     const ao = aoFor(x.p, x.n, bvhs, pass === 'ao' ? Math.max(8, rays) : rays, size * 0.18, size * 1e-4);
     const nv = x.p.length / 3, c = new Float32Array(nv * 3);
     const bc = [BASE_COL.r, BASE_COL.g, BASE_COL.b], hasPt = x.pt && x.pt.length === x.p.length;
-    for (let v = 0; v < nv; v++) for (let k = 0; k < 3; k++) c[v*3+k] = pass === 'ao' ? ao[v] : (hasPt ? x.pt[v*3+k] : bc[k]) * ao[v];
+    const base = mc ? [1, 1, 1] : bc;   // under a MatCap the unpainted colour is the MatCap itself
+    for (let v = 0; v < nv; v++) for (let k = 0; k < 3; k++) c[v*3+k] = pass === 'ao' ? ao[v] : (hasPt ? x.pt[v*3+k] : base[k]) * ao[v];
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(x.p, 3)); g.setAttribute('normal', new THREE.BufferAttribute(x.n, 3));
     g.setAttribute('color', new THREE.BufferAttribute(c, 3)); g.setIndex(new THREE.BufferAttribute(x.ix, 1));
-    const m = new THREE.Mesh(g, pass === 'ao' ? new THREE.MeshBasicMaterial({ vertexColors: true }) : new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.55, metalness: 0 }));
+    const mat = pass === 'ao' ? new THREE.MeshBasicMaterial({ vertexColors: true })
+      : mc ? new THREE.MeshMatcapMaterial({ matcap: mc.tex, vertexColors: true })
+      : new THREE.MeshStandardMaterial({ vertexColors: true, roughness: rdMat === 'gloss' ? 0.22 : rdMat === 'metal' ? 0.32 : 0.55, metalness: rdMat === 'metal' ? 1 : 0, envMapIntensity: 1 });
+    const m = new THREE.Mesh(g, mat);
     m.castShadow = m.receiveShadow = true; rs.add(m); meshes.push(m);
   }
-  rs.add(new THREE.HemisphereLight(0xfff3e4, 0x30323a, 0.75));
+  rs.add(new THREE.HemisphereLight(0xfff3e4, 0x30323a, $('rdLight').value === 'drama' ? 0.25 : 0.75));
+  if ($('rdMat').value === 'metal' || $('rdMat').value === 'gloss') { const pm = new THREE.PMREMGenerator(renderer); rs.environment = pm.fromScene(new RoomEnvironment(), 0.04).texture; pm.dispose(); }
   const right = camAxis(0), up = camAxis(1), back = camAxis(2);
-  const key = new THREE.DirectionalLight(0xffffff, 2.3);
-  const keyDir = right.clone().multiplyScalar(-0.9).addScaledVector(up, 1.6).addScaledVector(back, 1.1).normalize();
+  const lp = $('rdLight').value;
+  const key = new THREE.DirectionalLight(lp === 'warm' ? 0xffe2c0 : 0xffffff, lp === 'drama' ? 3.4 : 2.3);
+  const keyDir = lp === 'front' ? up.clone().multiplyScalar(0.4).addScaledVector(back, 1).normalize()
+    : lp === 'drama' ? right.clone().multiplyScalar(-1.6).addScaledVector(up, 0.9).addScaledVector(back, 0.25).normalize()
+    : right.clone().multiplyScalar(-0.9).addScaledVector(up, 1.6).addScaledVector(back, 1.1).normalize();
   key.position.copy(center).addScaledVector(keyDir, size * 2);
   key.target.position.copy(center); rs.add(key, key.target);
   const shadow = $('rdShadow').checked && pass === 'beauty';
@@ -3292,6 +3317,7 @@ async function renderImage() {
   rs.overrideMaterial = null;
   renderer.setRenderTarget(null); renderer.shadowMap.enabled = prevShadow; renderer.shadowMap.type = prevType;
   rt.dispose(); if (key.shadow.map) key.shadow.map.dispose();
+  if (rs.environment) rs.environment.dispose(); if (rs.background && rs.background.isTexture) rs.background.dispose();
   rs.traverse(o => { if (o.isMesh) { o.material.dispose(); o.geometry.dispose(); } });
   // flip rows (GL origin is bottom-left)
   const img = new ImageData(W, H), row = W * 4;
@@ -3462,7 +3488,7 @@ function zsStart() {
   for (const o of [mesh, wireMesh, drawMesh, ...subtools.map(x => x.view)]) if (o && o.visible) { zs.hidden.push(o); o.visible = false; }
   scene.add(zs.group); zsRebuild();
   $('zsTools').hidden = false; $('zsStart').hidden = true;
-  $('zsNote').textContent = '球をドラッグ：子の球を作って引き出す。Alt+ドラッグ：球を動かす。Shift+ドラッグ：大きさを変える。Ctrl+クリック：球を消す（先の球も）。背景ドラッグで回転。左右対称（X）がオンなら反対側にも作られます。';
+  $('zsNote').textContent = '球をドラッグ：子の球を作って引き出す。Alt+ドラッグ：球を動かす。Shift+ドラッグ：大きさを変える。Ctrl+クリック：球を消す（先の球も）。Alt+Shift+ドラッグ：その球から先を親のまわりに回す（ポーズ）。つなぎをクリック：球を足す。背景ドラッグで回転。左右対称（X）がオンなら反対側にも作られます。';
   toast('ZSphere：赤い球からドラッグして骨組みを作ってください');
 }
 function zsEnd() {
@@ -3484,7 +3510,7 @@ function zsRebuild() {
     if (n.parent >= 0) {
       const q = zs.nodes[n.parent], d = n.p.clone().sub(q.p), L = d.length(); if (L < 1e-6) return;
       const cyl = new THREE.Mesh(new THREE.CylinderGeometry(n.r * 0.55, q.r * 0.55, L, 16, 1, true), zsLinkMat);
-      cyl.position.copy(q.p).addScaledVector(d, 0.5); cyl.quaternion.setFromUnitVectors(new V3(0, 1, 0), d.normalize()); cyl.raycast = () => {};
+      cyl.position.copy(q.p).addScaledVector(d, 0.5); cyl.quaternion.setFromUnitVectors(new V3(0, 1, 0), d.normalize()); cyl.userData.link = i;
       g.add(cyl);
     }
   });
@@ -3496,7 +3522,9 @@ function zsUndo() { if (!zs || !zs.undo.length) return; zs.nodes = zs.undo.pop()
 function zsPick() {
   camera.updateMatrixWorld(); raycaster.setFromCamera(ndc, camera);
   const h = raycaster.intersectObjects(zs.group.children.filter(o => o.userData.i !== undefined), false);
-  return h[0] || null;
+  if (h[0]) return h[0];
+  const l = raycaster.intersectObjects(zs.group.children.filter(o => o.userData.link !== undefined), false);   // a link: insert a sphere there
+  return l[0] || null;
 }
 function zsDelete(i) {
   if (zs.nodes[i].parent < 0) { toast('最初の球は消せません'); return; }
@@ -3512,10 +3540,15 @@ function zsDown(e) {
   setNDC(e);
   const hit = zsPick(); if (!hit) return;   // background: orbit
   controls.enabled = false; e.preventDefault(); canvas.setPointerCapture(e.pointerId);
+  if (hit.object.userData.link !== undefined) { zsPush(); zsInsert(hit.object.userData.link, hit.point); return; }
   const i = hit.object.userData.i, node = zs.nodes[i];
   zsPush();
   if (e.ctrlKey || e.metaKey) { zsDelete(i); controls.enabled = true; return; }
   const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(camera.getWorldDirection(new V3()), hit.point);
+  if (e.altKey && e.shiftKey && node.parent >= 0) {   // rotate this sphere and everything after it around its parent (posing)
+    const sub = zsSubtree(i), msub = node.mirror >= 0 ? zsSubtree(node.mirror) : [];
+    zs.drag = { mode: 'rot', i, x0: e.clientX, y0: e.clientY, sub, msub, start: zs.nodes.map(n => n.p.clone()) }; return;
+  }
   if (e.altKey) { zs.drag = { mode: 'move', i, plane, P0: hit.point.clone(), start: node.p.clone() }; return; }
   if (e.shiftKey) { zs.drag = { mode: 'scale', i, x0: e.clientX, r0: node.r }; return; }
   // new child sphere where the parent was grabbed, then dragged out
@@ -3532,6 +3565,19 @@ function zsDown(e) {
 function zsMove(e) {
   const D = zs.drag; if (!D) return;
   const n = zs.nodes[D.i];
+  if (D.mode === 'rot') {
+    // angle around the parent on screen, axis = view direction
+    const par = zs.nodes[n.parent].p, ps = par.clone().project(camera), rect = canvas.getBoundingClientRect();
+    const cx = rect.left + (ps.x + 1) / 2 * rect.width, cy = rect.top + (1 - ps.y) / 2 * rect.height;
+    const a = Math.atan2(e.clientY - cy, e.clientX - cx) - Math.atan2(D.y0 - cy, D.x0 - cx);
+    const ax = camera.getWorldDirection(new V3()), q = new THREE.Quaternion().setFromAxisAngle(ax, -a);
+    for (const j of D.sub) zs.nodes[j].p.copy(D.start[j]).sub(par).applyQuaternion(q).add(par);
+    if (D.msub.length) {   // the mirror chain turns the mirrored way
+      const mp = zs.nodes[zs.nodes[n.mirror].parent].p, mq = new THREE.Quaternion(-q.x, q.y, q.z, -q.w);
+      for (const j of D.msub) zs.nodes[j].p.copy(D.start[j]).sub(mp).applyQuaternion(mq).add(mp);
+    }
+    zsRebuild(); return;
+  }
   if (D.mode === 'scale') n.r = Math.max(0.01, D.r0 * Math.exp((e.clientX - D.x0) / 120));
   else {
     setNDC(e); raycaster.setFromCamera(ndc, camera);
@@ -3541,6 +3587,20 @@ function zsMove(e) {
   }
   if (n.mirror >= 0) { const m = zs.nodes[n.mirror]; m.p.set(-n.p.x, n.p.y, n.p.z); m.r = n.r; }
   zsRebuild();
+}
+// all spheres from i outward (i and its descendants)
+function zsSubtree(i) { const out = [i]; for (let k = 0; k < out.length; k++) zs.nodes.forEach((n, j) => { if (n.parent === out[k]) out.push(j); }); return out; }
+// insert a sphere on the link into node c (between c and its parent) at the clicked point; mirrored too
+function zsInsert(c, at) {
+  const add = (ci, P) => {
+    const ch = zs.nodes[ci], pa = zs.nodes[ch.parent], d = ch.p.clone().sub(pa.p), L2 = d.lengthSq() || 1;
+    const t = Math.max(0.05, Math.min(0.95, P.clone().sub(pa.p).dot(d) / L2));
+    zs.nodes.push({ p: pa.p.clone().addScaledVector(d, t), r: pa.r + (ch.r - pa.r) * t, parent: ch.parent, mirror: -1 });
+    const ni = zs.nodes.length - 1; ch.parent = ni; return ni;
+  };
+  const ni = add(c, at), m = zs.nodes[c].mirror;
+  if (m >= 0) { const mi = add(m, new V3(-at.x, at.y, at.z)); zs.nodes[ni].mirror = mi; zs.nodes[mi].mirror = ni; }
+  zsRebuild(); toast('つなぎに球を足しました（Alt+ドラッグで動かせます）');
 }
 function zsUp() { if (zs) zs.drag = null; controls.enabled = true; }
 // ---------------- mannequins: ready-made ZSphere skeletons (right side listed, the left side is mirrored) ----------------
@@ -3811,21 +3871,30 @@ function nmInstance() {
   return getIMM(id);
 }
 // the host polygons of the active part at its current level, and which ones are masked
-function nmHost() {
-  flushNormals();
-  const F = facesOf(active.levels[active.lv]);
+const NM_IDS = ['nmInst', 'nmFit', 'nmScale', 'nmHeight', 'nmOffset', 'nmRot', 'nmRandS', 'nmRandR', 'nmSeed', 'nmFlip', 'mpTile', 'mpThick', 'mpTris', 'nmMasked'];
+const nmParams = () => Object.fromEntries(NM_IDS.map(id => [id, $(id).type === 'checkbox' ? $(id).checked : $(id).value]));
+function nmSetParams(o) {
+  if (!o) return; nmFill();
+  for (const id of NM_IDS) if (id in o) { const e = $(id); if (e.type === 'checkbox') e.checked = !!o[id]; else e.value = o[id]; e.dispatchEvent(new Event('input')); }
+}
+const nmHostOf = r => r && r.nano ? (r.nano.host && subtools.includes(r.nano.host) ? r.nano.host : subtools.find(x => x !== r && x.name === r.nano.hostName) || null) : null;
+function nmUI() { const r = active, ok = !!(r && r.nano && nmHostOf(r)); $('nmRebuild').disabled = !ok; if (ok && nmUI.last !== r) nmSetParams(r.nano.params); nmUI.last = r; }
+function nmHost(H = active) {
+  if (H === active) flushNormals();
+  const P0 = H === active ? pos.subarray(0, nV * 3) : H.pos, M0 = H === active ? mask : H.mask;
+  const F = facesOf(H.levels[H.lv]);
   if (!F || F.start.length < 2) return null;
   const n = F.start.length - 1;
   let sel = null;
   if ($('nmMasked').checked) {
     sel = new Uint8Array(n); let any = 0;
-    for (let f = 0; f < n; f++) { let ok = 1; for (let j = F.start[f]; j < F.start[f+1]; j++) if (mask[F.idx[j]] < 0.5) { ok = 0; break; } sel[f] = ok; any |= ok; }
+    for (let f = 0; f < n; f++) { let ok = 1; for (let j = F.start[f]; j < F.start[f+1]; j++) if (!M0 || M0[F.idx[j]] < 0.5) { ok = 0; break; } sel[f] = ok; any |= ok; }
     if (!any) return { err: 'マスクした面がありません' };
   }
-  return { P: pos.subarray(0, nV * 3), F, n, sel };
+  return { P: P0, F, n, sel };
 }
-function nmBuild(kind) {
-  const H = nmHost(); if (!H) return null; if (H.err) return H;
+function nmBuild(kind, host = active) {
+  const H = nmHost(host); if (!H) return null; if (H.err) return H;
   if (kind === 'nano') {
     const inst = nmInstance(); if (!inst) return { err: '置く部品を選んでください' };
     const tri = H.F.idx.length / 3;
@@ -3849,7 +3918,7 @@ function nmPreview(kind = nmPrev && nmPrev.kind) {
   if (!kind || !active) return;
   cancelAnimationFrame(nmRaf);
   nmRaf = requestAnimationFrame(() => {
-    const r = nmBuild(kind);
+    const r = nmBuild(kind, nmHostOf(active) || active);   // editing a NanoMesh part previews from its host
     if (!r || r.err) { if (r && r.err) toast(r.err); nmClear(); return; }
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(r.pos, 3)); g.setIndex(new THREE.BufferAttribute(r.idx, 1)); g.computeVertexNormals();
@@ -3857,6 +3926,21 @@ function nmPreview(kind = nmPrev && nmPrev.kind) {
     else { const m = new THREE.Mesh(g, nmMat); m.raycast = () => {}; m.frustumCulled = false; scene.add(m); nmPrev = { mesh: m, rec: active, kind }; }
     $('nmCancel').disabled = false;
     $('nmInfo').textContent = `${kind === 'nano' ? '部品' : 'タイル'} ${r.count.toLocaleString()} 個・${(r.idx.length / 3).toLocaleString()} 三角形`;
+  });
+}
+// rebuild the selected NanoMesh / MicroPoly part from its host with the current settings
+function nmRebuild() {
+  const old = active, host = nmHostOf(old); if (!host || stroke) return;
+  return busy(() => {
+    const r = nmBuild(old.nano.kind, host);
+    if (!r) return; if (r.err) { toast(r.err); return; }
+    if (!r.count) { toast('置ける面がありませんでした'); return; }
+    nmClear(); pushStruct();
+    const rec = newRec(old.name, r.pos, dropDegenerate(r.idx));
+    rec.nano = { kind: old.nano.kind, host, hostName: host.name, params: nmParams() };
+    subtools[subtools.indexOf(old)] = rec; dropView(old);
+    activate(rec, true); syncScene(); renderSubtoolList(); scheduleSave();
+    toast(`「${rec.name}」を今の設定で作り直しました（${(r.idx.length / 3).toLocaleString()} 三角形）`);
   });
 }
 function nmMake(kind) {
@@ -3869,6 +3953,7 @@ function nmMake(kind) {
     pushStruct();
     const name = kind === 'nano' ? 'NanoMesh' : 'MicroPoly_' + ((MICRO_TILES.find(t => t.id === $('mpTile').value) || {}).name || '');
     const rec = newRec(uniqueName(name), r.pos, dropDegenerate(r.idx));
+    rec.nano = { kind, host: active, hostName: active.name, params: nmParams() };
     insertAfterActive(rec);
     if ($('nmHide').checked) active.visible = false;
     activate(rec); scheduleSave(); renderSubtoolList();
@@ -4477,7 +4562,7 @@ function growFibers() {
         const o = (k * S1 + s) * 3; C[o] = cur.x; C[o+1] = cur.y; C[o+2] = cur.z;
       }
     }
-    const st = SEG * SIDES + 1, P = new Float32Array(count * st * 3), F = { n: count, seg: SEG, sides: SIDES, dir };
+    const st = SEG * SIDES + 1, P = new Float32Array(count * st * 3), F = { n: count, seg: SEG, sides: SIDES, dir, host: active, hostName: active.name };
     fiberWrite(F, C, R, P);
     pushStruct();
     const rec = newRec(uniqueName('毛'), P, fiberIndex(count, SEG, SIDES));
@@ -4502,7 +4587,8 @@ function groomDown(e) {
   const F = active.fiber, C = fiberPts(F, pos), S1 = F.seg + 1, L = new Float32Array(F.n * F.seg);
   for (let k = 0; k < F.n; k++) for (let s = 0; s < F.seg; s++) { const o = (k * S1 + s) * 3; L[k * F.seg + s] = Math.hypot(C[o+3] - C[o], C[o+4] - C[o+1], C[o+5] - C[o+2]); }
   pushUndo();
-  groom.drag = { id: e.pointerId, x: e.clientX, y: e.clientY, C, L, R: fiberRadii(F, pos, C), scr: new Float32Array(F.n * S1 * 2), touched: new Uint8Array(F.n), seed: 1 };
+  const R = fiberRadii(F, pos, C);
+  groom.drag = { id: e.pointerId, x: e.clientX, y: e.clientY, C, L, R, touched: new Uint8Array(F.n), seed: 1, collide: groomCollider(F, C, R) };
   controls.enabled = false; try { canvas.setPointerCapture(e.pointerId); } catch {}
   return true;
 }
@@ -4515,72 +4601,102 @@ function groomMove(e) {
   camera.updateMatrixWorld();
   const vp = new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse).elements, W = rect.width, H = rect.height;
   const right = camAxis(0), up = camAxis(1), wpp = worldPerPx(controls.target);
-  const off = new V3().addScaledVector(right, dxp * wpp).addScaledVector(up, -dyp * wpp);
-  const sign = e.altKey ? -1 : 1;
-  // weights per fiber point: screen distance to the brush, more toward the tip
-  const wts = new Float32Array(F.n * S1); let any = 0;
-  for (let k = 0; k < F.n; k++) {
-    for (let s = 1; s < S1; s++) {
-      const o = (k * S1 + s) * 3, x = C[o], y = C[o+1], z = C[o+2];
+  const off = new V3().addScaledVector(right, dxp * wpp).addScaledVector(up, -dyp * wpp), sign = e.altKey ? -1 : 1;
+  // weights per fiber point: screen distance to the brush (mirrored: the point's mirror image under the brush), more toward the tip
+  const weights = mir => {
+    const wts = new Float32Array(F.n * S1); let any = 0;
+    for (let k = 0; k < F.n; k++) for (let s = 1; s < S1; s++) {
+      const o = (k * S1 + s) * 3, x = mir ? -C[o] : C[o], y = C[o+1], z = C[o+2];
       const cw = vp[3] * x + vp[7] * y + vp[11] * z + vp[15]; if (cw <= 0) continue;
       const sx = ((vp[0] * x + vp[4] * y + vp[8] * z + vp[12]) / cw * 0.5 + 0.5) * W, sy = (0.5 - (vp[1] * x + vp[5] * y + vp[9] * z + vp[13]) / cw * 0.5) * H;
       const d = Math.hypot(sx - mx, sy - my) / Rpx; if (d >= 1) continue;
-      const fo = (1 - d * d) ** 2; wts[k * S1 + s] = fo * k0 * (tool === 'comb' || tool === 'gravity' || tool === 'curl' ? s / F.seg : 1); any = 1;
+      wts[k * S1 + s] = (1 - d * d) ** 2 * k0 * (tool === 'comb' || tool === 'gravity' || tool === 'curl' ? s / F.seg : 1); any = 1;
     }
-  }
-  if (!any) return;
-  const gS = new Float32Array(S1 * 3), gN = new Float32Array(S1);   // clump: average point per segment level under the brush
-  if (tool === 'clump') for (let k = 0; k < F.n; k++) for (let s = 1; s < S1; s++) { const w = wts[k * S1 + s]; if (!w) continue; const o = (k * S1 + s) * 3; gS[s*3] += C[o] * w; gS[s*3+1] += C[o+1] * w; gS[s*3+2] += C[o+2] * w; gN[s] += w; }
+    return any ? wts : null;
+  };
   let rs = G.seed;
   const rnd = () => { rs = (rs * 1103515245 + 12345) & 0x7fffffff; return rs / 0x7fffffff - 0.5; };
   const q = new THREE.Quaternion(), v = new V3(), axis = new V3();
-  for (let k = 0; k < F.n; k++) {
-    let hit = 0; for (let s = 1; s < S1; s++) if (wts[k * S1 + s]) { hit = 1; break; }
-    if (!hit) continue;
-    G.touched[k] = 1;
-    const c0 = k * S1 * 3, segL = L[k * F.seg];
-    if (tool === 'length' || tool === 'cut') {
-      let w = 0; for (let s = 1; s < S1; s++) w = Math.max(w, wts[k * S1 + s]);
-      const f = tool === 'cut' ? 1 - 0.02 * w * moved : 1 + sign * 0.01 * w * moved;
-      for (let s = 0; s < F.seg; s++) L[k * F.seg + s] = Math.max(1e-6, L[k * F.seg + s] * Math.max(0.5, Math.min(1.5, f)));
-      continue;
+  const applyW = (wts, off, sg) => {
+    const gS = new Float32Array(S1 * 3), gN = new Float32Array(S1);   // clump: average point per segment level under the brush
+    if (tool === 'clump') for (let k = 0; k < F.n; k++) for (let s = 1; s < S1; s++) { const w = wts[k * S1 + s]; if (!w) continue; const o = (k * S1 + s) * 3; gS[s*3] += C[o] * w; gS[s*3+1] += C[o+1] * w; gS[s*3+2] += C[o+2] * w; gN[s] += w; }
+    for (let k = 0; k < F.n; k++) {
+      let hit = 0; for (let s = 1; s < S1; s++) if (wts[k * S1 + s]) { hit = 1; break; }
+      if (!hit) continue;
+      G.touched[k] = 1;
+      const c0 = k * S1 * 3, segL = L[k * F.seg];
+      if (tool === 'length' || tool === 'cut') {
+        let w = 0; for (let s = 1; s < S1; s++) w = Math.max(w, wts[k * S1 + s]);
+        const f = tool === 'cut' ? 1 - 0.02 * w * moved : 1 + sg * 0.01 * w * moved;
+        for (let s = 0; s < F.seg; s++) L[k * F.seg + s] = Math.max(1e-6, L[k * F.seg + s] * Math.max(0.5, Math.min(1.5, f)));
+        continue;
+      }
+      if (tool === 'smooth') {
+        for (let s = 1; s < F.seg; s++) { const w = Math.min(1, wts[k * S1 + s] * 0.6), o = c0 + s * 3; for (let j = 0; j < 3; j++) C[o+j] += ((C[o-3+j] + C[o+3+j]) / 2 - C[o+j]) * w; }
+        continue;
+      }
+      if (tool === 'curl') axis.set(F.dir[k*3], F.dir[k*3+1], F.dir[k*3+2]);
+      for (let s = 1; s < S1; s++) {
+        const w = wts[k * S1 + s]; if (!w) continue;
+        const o = c0 + s * 3;
+        if (tool === 'comb') { C[o] += off.x * w; C[o+1] += off.y * w; C[o+2] += off.z * w; }
+        else if (tool === 'gravity') { C[o+1] -= segL * 0.08 * w * moved * 0.2; }
+        else if (tool === 'lift') {
+          const p = o - 3, dl = L[k * F.seg + s - 1], b = Math.min(1, w * 0.04 * moved);
+          v.set(C[o] - C[p], C[o+1] - C[p+1], C[o+2] - C[p+2]).normalize().lerp(axis.set(F.dir[k*3], F.dir[k*3+1], F.dir[k*3+2]), b).normalize();
+          C[o] = C[p] + v.x * dl; C[o+1] = C[p+1] + v.y * dl; C[o+2] = C[p+2] + v.z * dl;
+        } else if (tool === 'clump') { if (gN[s] > 0) { const b = Math.min(1, w * 0.03 * moved); for (let j = 0; j < 3; j++) C[o+j] += (gS[s*3+j] / gN[s] - C[o+j]) * b; } }
+        else if (tool === 'curl') {
+          q.setFromAxisAngle(axis, sg * w * 0.004 * moved * s);
+          v.set(C[o] - C[c0], C[o+1] - C[c0+1], C[o+2] - C[c0+2]).applyQuaternion(q);
+          C[o] = C[c0] + v.x; C[o+1] = C[c0+1] + v.y; C[o+2] = C[c0+2] + v.z;
+        } else if (tool === 'frizz') { const a = segL * 0.03 * w * moved * 0.2; C[o] += rnd() * a; C[o+1] += rnd() * a; C[o+2] += rnd() * a; }
+      }
     }
-    if (tool === 'smooth') {
-      for (let s = 1; s < F.seg; s++) { const w = Math.min(1, wts[k * S1 + s] * 0.6), o = c0 + s * 3; for (let j = 0; j < 3; j++) C[o+j] += ((C[o-3+j] + C[o+3+j]) / 2 - C[o+j]) * w; }
-      continue;
-    }
-    if (tool === 'curl') axis.set(F.dir[k*3], F.dir[k*3+1], F.dir[k*3+2]);
-    for (let s = 1; s < S1; s++) {
-      const w = wts[k * S1 + s]; if (!w) continue;
-      const o = c0 + s * 3;
-      if (tool === 'comb') { C[o] += off.x * w; C[o+1] += off.y * w; C[o+2] += off.z * w; }
-      else if (tool === 'gravity') { C[o+1] -= segL * 0.08 * w * moved * 0.2; }
-      else if (tool === 'lift') {   // turn each segment toward the root direction
-        const p = o - 3, dl = L[k * F.seg + s - 1], b = Math.min(1, w * 0.04 * moved);
-        v.set(C[o] - C[p], C[o+1] - C[p+1], C[o+2] - C[p+2]).normalize().lerp(axis.set(F.dir[k*3], F.dir[k*3+1], F.dir[k*3+2]), b).normalize();
-        C[o] = C[p] + v.x * dl; C[o+1] = C[p+1] + v.y * dl; C[o+2] = C[p+2] + v.z * dl;
-      } else if (tool === 'clump') { if (gN[s] > 0) { const b = Math.min(1, w * 0.03 * moved); for (let j = 0; j < 3; j++) C[o+j] += (gS[s*3+j] / gN[s] - C[o+j]) * b; } }
-      else if (tool === 'curl') {   // rotate the strand around its root direction, more toward the tip
-        q.setFromAxisAngle(axis, sign * w * 0.004 * moved * s);
-        v.set(C[o] - C[c0], C[o+1] - C[c0+1], C[o+2] - C[c0+2]).applyQuaternion(q);
-        C[o] = C[c0] + v.x; C[o+1] = C[c0+1] + v.y; C[o+2] = C[c0+2] + v.z;
-      } else if (tool === 'frizz') { const a = segL * 0.03 * w * moved * 0.2; C[o] += rnd() * a; C[o+1] += rnd() * a; C[o+2] += rnd() * a; }
-    }
-  }
+  };
+  const w1 = weights(false), w2 = S.sym ? weights(true) : null;
+  if (!w1 && !w2) return;
+  if (w1) applyW(w1, off, sign);
+  if (w2) applyW(w2, new V3(-off.x, off.y, off.z), -sign);   // the mirror image of the stroke (curl turns the other way)
   G.seed = rs;
-  // follow the leader: keep every segment's length, root fixed
-  for (let k = 0; k < F.n; k++) {
-    if (!G.touched[k]) continue;
+  // follow the leader: keep every segment's length, root fixed; then keep the strands outside the part they grew from
+  const ftl = k => {
     const c0 = k * S1 * 3;
     for (let s = 1; s < S1; s++) {
       const o = c0 + s * 3, p = o - 3, dl = L[k * F.seg + s - 1];
       let x = C[o] - C[p], y = C[o+1] - C[p+1], z = C[o+2] - C[p+2]; const l = Math.hypot(x, y, z) || 1;
       C[o] = C[p] + x / l * dl; C[o+1] = C[p+1] + y / l * dl; C[o+2] = C[p+2] + z / l * dl;
     }
-  }
+  };
+  const col = $('groomCollide').checked ? G.collide : null;
+  for (let k = 0; k < F.n; k++) { if (!G.touched[k]) continue; ftl(k); if (col && col(k)) ftl(k); }
   fiberWrite(F, C, G.R, pos, G.touched);
   G.touched.fill(0);
   computeAllNormals(); geo.computeBoundingSphere();
+}
+// a function that pushes fiber k's points (beyond the root) out of the host part; true if anything moved
+function groomCollider(F, C, R) {
+  const host = F.host && subtools.includes(F.host) ? F.host : subtools.find(r => r !== active && r.name === F.hostName);
+  if (!host) return null;
+  const g = ensureView(host).geometry, bvh = g.boundsTree; if (!bvh) return null;
+  const gp = g.attributes.position.array, gi = g.index.array, S1 = F.seg + 1, P3 = new V3(), hit = { point: new V3(), distance: 0, faceIndex: 0 };
+  return k => {
+    let movedAny = false; const gap = Math.max(R[k] * 1.5, 1e-6);
+    for (let s = 2; s < S1; s++) {
+      const o = (k * S1 + s) * 3; P3.set(C[o], C[o+1], C[o+2]);
+      if (!bvh.closestPointToPoint(P3, hit, 0, gap * 20)) continue;
+      const f = hit.faceIndex * 3, a = gi[f] * 3, b = gi[f+1] * 3, c = gi[f+2] * 3;
+      const ux = gp[b] - gp[a], uy = gp[b+1] - gp[a+1], uz = gp[b+2] - gp[a+2], wx = gp[c] - gp[a], wy = gp[c+1] - gp[a+1], wz = gp[c+2] - gp[a+2];
+      let nx = uy * wz - uz * wy, ny = uz * wx - ux * wz, nz = ux * wy - uy * wx; const nl = Math.hypot(nx, ny, nz) || 1; nx /= nl; ny /= nl; nz /= nl;
+      const d = (C[o] - hit.point.x) * nx + (C[o+1] - hit.point.y) * ny + (C[o+2] - hit.point.z) * nz;
+      if (d >= 0) {   // outside: measure the true distance (edges / corners), not along one face's normal
+        if (hit.distance >= gap) continue;
+        if (hit.distance > 1e-9) { nx = (C[o] - hit.point.x) / hit.distance; ny = (C[o+1] - hit.point.y) / hit.distance; nz = (C[o+2] - hit.point.z) / hit.distance; }
+      }
+      C[o] = hit.point.x + nx * gap; C[o+1] = hit.point.y + ny * gap; C[o+2] = hit.point.z + nz * gap; movedAny = true;
+    }
+    return movedAny;
+  };
 }
 function groomUp() {
   const G = groom.drag; if (!G) return;
@@ -5222,7 +5338,13 @@ const crom = (a, b, c, d, t) => { const t2 = t * t, t3 = t2 * t; return 0.5 * (2
 function tlPose(k) {
   const K = tlKeys, n = K.length;
   if (n === 1) return K[0];
-  const loop = $('tlLoop').checked, segs = loop ? n : n - 1, x = Math.min(segs - 1e-9, k * segs), s = Math.floor(x), t = sstep(x - s) * 0.35 + (x - s) * 0.65;
+  const loop = $('tlLoop').checked, segs = loop ? n : n - 1;
+  // pause at each key: a share `hold` of the time is spent standing on keys (one hold per segment start + the end)
+  const hold = Math.min(0.8, Math.max(0, +$('tlHold').value || 0) * (loop ? n : n) / Math.max(1, +$('tlSecs').value || 8));
+  const stops = loop ? n : n, move = 1 - hold, per = segs ? move / segs : 1, hs = stops ? hold / stops : 0;
+  let s = 0, u = 0, kk = Math.max(0, Math.min(1, k));
+  for (s = 0; s < segs; s++) { if (kk < hs) { u = 0; break; } kk -= hs; if (kk < per || s === segs - 1) { u = Math.min(1, kk / (per || 1)); break; } kk -= per; }
+  const ease = $('tlEase').value, t = ease === 'linear' ? u : ease === 'smooth' ? sstep(u) : sstep(u) * 0.35 + u * 0.65;
   const at = i => loop ? K[((i % n) + n) % n] : K[Math.max(0, Math.min(n - 1, i))];
   const q = [at(s - 1), at(s), at(s + 1), at(s + 2)], sp = q.map(tlSph);
   // unwrap the azimuth so the camera takes the short way round
@@ -5232,6 +5354,41 @@ function tlPose(k) {
   const el = Math.max(-1.55, Math.min(1.55, crom(sp[0][2], sp[1][2], sp[2][2], sp[3][2], t)));
   const p = [tg[0] + r * Math.cos(el) * Math.sin(az), tg[1] + r * Math.sin(el), tg[2] + r * Math.cos(el) * Math.cos(az)];
   return { p, t: tg, fov: crom(q[0].fov, q[1].fov, q[2].fov, q[3].fov, t), vis: k >= 1 ? (loop ? K[0] : K[n - 1]).vis : q[1].vis };
+}
+// minimal ZIP writer (stored, no compression) for frame sequences
+const CRC_T = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+const crc32 = b => { let c = 0xffffffff; for (let i = 0; i < b.length; i++) c = CRC_T[(c ^ b[i]) & 255] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
+function zipStore(files) {   // files: [{ name, data: Uint8Array }]
+  const parts = [], cen = []; let off = 0;
+  const u16 = v => [v & 255, v >>> 8 & 255], u32 = v => [v & 255, v >>> 8 & 255, v >>> 16 & 255, v >>> 24 & 255];
+  for (const f of files) {
+    const nm = new TextEncoder().encode(f.name), c = crc32(f.data), sz = f.data.length;
+    const head = [0x50, 0x4b, 3, 4, ...u16(20), ...u16(0), ...u16(0), ...u16(0), ...u16(0x21), ...u32(c), ...u32(sz), ...u32(sz), ...u16(nm.length), ...u16(0)];
+    parts.push(new Uint8Array(head), nm, f.data);
+    cen.push(new Uint8Array([0x50, 0x4b, 1, 2, ...u16(20), ...u16(20), ...u16(0), ...u16(0), ...u16(0), ...u16(0x21), ...u32(c), ...u32(sz), ...u32(sz), ...u16(nm.length), ...u16(0), ...u16(0), ...u16(0), ...u16(0), ...u32(0), ...u32(off)]), nm);
+    off += head.length + nm.length + sz;
+  }
+  const cl = cen.reduce((a, b) => a + b.length, 0);
+  return new Blob([...parts, ...cen, new Uint8Array([0x50, 0x4b, 5, 6, 0, 0, 0, 0, ...u16(files.length), ...u16(files.length), ...u32(cl), ...u32(off), 0, 0])], { type: 'application/zip' });
+}
+// frame-by-frame render of the timeline (exact timing, any length), PNGs in one ZIP
+async function tlFrames() {
+  if (tlKeys.length < 2 || turning || stroke) return;
+  const fps = +$('tlFps').value || 30, N = Math.max(2, Math.round((+$('tlSecs').value || 8) * fps)), keep = camSnap(), files = [];
+  turning = true;
+  const keepClear = renderer.getClearAlpha(), keepCol = renderer.getClearColor(new THREE.Color());
+  renderer.setClearColor(0x2b2c31, 1); ring.visible = ring2.visible = quad.visible = quad2.visible = false;
+  try {
+    for (let f = 0; f < N; f++) {
+      camApply(tlPose(f / (N - 1)), true); camera.updateMatrixWorld();
+      renderer.render(scene, camera);
+      const blob = await new Promise(res => canvas.toBlob(res, 'image/png'));
+      files.push({ name: `frame_${String(f).padStart(5, '0')}.png`, data: new Uint8Array(await blob.arrayBuffer()) });
+      if (f % 10 === 0) busyText(`連番画像を作っています… ${f + 1} / ${N}`);
+    }
+  } finally { busyText(null); renderer.setClearColor(keepCol, keepClear); camApply(keep); turning = false; }
+  saveOne(async () => ({ name: `${fileBase()}_frames.zip`, blob: zipStore(files) }));
+  toast(`${N} 枚の連番画像（${fps} fps）を ZIP にまとめました`);
 }
 function tlRefresh() {
   const n = tlKeys.length;
@@ -6930,6 +7087,36 @@ function pngFromRGBA(rgba, size) {
   c.getContext('2d').putImageData(new ImageData(rgba, size, size), 0, 0);
   return new Promise(res => c.toBlob(b => b.arrayBuffer().then(a => res(new Uint8Array(a))), 'image/png'));
 }
+// per-vertex ambient occlusion and cavity of a mesh, packed as colours for bakeMaps (R = AO, G = cavity), so the
+// same texel-exact bake (C++ when available) carries them into the UV layout
+function aoCavityPaint(hp, hi) {
+  const nv = hp.length / 3, n = computeNormals(hp, hi);
+  const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(hp, 3)); g.setIndex(new THREE.BufferAttribute(hi.slice(), 1));
+  const bvh = new MeshBVH(g);
+  let lo = [Infinity, Infinity, Infinity], hi3 = [-Infinity, -Infinity, -Infinity];
+  for (let i = 0; i < hp.length; i += 3) for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], hp[i+k]); hi3[k] = Math.max(hi3[k], hp[i+k]); }
+  const diag = Math.hypot(hi3[0] - lo[0], hi3[1] - lo[1], hi3[2] - lo[2]) || 1;
+  const ao = aoFor(hp, n, [bvh], nv > 600000 ? 8 : 16, diag * 0.12, diag * 1e-4);
+  // cavity: the umbrella vector along the normal, relative to the local edge length (+ = dent)
+  const sum = new Float32Array(nv * 3), cnt = new Float32Array(nv), el = new Float32Array(nv);
+  for (let f = 0; f < hi.length; f += 3) for (let k = 0; k < 3; k++) {
+    const a = hi[f+k], b = hi[f+(k+1)%3];
+    for (const [x, y] of [[a, b], [b, a]]) { sum[x*3] += hp[y*3]; sum[x*3+1] += hp[y*3+1]; sum[x*3+2] += hp[y*3+2]; cnt[x]++; el[x] += Math.hypot(hp[x*3] - hp[y*3], hp[x*3+1] - hp[y*3+1], hp[x*3+2] - hp[y*3+2]); }
+  }
+  const cav = new Float32Array(nv), mags = [];
+  for (let v = 0; v < nv; v++) {
+    if (!cnt[v]) continue; const c = cnt[v], i = v * 3;
+    cav[v] = ((sum[i] / c - hp[i]) * n[i] + (sum[i+1] / c - hp[i+1]) * n[i+1] + (sum[i+2] / c - hp[i+2]) * n[i+2]) / (el[v] / c || 1);
+    if (v % 7 === 0) mags.push(Math.abs(cav[v]));
+  }
+  mags.sort((a, b) => a - b); const sc = mags[Math.floor(mags.length * 0.97)] || 1;
+  const toLin = x => x <= 0.04045 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);   // the bake writes sRGB: pre-linearise
+  const paint = new Float32Array(nv * 3);
+  for (let v = 0; v < nv; v++) { paint[v*3] = toLin(ao[v]); paint[v*3+1] = toLin(Math.max(0, Math.min(1, 0.5 - 0.5 * cav[v] / sc))); paint[v*3+2] = 0; }
+  g.dispose();
+  return paint;
+}
+const splitChannel = (rgba, ch) => { const o = new Uint8ClampedArray(rgba.length); for (let i = 0; i < rgba.length; i += 4) { o[i] = o[i+1] = o[i+2] = rgba[i + ch]; o[i+3] = rgba[i+3]; } return o; };
 async function bakeTextures() {
   const L = curLevel();
   if (!hasUV(L)) { toast('先に UV を展開してください'); return; }
@@ -6944,16 +7131,22 @@ async function bakeTextures() {
     if (!high) high = materializeLevel(active.levels.length - 1);
     const box = sceneBounds([active]), maxDist = box.getSize(new V3()).length() * 0.03;
     res = bakeMaps({ pos, uvIdx: L.uvIdx, uv: L.uv }, high, { size, maxDist });
+    if ($('bakeAO').checked) {   // AO + cavity: a second pass with the maps as colours
+      busyText('AO と凹みのマップを焼き付けています…');
+      const r2 = bakeMaps({ pos, uvIdx: L.uvIdx, uv: L.uv }, { pos: high.pos, idx: high.idx, paint: aoCavityPaint(high.pos, high.idx) }, { size, maxDist });
+      if (r2 && r2.color) { res.ao = splitChannel(r2.color, 0); res.cav = splitChannel(r2.color, 1); }
+    }
     res.t = performance.now() - t0;
   });
   if (!res) return;
   const normalPng = await pngFromRGBA(res.normal, size), colorPng = res.color ? await pngFromRGBA(res.color, size) : null, heightPng = await pngFromRGBA(res.height, size);
+  const aoPng = res.ao ? await pngFromRGBA(res.ao, size) : null, cavPng = res.cav ? await pngFromRGBA(res.cav, size) : null;
   pushEntry(lvSnap());
-  const NL = { ...L, bake: { size, normalPng, colorPng, heightPng, heightRange: res.heightRange } };
+  const NL = { ...L, bake: { size, normalPng, colorPng, heightPng, heightRange: res.heightRange, aoPng, cavPng } };
   active.levels = active.levels.slice(); active.levels[active.lv] = NL;
   texCache.delete(L); updateTexUI(); scheduleSave();
   $('texPreview').checked = true; await setTexPreview(true);
-  toast(`焼き付けました（${size}px・${res.color ? '法線・高さ・色' : '法線・高さ'}・${(res.t / 1000).toFixed(1)}秒${res.misses ? `・届かなかった点 ${res.misses.toLocaleString()}` : ''}）`);
+  toast(`焼き付けました（${size}px・${res.color ? '法線・高さ・色' : '法線・高さ'}${res.ao ? '・AO・凹み' : ''}・${(res.t / 1000).toFixed(1)}秒${res.misses ? `・届かなかった点 ${res.misses.toLocaleString()}` : ''}）`);
 }
 // textures for preview / GLB export
 const texCache = new WeakMap();
@@ -7024,6 +7217,8 @@ async function saveTextures() {
   const L = curLevel(); if (!hasUV(L) || !L.bake) return;
   const base = fileBase(), files = [{ name: `${base}_normal.png`, data: L.bake.normalPng.slice().buffer }];
   if (L.bake.colorPng) files.push({ name: `${base}_color.png`, data: L.bake.colorPng.slice().buffer });
+  if (L.bake.aoPng) files.push({ name: `${base}_ao.png`, data: L.bake.aoPng.slice().buffer });
+  if (L.bake.cavPng) files.push({ name: `${base}_cavity.png`, data: L.bake.cavPng.slice().buffer });
   if (L.bake.heightPng) { files.push({ name: `${base}_height.png`, data: L.bake.heightPng.slice().buffer }); toast(`高さマップ：灰色 128 が面の位置、白／黒が ±${(L.bake.heightRange * mmPerUnit()).toFixed(2)} mm（印刷サイズ換算）`); }
   if (!native) { for (const f of files) download(new Blob([f.data], { type: 'image/png' }), f.name); return; }
   const dir = await native.saveMany(files);
@@ -7955,6 +8150,7 @@ $('rdGo').onclick = () => busy(() => renderImage().catch(err => { console.error(
 $('rdSave').onclick = () => { if (lastRender) saveOne(async () => ({ name: `${fileBase()}_render${lastRender.suffix || ''}.png`, blob: lastRender.blob })); };
 $('rdClose').onclick = () => { $('rdView').hidden = true; };
 $('tlAdd').onclick = () => tlAdd();
+$('tlPng').onclick = () => tlFrames(); $('tlHold').addEventListener('input', e => { $('tlHoldOut').textContent = (+e.target.value).toFixed(1); });
 $('tlClear').onclick = () => { tlKeys = []; tlRefresh(); scheduleSave(); };
 $('tlPlay').onclick = () => tlPlayNow();
 $('tlRec').onclick = () => { if (tlKeys.length >= 2) recordCamera(+$('tlSecs').value || 8, tlPose, 'timeline'); };
@@ -7974,7 +8170,7 @@ for (const id of ['nmInst', 'nmFit', 'nmSeed', 'nmFlip', 'mpTile', 'mpTris', 'nm
 $('nmInst').addEventListener('pointerdown', nmFill); $('nmInst').addEventListener('focus', nmFill); nmFill();
 $('nmPrevBtn').onclick = () => nmPreview('nano'); $('mpPrevBtn').onclick = () => nmPreview('micro');
 $('nmGo').onclick = () => nmMake('nano'); $('mpGo').onclick = () => nmMake('micro');
-$('nmCancel').onclick = () => nmClear();
+$('nmCancel').onclick = () => nmClear(); $('nmRebuild').onclick = () => nmRebuild();
 $('dfCancel').onclick = () => deformCancel();
 $('exThick').addEventListener('input', e => { $('exThickOut').textContent = (+e.target.value).toFixed(3); });
 $('mfStore').onclick = morphStore; $('mfRestore').onclick = morphRestore; $('mfDel').onclick = morphDelete;
