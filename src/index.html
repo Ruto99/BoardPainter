@@ -417,6 +417,8 @@ dl.keys dd{margin:0;color:var(--muted)}
         <button class="btn" data-pe="loops" title="辺をクリック：「ループの数」の本数だけ、等間隔に辺の輪を入れる">ループを複数</button>
         <button class="btn" data-pe="spin" title="2枚の面の間の辺をクリック：辺を回して隣の角どうしをつなぎ直す">辺を回す</button>
         <button class="btn" data-pe="relax" title="面をクリック：対象の内側の頂点を均等にならす（形はほぼそのまま）">ならす</button>
+        <button class="btn" data-pe="vbevel" title="面の角の近くをクリックしてドラッグ：その頂点を小さな面に面取りする（上へドラッグで大きく）">角を面取り</button>
+        <button class="btn" data-pe="ebridge" title="穴のふちの辺を2つ順にクリック：2本の辺の間を四角でつなぐ">辺どうしをつなぐ</button>
       </div>
       <div class="grid2" style="margin-top:6px">
         <button class="btn" id="peCreaseAngle" title="面と面の角度が30°以上の辺すべてにクリースを付けます">角の辺をクリース</button>
@@ -424,6 +426,7 @@ dl.keys dd{margin:0;color:var(--muted)}
       </div>
       <div class="row" style="margin-top:6px"><label for="dsLevel">なめらか表示</label><select id="dsLevel" style="width:150px"><option value="0">オフ</option><option value="1">細分化 1 回分</option><option value="2">細分化 2 回分</option><option value="3">細分化 3 回分</option></select></div>
       <button class="btn full" id="dsApply" disabled title="表示している なめらかな形を、細分化レベルとして確定します">なめらか表示を細分化レベルにする</button>
+      <div class="row" style="margin-top:6px"><label for="peSegs" title="「穴をつなぐ」「辺どうしをつなぐ」で作る帯の段数">つなぐ帯の段数</label><select id="peSegs"><option selected>1</option><option>2</option><option>3</option><option>4</option><option>6</option></select></div>
       <div class="row" style="margin-top:6px"><label for="peLoops">ループの数</label><select id="peLoops"><option>2</option><option selected>3</option><option>4</option><option>5</option><option>7</option></select></div>
       <div class="row"><input type="checkbox" id="peSym"><label for="peSym" title="左右対称（X）のパーツで、反対側の同じ面・辺にも同じ編集をします">左右対称に編集（X）</label></div>
       <div class="row"><input type="checkbox" id="peEach"><label for="peEach" title="複数の面を押し出す・はめ込むとき、まとめずに 1 枚ずつ別々に行います">面ごとに押し出す・はめ込む</label></div>
@@ -909,6 +912,7 @@ dl.keys dd{margin:0;color:var(--muted)}
       <div class="row"><label for="uvSeams">継ぎ目</label><select id="uvSeams"><option value="angle">角度だけで決める</option><option value="group">ポリグループの境目にも入れる</option><option value="mask">マスクの境目にも入れる</option></select></div>
       <div class="row"><input type="checkbox" id="uvDist"><label for="uvDist" title="赤：引き伸ばされた面・青：縮んだ面（テクスチャの粗さのむら）">歪みを色で表示</label></div>
       <button class="btn full" id="uvGo">UV を自動展開</button>
+      <button class="btn full" id="uvAtlas" title="表示中のパーツ全部を 1 枚の UV（アトラス）に並べて展開します。焼き付けると 1 枚のテクスチャにまとまります">表示中のパーツをまとめて展開（アトラス）</button>
       <div class="row" style="margin-top:10px"><label for="bakeSrc">焼き付け元</label><select id="bakeSrc" style="width:150px"></select></div>
       <div class="row"><input type="checkbox" id="bakeAO"><label for="bakeAO" title="隙間の暗さ（アンビエントオクルージョン）と凹み（キャビティ）のマップも作ります。少し時間がかかります">AO・凹みのマップも作る</label></div>
       <div class="row"><input type="checkbox" id="bakeID"><label for="bakeID" title="ポリグループごとの色で塗り分けたマップ（ID マップ）も作ります">ID マップも作る</label></div>
@@ -917,6 +921,7 @@ dl.keys dd{margin:0;color:var(--muted)}
       <input type="range" id="bakeDist" min="0.5" max="12" step="0.5" value="3">
       <div class="row"><label for="bakeSize">テクスチャの大きさ</label><select id="bakeSize"><option value="512">512</option><option value="1024" selected>1024</option><option value="2048">2048</option></select></div>
       <button class="btn primary full" id="bakeGo">法線マップと色を焼き付け</button>
+      <button class="btn full" id="bakeAtlas" title="同じアトラスのパーツを、それぞれの一番上の細分化レベル（なければ自分自身）から 1 枚のテクスチャに焼き付けます">アトラスのパーツをまとめて焼き付け</button>
       <div class="row"><input type="checkbox" id="texPreview"><label for="texPreview">焼き付けたテクスチャで表示</label></div>
       <button class="btn full" id="texSave">テクスチャを PNG で保存</button>
       <div class="row" style="margin-top:10px"><label for="dmRef">基準の面</label><select id="dmRef" style="width:150px"><option value="smooth">なめらか（細分化した面）</option><option value="flat">平ら（今のレベルの面）</option></select></div>
@@ -1370,10 +1375,10 @@ function recData(r) {
 }
 // uv + baked textures (PNG bytes) stored on a level
 const polyData = L => ({ ...(L.polys ? { polys: { start: L.polys.start, idx: L.polys.idx } } : {}), ...(L.crease ? { crease: L.crease } : {}) });
-const texData = L => L.uv ? { uvIdx: L.uvIdx, uv: L.uv, bake: L.bake ? { size: L.bake.size, normalPng: L.bake.normalPng, colorPng: L.bake.colorPng || null, heightPng: L.bake.heightPng || null, aoPng: L.bake.aoPng || null, cavPng: L.bake.cavPng || null, idPng: L.bake.idPng || null, nrmFmt: L.bake.nrmFmt || 'gl', heightRange: L.bake.heightRange || 0 } : null } : {};
+const texData = L => L.uv ? { uvIdx: L.uvIdx, uv: L.uv, atlas: L.atlas || 0, bake: L.bake ? { size: L.bake.size, normalPng: L.bake.normalPng, colorPng: L.bake.colorPng || null, heightPng: L.bake.heightPng || null, aoPng: L.bake.aoPng || null, cavPng: L.bake.cavPng || null, idPng: L.bake.idPng || null, nrmFmt: L.bake.nrmFmt || 'gl', heightRange: L.bake.heightRange || 0 } : null } : {};
 function texFromData(L, d, ix) {
   if (!(d.uv instanceof Float32Array) || !(d.uvIdx instanceof Uint32Array) || d.uvIdx.length !== ix.length || d.uv.length !== ix.length * 2) return;
-  L.uvIdx = d.uvIdx; L.uv = d.uv;
+  L.uvIdx = d.uvIdx; L.uv = d.uv; if (d.atlas > 0) L.atlas = d.atlas;
   const b = d.bake;
   if (b && b.normalPng instanceof Uint8Array) L.bake = { size: b.size | 0, normalPng: b.normalPng, colorPng: b.colorPng instanceof Uint8Array ? b.colorPng : null, heightPng: b.heightPng instanceof Uint8Array ? b.heightPng : null, aoPng: b.aoPng instanceof Uint8Array ? b.aoPng : null, cavPng: b.cavPng instanceof Uint8Array ? b.cavPng : null, idPng: b.idPng instanceof Uint8Array ? b.idPng : null, nrmFmt: b.nrmFmt === 'dx' ? 'dx' : 'gl', heightRange: +b.heightRange || 0 };
 }
@@ -1720,6 +1725,7 @@ function dropDegenerate(ix) {
 //          { kind:'all', items:[[rec, pos]] } for operations that move every subtool
 const undoStack = [], redoStack = [];
 function snapshot(full, extraLayers) { return { rec: active, lvl: active.lv, pos: pos.slice(), mask: mask.slice(), paint: paint ? paint.slice() : null, pg: pg ? pg.slice() : null, lay: laySnap(extraLayers), idx: full ? idx.slice() : null, mirror: full ? mirror.slice() : null }; }
+const uvsSnap = recs => ({ kind: 'uvs', items: recs.map(r => [r, r.levels.slice(), r.lv]) });
 const structSnap = () => ({ kind:'struct', list: subtools.slice(), active });
 const allSnap = () => ({ kind:'all', items: subtools.map(r => [r, r.pos.slice()]) });
 // history also has a memory budget (a quarter of the PC's memory): big models drop their oldest steps first
@@ -1806,6 +1812,11 @@ function stepHistory(from, to) {
     const e = from.pop();
     if (e.kind === 'struct') { to.push(structSnap()); restoreStruct(e); break; }
     if (e.kind === 'all') { to.push(allSnap()); restoreAll(e); break; }
+    if (e.kind === 'uvs') {
+      const items = e.items.filter(([r, , lv]) => subtools.includes(r) && r.lv === lv);
+      to.push(uvsSnap(items.map(x => x[0]))); for (const [r, L] of items) { for (const x of r.levels) texCache.delete(x); r.levels = L; }
+      setTexPreview(false); $('texPreview').checked = false; updateTexUI(); scheduleSave(); break;
+    }
     if (!subtools.includes(e.rec)) continue;   // that subtool was deleted since; nothing to restore
     if (e.rec !== active) activate(e.rec);
     if (e.kind === 'lv') { to.push(lvSnap()); restoreLv(e); break; }
@@ -7219,7 +7230,8 @@ function peHover(e) {
     const r = PE.insertLoops(pos, M.polys, h.edge[0], h.edge[1], +$('peLoops').value);
     if (r) { const n0 = nV; for (const g of r.polys) for (let k = 0; k < g.length; k++) { const u = g[k], w = g[(k + 1) % g.length]; if (u >= n0 && w >= n0 && u < w) segs.push(...pePt(r.pos, u), ...pePt(r.pos, w)); } }
   }
-  else if (a === 'vmove') { const v = peVertex(h); for (const f of M.vf[v]) { const g = M.polys[f], k = g.indexOf(v); segs.push(...pePt(pos, v), ...pePt(pos, g[(k + 1) % g.length]), ...pePt(pos, v), ...pePt(pos, g[(k + g.length - 1) % g.length])); } }
+  else if (a === 'ebridge') { segs.push(...pePt(pos, h.edge[0]), ...pePt(pos, h.edge[1])); if (pe.bridgeA) segs.push(...pePt(pos, pe.bridgeA[0]), ...pePt(pos, pe.bridgeA[1])); }
+  else if (a === 'vmove' || a === 'vbevel') { const v = peVertex(h); for (const f of M.vf[v]) { const g = M.polys[f], k = g.indexOf(v); segs.push(...pePt(pos, v), ...pePt(pos, g[(k + 1) % g.length]), ...pePt(pos, v), ...pePt(pos, g[(k + g.length - 1) % g.length])); } }
   else for (const f of peSelection(h.f, h)) outline(f);
   peShow(segs);
 }
@@ -7276,11 +7288,29 @@ function peDown(e) {
     if (fs.length !== 1) { toast('穴のふちの辺をクリックしてください'); return true; }
     if (!pe.bridgeA) { pe.bridgeA = [h.edge[0], h.edge[1]]; toast('つなぐ もう1つの穴のふちをクリックしてください'); peHover(e); return true; }
     const [a1, b1] = pe.bridgeA; pe.bridgeA = null;
-    const r = PE.bridge(pos, M.polys, a1, b1, h.edge[0], h.edge[1]);
+    const r = PE.bridge(pos, M.polys, a1, b1, h.edge[0], h.edge[1], +$('peSegs').value || 1);
     if (r.error === 'same') toast('同じ穴です。別の穴のふちをクリックしてください');
     else if (r.error === 'count') toast(`2つの穴の辺の数が違うのでつなげません（${r.a} と ${r.b}）。ループを入れて数を揃えてください`);
     else if (r.error) toast('穴のふちの辺をクリックしてください');
     else { peReplace(r); toast(`2つの穴をつなぎました（${r.size} 枚の四角）`); }
+  } else if (a === 'ebridge') {
+    const fs = M.vf[h.edge[0]].filter(i => M.polys[i].includes(h.edge[1]));
+    if (fs.length !== 1) { toast('穴のふちの辺をクリックしてください'); return true; }
+    if (!pe.bridgeA) { pe.bridgeA = [h.edge[0], h.edge[1]]; toast('つなぐ相手の辺（穴のふち）をクリックしてください'); peHover(e); return true; }
+    const [a1, b1] = pe.bridgeA;
+    const r = PE.bridgeEdges(pos, M.polys, a1, b1, h.edge[0], h.edge[1], +$('peSegs').value || 1);
+    if (r.error === 'same') { toast('同じ辺です。別の辺をクリックしてください'); return true; }
+    if (r.error) { pe.bridgeA = null; toast('穴のふちの辺をクリックしてください'); return true; }
+    pe.bridgeA = null; peReplace(r);
+    toast(`辺どうしを ${r.size} 段の四角でつなぎました`);
+  } else if (a === 'vbevel') {
+    const v = peVertex(h), verts = peSym() && mirror[v] >= 0 && mirror[v] !== v ? [v, mirror[v]] : [v];
+    const base = pos.slice(), polys = M.polys, t0 = 0.15, r = PE.bevelVertices(base, polys, verts, t0);
+    if (!r) { toast('この頂点は面取りできません'); return true; }
+    const rec = peReplace(r);
+    pe.drag = { id: e.pointerId, y0: e.clientY, kind: 'vbevel', base, polys, verts, t: t0, rec, amt: t0, nOut: r.pos.length };
+    controls.enabled = false; try { canvas.setPointerCapture(e.pointerId); } catch {} peShow(null);
+    toast(`${verts.length === 2 ? '左右の頂点' : '頂点'}を面取りします（上下にドラッグで大きさ）`);
   } else if (a === 'bevel') {
     const loop = PE.edgeLoop(M.polys, nV, h.edge[0], h.edge[1], M.vf); loop.edges = peSymEdges(loop.edges);
     const base = pos.slice(), polys = M.polys, t0 = 0.12;
@@ -7401,7 +7431,7 @@ function peDown(e) {
     peShow(null);
   }
   const typed = peNum();
-  if (typed !== null && pe.drag && ['extrude', 'inset', 'move', 'qmesh', 'bevel'].includes(pe.drag.kind)) { peDragTo(null, typed); peUp(); }
+  if (typed !== null && pe.drag && ['extrude', 'inset', 'move', 'qmesh', 'bevel', 'vbevel'].includes(pe.drag.kind)) { peDragTo(null, typed); peUp(); }
   pe.cache = null;
   return true;
 }
@@ -7409,11 +7439,17 @@ function peDragTo(e, typed = null) {
   const d = pe.drag; if (!d || active !== d.rec) return;
   // typed: inset / bevel % of the face, extrude / move % of the part size -> the same dy the drag would need
   const dy = typed === null ? (d.y0 - e.clientY) / Math.max(200, view.clientHeight)
-    : d.kind === 'bevel' ? (typed / 100 - d.t) / 1.2 : d.kind === 'inset' ? typed / 200 : typed / 100 / 0.6;
+    : d.kind === 'bevel' || d.kind === 'vbevel' ? (typed / 100 - d.t) / 1.2 : d.kind === 'inset' ? typed / 200 : typed / 100 / 0.6;
   const B = d.base;
   if (d.kind === 'bevel') {
     const t = Math.max(0.02, Math.min(0.48, d.t + dy * 1.2)); d.amt = t;
     const r = PE.bevel(B, d.polys, d.edges, t);
+    if (r && r.pos.length === pos.length) pos.set(r.pos);
+    computeAllNormals(); geo.computeBoundingSphere(); dsDirty = true; return;
+  }
+  if (d.kind === 'vbevel') {
+    const t = Math.max(0.02, Math.min(0.45, d.t + dy * 1.2)); d.amt = t;
+    const r = PE.bevelVertices(B, d.polys, d.verts, t);
     if (r && r.pos.length === pos.length) pos.set(r.pos);
     computeAllNormals(); geo.computeBoundingSphere(); dsDirty = true; return;
   }
@@ -7599,8 +7635,8 @@ const hasUV = L => L && L.uv && L.uvIdx && L.uvIdx.length === L.idx.length;
 function updateTexUI() {
   const L = curLevel(), ok = hasUV(L), cv = $('uvCv');
   if (ok) drawUV(cv, L.uvIdx, L.uv, $('uvDist').checked ? uvStretch(pos, L.uvIdx, L.uv) : null); else { const g = cv.getContext('2d'); g.fillStyle = '#18191c'; g.fillRect(0, 0, cv.width, cv.height); }
-  $('uvInfo').textContent = ok ? `UV あり（${L.uvCharts ? L.uvCharts + ' 個に分割・' : ''}${L.bake ? `テクスチャ ${L.bake.size}px 焼き付け済み` : 'テクスチャ未作成'}）` : nF > 300000 ? 'UV がありません（ポリゴンが多すぎます。リトポかポリゴン削減で軽くしてから展開してください）' : 'UV はまだありません';
-  $('bakeGo').disabled = !ok || !$('bakeSrc').options.length;
+  $('uvInfo').textContent = ok ? `UV あり（${L.atlas ? 'アトラス・' : ''}${L.uvCharts ? L.uvCharts + ' 個に分割・' : ''}${L.bake ? `テクスチャ ${L.bake.size}px 焼き付け済み` : 'テクスチャ未作成'}）` : nF > 300000 ? 'UV がありません（ポリゴンが多すぎます。リトポかポリゴン削減で軽くしてから展開してください）' : 'UV はまだありません';
+  $('bakeGo').disabled = !ok || !$('bakeSrc').options.length; $('bakeAtlas').disabled = !(ok && L.atlas);
   $('texPreview').disabled = $('texSave').disabled = !(ok && L.bake);
   if (!(ok && L.bake) && $('texPreview').checked) { $('texPreview').checked = false; setTexPreview(false); }
 }
@@ -7621,6 +7657,104 @@ function unwrapUV() {
     updateTexUI(); scheduleSave();
     toast(`UV を展開しました（${r.charts} 個に分割・使用率 ${Math.round(r.coverage * 100)}%・${((performance.now() - t0) / 1000).toFixed(1)}秒）`);
   });
+}
+// one UV layout for every shown part: unwrap them together (charts never cross parts), split back per part
+function unwrapAtlas() {
+  const recs = shownRecs().filter(r => r.levels[r.lv]);
+  if (recs.length < 2) { toast('まとめるパーツを 2 つ以上表示してください'); return; }
+  const geoOf = r => r === active ? { P: pos, I: idx, G: pg } : { P: r.pos, I: r.idx, G: r.pg };
+  let nv = 0, nt = 0; for (const r of recs) { const g = geoOf(r); nv += g.P.length / 3; nt += g.I.length / 3; }
+  if (nt > 300000) { toast('ポリゴンが多すぎます（合計 30 万まで）。リトポかポリゴン削減で軽くしてから展開してください'); return; }
+  return busy(() => {
+    flushNormals();
+    const t0 = performance.now(), size = +$('bakeSize').value, how = $('uvSeams').value;
+    const P = new Float32Array(nv * 3), I = new Uint32Array(nt * 3), group = new Int32Array(nt), offs = [];
+    let vo = 0, to = 0;
+    recs.forEach((r, k) => {
+      const g = geoOf(r), n = g.P.length / 3, m = g.I.length / 3; P.set(g.P, vo * 3);
+      for (let f = 0; f < m; f++) {
+        for (let j = 0; j < 3; j++) I[(to + f) * 3 + j] = g.I[f * 3 + j] + vo;
+        group[to + f] = k * 65536 + (how === 'group' && g.G ? g.G[g.I[f * 3]] & 65535 : 0);
+      }
+      offs.push([vo, to, m]); vo += n; to += m;
+    });
+    const res = unwrap(P, I, { angle: +$('uvAngle').value, size, padding: 4, group });
+    pushEntry(uvsSnap(recs));
+    const id = Date.now() % 2000000000;
+    recs.forEach((r, k) => {
+      const [v0, f0, m] = offs[k], ui = new Uint32Array(m * 3);
+      for (let i = 0; i < m * 3; i++) ui[i] = res.uvIdx[f0 * 3 + i] - v0;
+      const L = { ...r.levels[r.lv], uvIdx: ui, uv: res.uv.slice(f0 * 6, (f0 + m) * 6), uvCharts: res.charts, bake: null, atlas: id };
+      r.levels = r.levels.slice(); r.levels[r.lv] = L;
+    });
+    setTexPreview(false); $('texPreview').checked = false;
+    updateTexUI(); scheduleSave();
+    toast(`${recs.length} 個のパーツを 1 枚の UV にまとめました（${res.charts} 個に分割・使用率 ${Math.round(res.coverage * 100)}%・${((performance.now() - t0) / 1000).toFixed(1)}秒）`);
+  });
+}
+// visit the texels covered by each triangle of a UV layout (fn(texel, face))
+function uvRaster(ui, uv, S, fn) {
+  for (let f = 0; f < ui.length / 3; f++) {
+    const o = f * 6, u0 = uv[o] * S, v0 = uv[o+1] * S, u1 = uv[o+2] * S, v1 = uv[o+3] * S, u2 = uv[o+4] * S, v2 = uv[o+5] * S, det = (u1 - u0) * (v2 - v0) - (u2 - u0) * (v1 - v0);
+    if (Math.abs(det) < 1e-12) continue;
+    const x0 = Math.max(0, Math.floor(Math.min(u0, u1, u2))), x1 = Math.min(S - 1, Math.ceil(Math.max(u0, u1, u2)));
+    const y0 = Math.max(0, Math.floor(Math.min(v0, v1, v2))), y1 = Math.min(S - 1, Math.ceil(Math.max(v0, v1, v2)));
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+      const px = x + 0.5, py = y + 0.5, w1 = ((px - u0) * (v2 - v0) - (u2 - u0) * (py - v0)) / det, w2 = ((u1 - u0) * (py - v0) - (px - u0) * (v1 - v0)) / det;
+      if (w1 < 0 || w2 < 0 || 1 - w1 - w2 < 0) continue;
+      fn((S - 1 - y) * S + x, f);
+    }
+  }
+}
+function materializeRec(r, k) {
+  if (r === active) return materializeLevel(k);
+  let P = r.pos, pt = r.paint;
+  for (let j = r.lv + 1; j <= k; j++) { const lo = r.levels[j - 1], hi = r.levels[j]; P = decodeDetails(subdivPositions(P, lo, hi), hi.det, hi); pt = upAttr(pt, hi, 3); }
+  return { pos: P, idx: r.levels[k].idx, paint: pt };
+}
+// bake every part of the active part's atlas into one set of maps: each texel is taken from the part whose
+// triangles cover it (padding texels from whichever part filled them); heights share the largest range
+async function bakeAtlas() {
+  const L0 = curLevel();
+  if (!hasUV(L0) || !L0.atlas) { toast('先に「表示中のパーツをまとめて展開（アトラス）」をしてください'); return; }
+  const recs = subtools.filter(r => { const L = r.levels[r.lv]; return L && L.atlas === L0.atlas && L.uv && L.uvIdx && L.uvIdx.length === L.idx.length; });
+  const S = +$('bakeSize').value, N = S * S; let out = null, t0 = performance.now(), misses = 0;
+  await busy(() => {
+    flushNormals();
+    const box = sceneBounds(recs), maxDist = box.getSize(new V3()).length() * (+$('bakeDist').value || 3) / 100, ao = $('bakeAO').checked;
+    const owner = new Int16Array(N).fill(-1);
+    recs.forEach((r, k) => { const L = r.levels[r.lv]; uvRaster(L.uvIdx, L.uv, S, t => { owner[t] = k; }); });
+    const R = recs.map((r, k) => {
+      busyText(`「${r.name}」を焼き付けています（${k + 1} / ${recs.length}）…`);
+      const L = r.levels[r.lv], low = { pos: r === active ? pos : r.pos, uvIdx: L.uvIdx, uv: L.uv }, top = r.levels.length - 1;
+      const high = top > r.lv ? materializeRec(r, top) : { pos: low.pos, idx: r === active ? idx : r.idx, paint: r === active ? paint : r.paint };
+      const b = bakeMaps(low, high, { size: S, maxDist });
+      if (ao) { const b2 = bakeMaps(low, { pos: high.pos, idx: high.idx, paint: aoCavityPaint(high.pos, high.idx) }, { size: S, maxDist }); if (b2 && b2.color) { b.ao = splitChannel(b2.color, 0); b.cav = splitChannel(b2.color, 1); } }
+      misses += b.misses || 0; return b;
+    });
+    const hr = Math.max(1e-9, ...R.map(b => b.heightRange || 0)), anyCol = R.some(b => b.color), clay = [BASE_COL.r, BASE_COL.g, BASE_COL.b].map(x => lin2srgb(x) * 255);
+    out = { normal: new Uint8ClampedArray(N * 4), height: new Uint8ClampedArray(N * 4), color: anyCol ? new Uint8ClampedArray(N * 4) : null, ao: ao ? new Uint8ClampedArray(N * 4) : null, cav: ao ? new Uint8ClampedArray(N * 4) : null, id: $('bakeID').checked ? new Uint8ClampedArray(N * 4) : null };
+    const idc = recs.map((_, k) => pgColor(k + 1).map(x => lin2srgb(x) * 255));
+    for (let t = 0; t < N; t++) {
+      let k = owner[t]; if (k < 0) { k = R.findIndex(b => b.normal[t*4+3]); if (k < 0) continue; }
+      const b = R[k], o = t * 4; if (!b.normal[o+3]) continue;
+      for (let c = 0; c < 4; c++) out.normal[o+c] = b.normal[o+c];
+      const sc = (b.heightRange || 0) / hr; for (let c = 0; c < 3; c++) out.height[o+c] = 128 + (b.height[o+c] - 128) * sc; out.height[o+3] = 255;
+      if (out.color) { if (b.color) for (let c = 0; c < 4; c++) out.color[o+c] = b.color[o+c]; else { out.color[o] = clay[0]; out.color[o+1] = clay[1]; out.color[o+2] = clay[2]; out.color[o+3] = 255; } }
+      if (out.ao && b.ao) for (let c = 0; c < 4; c++) { out.ao[o+c] = b.ao[o+c]; out.cav[o+c] = b.cav[o+c]; }
+      if (out.id) { out.id[o] = idc[k][0]; out.id[o+1] = idc[k][1]; out.id[o+2] = idc[k][2]; out.id[o+3] = 255; }
+    }
+    if ($('bakeNrm').value === 'dx') for (let i = 1; i < out.normal.length; i += 4) if (out.normal[i + 2]) out.normal[i] = 255 - out.normal[i];
+    out.heightRange = hr;
+  });
+  if (!out) return;
+  const png = a => a ? pngFromRGBA(a, S) : null;
+  const bake = { size: S, normalPng: await png(out.normal), colorPng: await png(out.color), heightPng: await png(out.height), heightRange: out.heightRange, aoPng: await png(out.ao), cavPng: await png(out.cav), idPng: await png(out.id), nrmFmt: $('bakeNrm').value };
+  pushEntry(uvsSnap(recs));
+  for (const r of recs) { const L = r.levels[r.lv]; texCache.delete(L); r.levels = r.levels.slice(); r.levels[r.lv] = { ...L, bake }; }
+  updateTexUI(); scheduleSave();
+  $('texPreview').checked = true; await setTexPreview(true);
+  toast(`${recs.length} 個のパーツを 1 枚のテクスチャに焼き付けました（${S}px${out.id ? '・パーツごとの ID' : ''}・${((performance.now() - t0) / 1000).toFixed(1)}秒${misses ? `・届かなかった点 ${misses.toLocaleString()}` : ''}）`);
 }
 // positions (+paint) of a higher level of the active subtool without switching to it
 function materializeLevel(k) {
@@ -8447,7 +8581,7 @@ $('uvDist').addEventListener('change', () => updateTexUI());
 $('peSoft').addEventListener('input', e => { $('peSoftOut').textContent = e.target.value; });
 $('bakeDist').addEventListener('input', e => { $('bakeDistOut').textContent = (+e.target.value).toFixed(1); });
 $('uvGo').onclick = () => unwrapUV();
-$('bakeGo').onclick = () => bakeTextures();
+$('bakeGo').onclick = () => bakeTextures(); $('bakeAtlas').onclick = () => bakeAtlas(); $('uvAtlas').onclick = () => unwrapAtlas();
 $('bakeSrc').addEventListener('change', updateTexUI);
 $('texPreview').onchange = e => setTexPreview(e.target.checked);
 $('texSave').onclick = () => saveTextures();
