@@ -466,7 +466,7 @@ dl.keys dd{margin:0;color:var(--muted)}
       <p class="note">変形は選択中のパーツ全体にかかります（マスクした所は動きません）。ボタンを押すとプレビューになり、軸・量・中心の位置・波の数を動かすとすぐに形が変わります。「確定」で決定（彫り始める・別の変形を選ぶと自動で確定）、「やめる」で元に戻します。「モーフ」ブラシで塗ると、塗った所だけ保存した形に戻ります。クリップは、ボタンを押してから画面上をドラッグして線を引くと、線から出ている短い印の側（Alt で反対側）が線の位置で平らになります。</p>
     </section>
 
-    <section id="nmSec">
+    <section data-tab="model" id="nmSec">
       <h2>NanoMesh・MicroPoly（面ごとに部品を並べる）</h2>
       <div class="row"><label for="nmInst">置く部品</label><select id="nmInst"></select></div>
       <div class="row"><label for="nmFit">大きさの合わせ方</label><select id="nmFit"><option value="face">面の形に合わせる</option><option value="uniform">同じ比率で</option></select></div>
@@ -496,7 +496,7 @@ dl.keys dd{margin:0;color:var(--muted)}
       <p class="note">選択中のパーツ（低ポリゴンがおすすめ）の面ひとつひとつに部品を置きます（NanoMesh 風）。部品は内蔵の部品・登録した部品・ほかのパーツから選べます。MicroPoly は四角ポリゴンの面を、格子・織り目・鎖かたびら・鋲・ウロコ・レンガのタイルで置き換えます（鎧・メッシュ・布地）。結果は新しいパーツになります。プレビュー中はスライダーを動かすとすぐに変わります。</p>
     </section>
 
-    <section id="dynSec">
+    <section data-tab="model" id="dynSec">
       <h2>ダイナミクス（布・重力・膨らみ）</h2>
       <div class="row"><label for="dynMode">動き</label><select id="dynMode"><option value="cloth">布をかける（ほかのパーツにぶつかる）</option><option value="sag">重力でたれる</option><option value="inflate">空気で膨らます</option><option value="deflate">しぼませる</option></select></div>
       <div class="row"><label for="dynGrav">重力</label><output id="dynGravOut">1.0</output></div>
