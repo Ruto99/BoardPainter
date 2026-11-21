@@ -870,6 +870,7 @@ dl.keys dd{margin:0;color:var(--muted)}
       <input type="range" id="uvAngle" min="20" max="80" step="1" value="45">
       <button class="btn full" id="uvGo">UV を自動展開</button>
       <div class="row" style="margin-top:10px"><label for="bakeSrc">焼き付け元</label><select id="bakeSrc" style="width:150px"></select></div>
+      <div class="row"><input type="checkbox" id="bakeAO"><label for="bakeAO" title="隙間の暗さ（アンビエントオクルージョン）と凹み（キャビティ）のマップも作ります。少し時間がかかります">AO・凹みのマップも作る</label></div>
       <div class="row"><label for="bakeSize">テクスチャの大きさ</label><select id="bakeSize"><option value="512">512</option><option value="1024" selected>1024</option><option value="2048">2048</option></select></div>
       <button class="btn primary full" id="bakeGo">法線マップと色を焼き付け</button>
       <div class="row"><input type="checkbox" id="texPreview"><label for="texPreview">焼き付けたテクスチャで表示</label></div>
@@ -1295,12 +1296,12 @@ function recData(r) {
 }
 // uv + baked textures (PNG bytes) stored on a level
 const polyData = L => ({ ...(L.polys ? { polys: { start: L.polys.start, idx: L.polys.idx } } : {}), ...(L.crease ? { crease: L.crease } : {}) });
-const texData = L => L.uv ? { uvIdx: L.uvIdx, uv: L.uv, bake: L.bake ? { size: L.bake.size, normalPng: L.bake.normalPng, colorPng: L.bake.colorPng || null, heightPng: L.bake.heightPng || null, heightRange: L.bake.heightRange || 0 } : null } : {};
+const texData = L => L.uv ? { uvIdx: L.uvIdx, uv: L.uv, bake: L.bake ? { size: L.bake.size, normalPng: L.bake.normalPng, colorPng: L.bake.colorPng || null, heightPng: L.bake.heightPng || null, aoPng: L.bake.aoPng || null, cavPng: L.bake.cavPng || null, heightRange: L.bake.heightRange || 0 } : null } : {};
 function texFromData(L, d, ix) {
   if (!(d.uv instanceof Float32Array) || !(d.uvIdx instanceof Uint32Array) || d.uvIdx.length !== ix.length || d.uv.length !== ix.length * 2) return;
   L.uvIdx = d.uvIdx; L.uv = d.uv;
   const b = d.bake;
-  if (b && b.normalPng instanceof Uint8Array) L.bake = { size: b.size | 0, normalPng: b.normalPng, colorPng: b.colorPng instanceof Uint8Array ? b.colorPng : null, heightPng: b.heightPng instanceof Uint8Array ? b.heightPng : null, heightRange: +b.heightRange || 0 };
+  if (b && b.normalPng instanceof Uint8Array) L.bake = { size: b.size | 0, normalPng: b.normalPng, colorPng: b.colorPng instanceof Uint8Array ? b.colorPng : null, heightPng: b.heightPng instanceof Uint8Array ? b.heightPng : null, aoPng: b.aoPng instanceof Uint8Array ? b.aoPng : null, cavPng: b.cavPng instanceof Uint8Array ? b.cavPng : null, heightRange: +b.heightRange || 0 };
 }
 function recFromData(s) {
   const r = newRec(s.name, s.pos, s.idx, s.mask, s.mirror && s.mirror.length === s.pos.length / 3 ? s.mirror : null);
@@ -7086,6 +7087,36 @@ function pngFromRGBA(rgba, size) {
   c.getContext('2d').putImageData(new ImageData(rgba, size, size), 0, 0);
   return new Promise(res => c.toBlob(b => b.arrayBuffer().then(a => res(new Uint8Array(a))), 'image/png'));
 }
+// per-vertex ambient occlusion and cavity of a mesh, packed as colours for bakeMaps (R = AO, G = cavity), so the
+// same texel-exact bake (C++ when available) carries them into the UV layout
+function aoCavityPaint(hp, hi) {
+  const nv = hp.length / 3, n = computeNormals(hp, hi);
+  const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(hp, 3)); g.setIndex(new THREE.BufferAttribute(hi.slice(), 1));
+  const bvh = new MeshBVH(g);
+  let lo = [Infinity, Infinity, Infinity], hi3 = [-Infinity, -Infinity, -Infinity];
+  for (let i = 0; i < hp.length; i += 3) for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], hp[i+k]); hi3[k] = Math.max(hi3[k], hp[i+k]); }
+  const diag = Math.hypot(hi3[0] - lo[0], hi3[1] - lo[1], hi3[2] - lo[2]) || 1;
+  const ao = aoFor(hp, n, [bvh], nv > 600000 ? 8 : 16, diag * 0.12, diag * 1e-4);
+  // cavity: the umbrella vector along the normal, relative to the local edge length (+ = dent)
+  const sum = new Float32Array(nv * 3), cnt = new Float32Array(nv), el = new Float32Array(nv);
+  for (let f = 0; f < hi.length; f += 3) for (let k = 0; k < 3; k++) {
+    const a = hi[f+k], b = hi[f+(k+1)%3];
+    for (const [x, y] of [[a, b], [b, a]]) { sum[x*3] += hp[y*3]; sum[x*3+1] += hp[y*3+1]; sum[x*3+2] += hp[y*3+2]; cnt[x]++; el[x] += Math.hypot(hp[x*3] - hp[y*3], hp[x*3+1] - hp[y*3+1], hp[x*3+2] - hp[y*3+2]); }
+  }
+  const cav = new Float32Array(nv), mags = [];
+  for (let v = 0; v < nv; v++) {
+    if (!cnt[v]) continue; const c = cnt[v], i = v * 3;
+    cav[v] = ((sum[i] / c - hp[i]) * n[i] + (sum[i+1] / c - hp[i+1]) * n[i+1] + (sum[i+2] / c - hp[i+2]) * n[i+2]) / (el[v] / c || 1);
+    if (v % 7 === 0) mags.push(Math.abs(cav[v]));
+  }
+  mags.sort((a, b) => a - b); const sc = mags[Math.floor(mags.length * 0.97)] || 1;
+  const toLin = x => x <= 0.04045 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);   // the bake writes sRGB: pre-linearise
+  const paint = new Float32Array(nv * 3);
+  for (let v = 0; v < nv; v++) { paint[v*3] = toLin(ao[v]); paint[v*3+1] = toLin(Math.max(0, Math.min(1, 0.5 - 0.5 * cav[v] / sc))); paint[v*3+2] = 0; }
+  g.dispose();
+  return paint;
+}
+const splitChannel = (rgba, ch) => { const o = new Uint8ClampedArray(rgba.length); for (let i = 0; i < rgba.length; i += 4) { o[i] = o[i+1] = o[i+2] = rgba[i + ch]; o[i+3] = rgba[i+3]; } return o; };
 async function bakeTextures() {
   const L = curLevel();
   if (!hasUV(L)) { toast('先に UV を展開してください'); return; }
@@ -7100,12 +7131,18 @@ async function bakeTextures() {
     if (!high) high = materializeLevel(active.levels.length - 1);
     const box = sceneBounds([active]), maxDist = box.getSize(new V3()).length() * 0.03;
     res = bakeMaps({ pos, uvIdx: L.uvIdx, uv: L.uv }, high, { size, maxDist });
+    if ($('bakeAO').checked) {   // AO + cavity: a second pass with the maps as colours
+      busyText('AO と凹みのマップを焼き付けています…');
+      const r2 = bakeMaps({ pos, uvIdx: L.uvIdx, uv: L.uv }, { pos: high.pos, idx: high.idx, paint: aoCavityPaint(high.pos, high.idx) }, { size, maxDist });
+      if (r2 && r2.color) { res.ao = splitChannel(r2.color, 0); res.cav = splitChannel(r2.color, 1); }
+    }
     res.t = performance.now() - t0;
   });
   if (!res) return;
   const normalPng = await pngFromRGBA(res.normal, size), colorPng = res.color ? await pngFromRGBA(res.color, size) : null, heightPng = await pngFromRGBA(res.height, size);
+  const aoPng = res.ao ? await pngFromRGBA(res.ao, size) : null, cavPng = res.cav ? await pngFromRGBA(res.cav, size) : null;
   pushEntry(lvSnap());
-  const NL = { ...L, bake: { size, normalPng, colorPng, heightPng, heightRange: res.heightRange } };
+  const NL = { ...L, bake: { size, normalPng, colorPng, heightPng, heightRange: res.heightRange, aoPng, cavPng } };
   active.levels = active.levels.slice(); active.levels[active.lv] = NL;
   texCache.delete(L); updateTexUI(); scheduleSave();
   $('texPreview').checked = true; await setTexPreview(true);
@@ -7180,6 +7217,8 @@ async function saveTextures() {
   const L = curLevel(); if (!hasUV(L) || !L.bake) return;
   const base = fileBase(), files = [{ name: `${base}_normal.png`, data: L.bake.normalPng.slice().buffer }];
   if (L.bake.colorPng) files.push({ name: `${base}_color.png`, data: L.bake.colorPng.slice().buffer });
+  if (L.bake.aoPng) files.push({ name: `${base}_ao.png`, data: L.bake.aoPng.slice().buffer });
+  if (L.bake.cavPng) files.push({ name: `${base}_cavity.png`, data: L.bake.cavPng.slice().buffer });
   if (L.bake.heightPng) { files.push({ name: `${base}_height.png`, data: L.bake.heightPng.slice().buffer }); toast(`高さマップ：灰色 128 が面の位置、白／黒が ±${(L.bake.heightRange * mmPerUnit()).toFixed(2)} mm（印刷サイズ換算）`); }
   if (!native) { for (const f of files) download(new Blob([f.data], { type: 'image/png' }), f.name); return; }
   const dir = await native.saveMany(files);
