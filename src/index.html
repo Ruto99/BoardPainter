@@ -543,7 +543,15 @@ dl.keys dd{margin:0;color:var(--muted)}
       <div class="row"><label for="dynFrames">長さ（フレーム）</label><output id="dynFramesOut">240</output></div>
       <input type="range" id="dynFrames" min="30" max="1200" step="10" value="240">
       <div class="row"><input type="checkbox" id="dynSelf"><label for="dynSelf">自分自身とぶつかる（遅くなります）</label></div>
+      <div class="row"><label for="dynWind" title="横（画面の右 +・左 −）から吹く風">風</label><output id="dynWindOut">0.0</output></div>
+      <input type="range" id="dynWind" min="-2" max="2" step="0.1" value="0">
       <button class="btn primary full" id="dynGo">シミュレーション開始</button>
+      <h3 style="margin:10px 0 4px;font-size:12px">布ブラシ</h3>
+      <div class="row"><input type="checkbox" id="clothOn"><label for="clothOn" title="ブラシの円の中だけを布として動かします（円の外とマスクした所は固定）">布ブラシで動かす</label></div>
+      <div class="row"><label for="clothTool">動かし方</label><select id="clothTool"><option value="grab">引っぱる（しわができる）</option><option value="pinch">しわを寄せる</option><option value="expand">広げる</option><option value="drape">たるませる（重力）</option><option value="push">押し込む（Alt で引き出す）</option></select></div>
+      <div class="row"><label for="clothReach" title="ブラシの円の何倍の範囲までを布として動かすか">動く範囲（ブラシの倍）</label><output id="clothReachOut">2.2</output></div>
+      <input type="range" id="clothReach" min="1.2" max="4" step="0.1" value="2.2">
+      <p class="note">布ブラシは、ブラシの円の中をつかんで布のように動かします。まわりは布としてついてきて、しわやたるみができます（硬さ・曲がりにくさは上の設定を使います）。元に戻すに対応しています。</p>
       <div class="row"><span id="dynInfo" class="note" style="margin:0"></span></div>
       <p class="note">選択中のパーツを布や風船のように動かします（Dynamics 風）。マスクした所は固定されます。「布をかける」は表示中のほかのパーツと床にぶつかります。服やカーテンは、薄い板（平面・抜き出したパーツなど）をパーツの上に置いてから使います。途中で「止める」を押すと、その形で止まります。元に戻すで始める前に戻ります。</p>
     </section>
@@ -2348,6 +2356,7 @@ function onDown(e) {
   if (zs) { zsDown(e); return; }
   if (ffd && e.button === 0) { if (ffdValid()) { ffdDown(e); return; } ffdCommit(true); }   // FFD: points only, no sculpting
   if (groom.on && e.button === 0 && fiberValid()) { if (!e.ctrlKey && !e.shiftKey) { groomDown(e); return; } }
+  if ($('clothOn').checked && e.button === 0 && !e.ctrlKey && !e.shiftKey && mesh && !gizmoOn && clothDown(e)) return;
   if (pe.on && e.button === 0) { if (peAvailable()) peSet(false); else { peDown(e); return; } }   // a miss leaves the background to the view controls
   if (nz && e.button === 0) noiseCancel();   // sculpting ends a noise preview
   if ($('nmEdit').checked && e.button === 0 && !e.ctrlKey && !e.shiftKey && nmEditDown(e)) return;   // per-instance NanoMesh edit
@@ -2632,6 +2641,7 @@ canvas.addEventListener('pointermove', e => {
   if (ffd && ffd.drag) { ffdMove(e); return; }
   if (dfh && dfh.drag) { dfHandleMove(e); return; }
   if (groom.drag) { groomMove(e); return; }
+  if (cloth.drag) { clothMove(e); return; }
   if (clip) { if (e.pointerId === clip.id) clipMove(e); return; }
   if (lasso) { if (e.pointerId === lasso.id) lassoMove(e); return; }
   if (pe.on) { if (pe.drag) { if (e.pointerId === pe.drag.id) peDragTo(e); } else if (!e.buttons) peHover(e); return; }
@@ -2677,6 +2687,7 @@ function endStroke() {
   if (ffd && ffd.drag) { ffdUp(); return; }
   if (dfh && dfh.drag) { dfHandleUp(); return; }
   if (groom.drag) { groomUp(); return; }
+  if (cloth.drag) { clothUp(); return; }
   if (pe.drag) { peUp(); return; }
   if (clip) { finishClip(); return; }
   if (lasso) { finishLasso(); return; }
@@ -4005,7 +4016,7 @@ function dynStart() {
   if (M.collide && !collide) toast('ぶつかる相手のパーツが表示されていません（床に落ちるだけになります）');
   pushUndo();
   const sim = createSim(pos.subarray(0, nV * 3), idx.subarray(0, nF * 3), {
-    pin: mask.subarray(0, nV), gravity: [0, -g, 0], stiffness: +$('dynStiff').value, bend: +$('dynBend').value, pressure, damping: 0.03,
+    pin: mask.subarray(0, nV), gravity: camAxis(0).multiplyScalar(+$('dynWind').value * 0.5).add(new V3(0, -g, 0)).toArray(), stiffness: +$('dynStiff').value, bend: +$('dynBend').value, pressure, damping: 0.03,
     iterations: 8, substeps: 2, collide, selfCollide: $('dynSelf').checked,
   });
   dyn = { rec: active, sim, frame: 0, frames: +$('dynFrames').value | 0, raf: 0, floor: null };
@@ -4025,6 +4036,57 @@ function dynStart() {
     dyn.raf = requestAnimationFrame(tick);
   };
   dyn.raf = requestAnimationFrame(tick);
+}
+// ---------------- cloth brush: a local cloth simulation inside the brush, driven by the dragged centre ----------------
+const cloth = { drag: null };
+function clothDown(e) {
+  setNDC(e); const hit = pick(); if (!hit) return false;
+  if (active.levels.length > 1 && active.lv !== active.levels.length - 1) { toast('布ブラシは一番上の細分化レベルで使ってください'); return true; }
+  flushNormals();
+  const c = hit.point, R = worldRadius(c), Ro = R * +$('clothReach').value, tool = $('clothTool').value, ids = [], loc = new Int32Array(nV).fill(-1);
+  for (let v = 0; v < nV; v++) {
+    if (hid && hid[v]) continue;
+    if (Math.hypot(pos[v*3] - c.x, pos[v*3+1] - c.y, pos[v*3+2] - c.z) < Ro) { loc[v] = ids.length; ids.push(v); }
+  }
+  const tri = [];
+  for (let f = 0; f < nF; f++) { const a = loc[idx[f*3]], b = loc[idx[f*3+1]], d = loc[idx[f*3+2]]; if (a >= 0 && b >= 0 && d >= 0) tri.push(a, b, d); }
+  if (tri.length < 9) return false;
+  const m = ids.length, P0 = new Float32Array(m * 3), pin = new Float32Array(m), gw = new Float32Array(m);
+  for (let i = 0; i < m; i++) {
+    const v = ids[i]; P0[i*3] = pos[v*3]; P0[i*3+1] = pos[v*3+1]; P0[i*3+2] = pos[v*3+2];
+    const d = Math.hypot(P0[i*3] - c.x, P0[i*3+1] - c.y, P0[i*3+2] - c.z);
+    pin[i] = d > Ro * 0.85 ? 1 : mask[v] >= 0.5 ? 1 : mask[v];
+    if (tool !== 'drape' && d < R && mask[v] < 0.5) { gw[i] = (1 - (d / R) ** 2) ** 2; if (gw[i] > 0.05) pin[i] = 1; else gw[i] = 0; }
+  }
+  const sim = createSim(P0, new Uint32Array(tri), { pin, gravity: tool === 'drape' ? [0, -1.5, 0] : [0, 0, 0], stiffness: Math.max(0.9, +$('dynStiff').value), bend: +$('dynBend').value, damping: 0.25, iterations: 6, substeps: 1 });
+  pushUndo();
+  cloth.drag = { id: e.pointerId, x: e.clientX, y: e.clientY, ids, sim, P0, gw, c: c.clone(), n: hitNormal(hit), off: new V3(), moved: 0, R, alt: e.altKey };
+  controls.enabled = false; try { canvas.setPointerCapture(e.pointerId); } catch {}
+  return true;
+}
+function clothMove(e) {
+  const D = cloth.drag; if (!D || e.pointerId !== D.id) return;
+  const dx = e.clientX - D.x, dy = e.clientY - D.y; D.x = e.clientX; D.y = e.clientY; if (!dx && !dy) return;
+  const wpp = worldPerPx(D.c), tool = $('clothTool').value, P = D.sim.pos, Q = D.sim.prev, P0 = D.P0, c = D.c;
+  D.off.addScaledVector(camAxis(0), dx * wpp).addScaledVector(camAxis(1), -dy * wpp); D.moved += Math.hypot(dx, dy) * wpp;
+  const f = Math.min(0.85, D.moved / D.R * 0.4);
+  for (let i = 0; i < D.ids.length; i++) {
+    const w = D.gw[i]; if (!w) continue;
+    const k = i * 3; let x = P0[k], y = P0[k+1], z = P0[k+2];
+    if (tool === 'grab') { x += D.off.x * w; y += D.off.y * w; z += D.off.z * w; }
+    else if (tool === 'pinch' || tool === 'expand') { const s = (tool === 'pinch' ? 1 : -0.6) * f * w; x += (c.x - x) * s; y += (c.y - y) * s; z += (c.z - z) * s; }
+    else if (tool === 'push') { const s = (D.alt ? 1 : -1) * Math.min(D.R * 1.5, D.moved * 0.5) * w; x += D.n.x * s; y += D.n.y * s; z += D.n.z * s; }
+    P[k] = Q[k] = x; P[k+1] = Q[k+1] = y; P[k+2] = Q[k+2] = z;
+  }
+  D.sim.step(2);
+  for (let i = 0; i < D.ids.length; i++) { const v = D.ids[i] * 3, k = i * 3; pos[v] = P[k]; pos[v+1] = P[k+1]; pos[v+2] = P[k+2]; }
+  computeAllNormals(); geo.computeBoundingSphere();
+}
+function clothUp() {
+  const D = cloth.drag; if (!D) return;
+  cloth.drag = null; controls.enabled = true;
+  try { canvas.releasePointerCapture(D.id); } catch {}
+  afterBulkEdit();
 }
 function dynStop() {
   if (!dyn) return;
@@ -8691,7 +8753,7 @@ $('groomStr').addEventListener('input', e => { $('groomStrOut').textContent = (+
 $('groomOn').onchange = e => { groom.on = e.target.checked && fiberValid(); if (groom.on && ffd) ffdCommit(true); groomUI(); };
 $('ffdGo').onclick = () => ffdStart(); $('ffdApply').onclick = () => ffdCommit(); $('ffdCancel').onclick = () => ffdCancel(); $('ffdReset').onclick = () => ffdReset();
 $('ffdAll').onclick = () => { if (!ffdValid()) return; ffd.sel = new Set(ffd.pts.map(m => m.userData.c)); ffdSync(); }; $('ttGo').onclick = () => recordTurntable();
-for (const [id, d] of [['fbClump', 2], ['fbStiff', 2], ['fbWind', 2], ['fbCardW', 1], ['rdExpo', 2], ['rdContrast', 2], ['rdSat', 2], ['rdVig', 2], ['rdBloom', 2], ['rdGrain', 2], ['rdSharp', 2], ['fbLen', 2], ['fbVary', 2], ['fbGrav', 2], ['fbSpread', 2], ['fbThick', 2], ['ttSecs', 0]]) $(id).addEventListener('input', e => { $(id + 'Out').textContent = (+e.target.value).toFixed(d); });
+for (const [id, d] of [['dynWind', 1], ['clothReach', 1], ['fbClump', 2], ['fbStiff', 2], ['fbWind', 2], ['fbCardW', 1], ['rdExpo', 2], ['rdContrast', 2], ['rdSat', 2], ['rdVig', 2], ['rdBloom', 2], ['rdGrain', 2], ['rdSharp', 2], ['fbLen', 2], ['fbVary', 2], ['fbGrav', 2], ['fbSpread', 2], ['fbThick', 2], ['ttSecs', 0]]) $(id).addEventListener('input', e => { $(id + 'Out').textContent = (+e.target.value).toFixed(d); });
 $('t3Go').onclick = textTo3D; $('t3Img').onclick = () => $('t3File').click();
 $('t3File').onchange = e => { const f = e.target.files[0]; if (f) imageTo3D(f); e.target.value = ''; };
 $('t3Depth').addEventListener('input', e => { $('t3DepthOut').textContent = (+e.target.value).toFixed(2); });
