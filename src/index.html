@@ -507,6 +507,7 @@ dl.keys dd{margin:0;color:var(--muted)}
       <div class="grid2"><button class="btn" id="mpPrevBtn">プレビュー</button><button class="btn primary" id="mpGo">MicroPoly を作る</button></div>
       <div class="row" style="margin-top:6px"><input type="checkbox" id="nmMasked"><label for="nmMasked">マスクした面だけに置く</label></div>
       <div class="row"><input type="checkbox" id="nmHide" checked><label for="nmHide">作ったあと元のパーツを隠す</label></div>
+      <button class="btn full" id="nmRebuild" disabled title="選んでいる NanoMesh / MicroPoly のパーツを、元のパーツから今の設定で作り直します">選んだ NanoMesh・MicroPoly を今の設定で作り直す</button>
       <div class="grid2"><button class="btn" id="nmCancel" disabled>プレビューを消す</button><span id="nmInfo" class="note" style="margin:0;align-self:center"></span></div>
       <p class="note">選択中のパーツ（低ポリゴンがおすすめ）の面ひとつひとつに部品を置きます（NanoMesh 風）。部品は内蔵の部品・登録した部品・ほかのパーツから選べます。MicroPoly は四角ポリゴンの面を、格子・織り目・鎖かたびら・鋲・ウロコ・レンガのタイルで置き換えます（鎧・メッシュ・布地）。結果は新しいパーツになります。プレビュー中はスライダーを動かすとすぐに変わります。</p>
     </section>
@@ -1283,6 +1284,7 @@ function recData(r) {
     dens: densOf(r),
     topo: topoPack(r.topo),
     vdmPlate: r.vdmPlate || null,
+    nano: r.nano ? { kind: r.nano.kind, hostName: (r.nano.host && r.nano.host.name) || r.nano.hostName, params: r.nano.params } : null,
     fiber: r.fiber && r.fiber.dir instanceof Float32Array ? { n: r.fiber.n, seg: r.fiber.seg, sides: r.fiber.sides, dir: r.fiber.dir } : null,
     layers: (r.layers || []).filter(l => l.delta.length === r.pos.length).map(l => ({ name: l.name, I: l.I, on: l.on, delta: l.delta })),
     levels: r.levels.map((L, k) => k === r.lv
@@ -1309,6 +1311,7 @@ function recFromData(s) {
   r.topo = topoUnpack(s.topo);
   r.dens = s.dens instanceof Float32Array && s.dens.length === s.pos.length / 3 ? s.dens : null;
   r.vdmPlate = s.vdmPlate && s.vdmPlate.ref instanceof Float32Array ? { ref: s.vdmPlate.ref, h: +s.vdmPlate.h || 1 } : null;
+  r.nano = s.nano && (s.nano.kind === 'nano' || s.nano.kind === 'micro') && s.nano.params ? { kind: s.nano.kind, host: null, hostName: String(s.nano.hostName || ''), params: s.nano.params } : null;
   { const f = s.fiber; r.fiber = f && f.dir instanceof Float32Array && f.n > 0 && f.dir.length === f.n * 3 && s.pos.length === f.n * (f.seg * f.sides + 1) * 3 ? { n: f.n | 0, seg: f.seg | 0, sides: f.sides | 0, dir: f.dir } : null; }
   r.layers = Array.isArray(s.layers) ? s.layers.filter(l => l && l.delta instanceof Float32Array && l.delta.length === s.pos.length)
     .map((l, k) => ({ name: String(l.name || `レイヤー ${k + 1}`), delta: l.delta, I: Number.isFinite(l.I) ? l.I : 1, on: l.on !== false, rec: false })) : [];
@@ -1402,7 +1405,7 @@ function activate(rec, force = false) {
   dropView(rec);
   active = rec;
   setMesh(rec.pos, rec.idx, rec.mask, rec.mirror, rec.paint);
-  queueMicrotask(groomUI);
+  queueMicrotask(groomUI); queueMicrotask(nmUI);
   syncScene();
   if (gizmoOn) attachGizmo();
 }
@@ -3832,21 +3835,30 @@ function nmInstance() {
   return getIMM(id);
 }
 // the host polygons of the active part at its current level, and which ones are masked
-function nmHost() {
-  flushNormals();
-  const F = facesOf(active.levels[active.lv]);
+const NM_IDS = ['nmInst', 'nmFit', 'nmScale', 'nmHeight', 'nmOffset', 'nmRot', 'nmRandS', 'nmRandR', 'nmSeed', 'nmFlip', 'mpTile', 'mpThick', 'mpTris', 'nmMasked'];
+const nmParams = () => Object.fromEntries(NM_IDS.map(id => [id, $(id).type === 'checkbox' ? $(id).checked : $(id).value]));
+function nmSetParams(o) {
+  if (!o) return; nmFill();
+  for (const id of NM_IDS) if (id in o) { const e = $(id); if (e.type === 'checkbox') e.checked = !!o[id]; else e.value = o[id]; e.dispatchEvent(new Event('input')); }
+}
+const nmHostOf = r => r && r.nano ? (r.nano.host && subtools.includes(r.nano.host) ? r.nano.host : subtools.find(x => x !== r && x.name === r.nano.hostName) || null) : null;
+function nmUI() { const r = active, ok = !!(r && r.nano && nmHostOf(r)); $('nmRebuild').disabled = !ok; if (ok && nmUI.last !== r) nmSetParams(r.nano.params); nmUI.last = r; }
+function nmHost(H = active) {
+  if (H === active) flushNormals();
+  const P0 = H === active ? pos.subarray(0, nV * 3) : H.pos, M0 = H === active ? mask : H.mask;
+  const F = facesOf(H.levels[H.lv]);
   if (!F || F.start.length < 2) return null;
   const n = F.start.length - 1;
   let sel = null;
   if ($('nmMasked').checked) {
     sel = new Uint8Array(n); let any = 0;
-    for (let f = 0; f < n; f++) { let ok = 1; for (let j = F.start[f]; j < F.start[f+1]; j++) if (mask[F.idx[j]] < 0.5) { ok = 0; break; } sel[f] = ok; any |= ok; }
+    for (let f = 0; f < n; f++) { let ok = 1; for (let j = F.start[f]; j < F.start[f+1]; j++) if (!M0 || M0[F.idx[j]] < 0.5) { ok = 0; break; } sel[f] = ok; any |= ok; }
     if (!any) return { err: 'マスクした面がありません' };
   }
-  return { P: pos.subarray(0, nV * 3), F, n, sel };
+  return { P: P0, F, n, sel };
 }
-function nmBuild(kind) {
-  const H = nmHost(); if (!H) return null; if (H.err) return H;
+function nmBuild(kind, host = active) {
+  const H = nmHost(host); if (!H) return null; if (H.err) return H;
   if (kind === 'nano') {
     const inst = nmInstance(); if (!inst) return { err: '置く部品を選んでください' };
     const tri = H.F.idx.length / 3;
@@ -3870,7 +3882,7 @@ function nmPreview(kind = nmPrev && nmPrev.kind) {
   if (!kind || !active) return;
   cancelAnimationFrame(nmRaf);
   nmRaf = requestAnimationFrame(() => {
-    const r = nmBuild(kind);
+    const r = nmBuild(kind, nmHostOf(active) || active);   // editing a NanoMesh part previews from its host
     if (!r || r.err) { if (r && r.err) toast(r.err); nmClear(); return; }
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(r.pos, 3)); g.setIndex(new THREE.BufferAttribute(r.idx, 1)); g.computeVertexNormals();
@@ -3878,6 +3890,21 @@ function nmPreview(kind = nmPrev && nmPrev.kind) {
     else { const m = new THREE.Mesh(g, nmMat); m.raycast = () => {}; m.frustumCulled = false; scene.add(m); nmPrev = { mesh: m, rec: active, kind }; }
     $('nmCancel').disabled = false;
     $('nmInfo').textContent = `${kind === 'nano' ? '部品' : 'タイル'} ${r.count.toLocaleString()} 個・${(r.idx.length / 3).toLocaleString()} 三角形`;
+  });
+}
+// rebuild the selected NanoMesh / MicroPoly part from its host with the current settings
+function nmRebuild() {
+  const old = active, host = nmHostOf(old); if (!host || stroke) return;
+  return busy(() => {
+    const r = nmBuild(old.nano.kind, host);
+    if (!r) return; if (r.err) { toast(r.err); return; }
+    if (!r.count) { toast('置ける面がありませんでした'); return; }
+    nmClear(); pushStruct();
+    const rec = newRec(old.name, r.pos, dropDegenerate(r.idx));
+    rec.nano = { kind: old.nano.kind, host, hostName: host.name, params: nmParams() };
+    subtools[subtools.indexOf(old)] = rec; dropView(old);
+    activate(rec, true); syncScene(); renderSubtoolList(); scheduleSave();
+    toast(`「${rec.name}」を今の設定で作り直しました（${(r.idx.length / 3).toLocaleString()} 三角形）`);
   });
 }
 function nmMake(kind) {
@@ -3890,6 +3917,7 @@ function nmMake(kind) {
     pushStruct();
     const name = kind === 'nano' ? 'NanoMesh' : 'MicroPoly_' + ((MICRO_TILES.find(t => t.id === $('mpTile').value) || {}).name || '');
     const rec = newRec(uniqueName(name), r.pos, dropDegenerate(r.idx));
+    rec.nano = { kind, host: active, hostName: active.name, params: nmParams() };
     insertAfterActive(rec);
     if ($('nmHide').checked) active.visible = false;
     activate(rec); scheduleSave(); renderSubtoolList();
@@ -8037,7 +8065,7 @@ for (const id of ['nmInst', 'nmFit', 'nmSeed', 'nmFlip', 'mpTile', 'mpTris', 'nm
 $('nmInst').addEventListener('pointerdown', nmFill); $('nmInst').addEventListener('focus', nmFill); nmFill();
 $('nmPrevBtn').onclick = () => nmPreview('nano'); $('mpPrevBtn').onclick = () => nmPreview('micro');
 $('nmGo').onclick = () => nmMake('nano'); $('mpGo').onclick = () => nmMake('micro');
-$('nmCancel').onclick = () => nmClear();
+$('nmCancel').onclick = () => nmClear(); $('nmRebuild').onclick = () => nmRebuild();
 $('dfCancel').onclick = () => deformCancel();
 $('exThick').addEventListener('input', e => { $('exThickOut').textContent = (+e.target.value).toFixed(3); });
 $('mfStore').onclick = morphStore; $('mfRestore').onclick = morphRestore; $('mfDel').onclick = morphDelete;
