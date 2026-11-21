@@ -4,10 +4,14 @@
 //  2. 4-RoSy orientation field and an aligned position (lattice) field, smoothed on a multigrid hierarchy
 //     - sharp edges / corners of the source constrain the fields (edge loops run along creases)
 //     - symmetry: the fields are solved on the x >= 0 half with a seam constraint, then mirrored
+//     - curvature: where the principal curvature directions are clearly anisotropic and coherent (limbs,
+//       cylinders, folds) they constrain the orientation, so loops wrap around limbs like ZRemesher's
 //  3. extraction: vertices sharing a lattice point merge; lattice neighbours become edges (at most one per
-//     direction of the cross field); faces are traced around each vertex; n-gons are split into quads,
-//     triangle pairs merged into quads
-//  4. relaxation along polygon edges, snapping to the source surface / sharp edges / corners
+//     direction of the cross field); faces are traced around each vertex; triangle + pentagon pairs become two
+//     quads, other n-gons are split into quads, triangle pairs merged into quads
+//  4. cleanup: rows of quads ending in a triangle at both ends (dislocations of the lattice) are collapsed
+//  5. relaxation along polygon edges (pure quads: on the coarse polygons first), snapping to the source surface /
+//     sharp edges / corners
 import * as THREE from 'three';
 import { MeshBVH } from 'three-mesh-bvh';
 import { remesh, tryAccel, accelInfo } from './remesh.js';
@@ -39,6 +43,101 @@ function vertexNormals(p, ix) {
   }
   for (let i = 0; i < n.length; i += 3) { const l = Math.hypot(n[i], n[i+1], n[i+2]) || 1; n[i] /= l; n[i+1] /= l; n[i+2] /= l; }
   return n;
+}
+
+// ---------- principal curvature on the working mesh ----------
+// Per-vertex shape operator by least squares (normal change along each edge ~ S * edge, in the tangent plane).
+// Its traceless part is a line field z = |k1 - k2| / 2 * e^(2i phi) in the vertex's tangent frame (phi: direction
+// of the larger signed curvature). Averages of z transport each direction into the local tangent plane first, so
+// directions don't cancel around a tube. coh = |averaged z| / averaged |z|: 1 where the principal directions agree
+// over the whole neighbourhood (cylinders, limbs, folds), small on noise and on bumps.
+// The field is averaged over the multigrid hierarchy too, so coherence can be judged at any radius cheaply.
+function curvFrames(N) {
+  const n = N.length / 3, FU = new Float32Array(n * 3), FW = new Float32Array(n * 3);
+  for (let v = 0; v < n; v++) {
+    const nn = get(N, v), u = norm(Math.abs(nn[0]) < 0.9 ? [0, -nn[2], nn[1]] : [nn[2], 0, -nn[0]]);
+    set3(FU, v, u); set3(FW, v, cross(nn, u));
+  }
+  return { FU, FW };
+}
+// a direction (3D) as z in frame (u, w), with magnitude m
+const lineZ = (D, o, FU, FW, p, m, out) => {
+  const a = D[o]*FU[p*3] + D[o+1]*FU[p*3+1] + D[o+2]*FU[p*3+2], b = D[o]*FW[p*3] + D[o+1]*FW[p*3+1] + D[o+2]*FW[p*3+2], l2 = a*a + b*b;
+  if (l2 < 1e-12) return false;
+  out[0] += m * (a*a - b*b) / l2; out[1] += m * 2*a*b / l2; return true;
+};
+function curvDirs(C) {
+  const n = C.H.length, D = new Float32Array(n * 3);
+  for (let v = 0; v < n; v++) {
+    const ph = Math.atan2(C.Z[v*2+1], C.Z[v*2]) / 2, c = Math.cos(ph), sn = Math.sin(ph);
+    for (let k = 0; k < 3; k++) D[v*3+k] = C.FU[v*3+k] * c + C.FW[v*3+k] * sn;
+  }
+  return D;
+}
+function curvSmooth(C, adj, iters) {
+  const n = C.H.length, acc = [0, 0];
+  for (let it = 0; it < iters; it++) {
+    const D = curvDirs(C), Z2 = new Float32Array(n * 2), H2 = new Float32Array(n), R2 = new Float32Array(n);
+    for (let v = 0; v < n; v++) {
+      acc[0] = C.Z[v*2]; acc[1] = C.Z[v*2+1]; let h = C.H[v], r = C.R[v];
+      for (let j = adj.start[v]; j < adj.start[v + 1]; j++) {
+        const t = adj.list[j]; h += C.H[t]; r += C.R[t];
+        const m = Math.hypot(C.Z[t*2], C.Z[t*2+1]); if (m > 0) lineZ(D, t * 3, C.FU, C.FW, v, m, acc);
+      }
+      const k = adj.start[v + 1] - adj.start[v] + 1;
+      Z2[v*2] = acc[0] / k; Z2[v*2+1] = acc[1] / k; H2[v] = h / k; R2[v] = r / k;
+    }
+    C.Z = Z2; C.H = H2; C.R = R2;
+  }
+}
+function curvatureBase(V, N, adj) {
+  const n = V.length / 3, { FU, FW } = curvFrames(N);
+  const Z = new Float32Array(n * 2), H = new Float32Array(n), R = new Float32Array(n);
+  for (let v = 0; v < n; v++) {
+    const u = get(FU, v), w = get(FW, v), nx = N[v*3], ny = N[v*3+1], nz = N[v*3+2];
+    let a00 = 0, a01 = 0, a11 = 0, b00 = 0, b01 = 0, b10 = 0, b11 = 0;
+    for (let j = adj.start[v]; j < adj.start[v + 1]; j++) {
+      const t = adj.list[j];
+      const ex = V[t*3]-V[v*3], ey = V[t*3+1]-V[v*3+1], ez = V[t*3+2]-V[v*3+2];
+      const dx = N[t*3]-nx, dy = N[t*3+1]-ny, dz = N[t*3+2]-nz;
+      const e0 = ex*u[0] + ey*u[1] + ez*u[2], e1 = ex*w[0] + ey*w[1] + ez*w[2];
+      const d0 = dx*u[0] + dy*u[1] + dz*u[2], d1 = dx*w[0] + dy*w[1] + dz*w[2];
+      a00 += e0*e0; a01 += e0*e1; a11 += e1*e1;
+      b00 += d0*e0; b01 += d0*e1; b10 += d1*e0; b11 += d1*e1;
+    }
+    const det = a00*a11 - a01*a01;
+    if (!(Math.abs(det) > 1e-24)) continue;
+    const i00 = a11/det, i01 = -a01/det, i11 = a00/det;   // S = B A^-1, symmetrized
+    const m00 = b00*i00 + b01*i01, m11 = b10*i01 + b11*i11, m01 = ((b00*i01 + b01*i11) + (b10*i00 + b11*i01)) / 2;
+    H[v] = (m00 + m11) / 2; Z[v*2] = (m00 - m11) / 2; Z[v*2+1] = m01; R[v] = Math.hypot(Z[v*2], Z[v*2+1]);
+  }
+  return { FU, FW, Z, H, R };
+}
+// the field on every hierarchy level: children averaged into their parent (directions transported), then smoothed
+// `iters` times on that level. Returns per level { FU, FW, Z, H, R, el (mean edge length) }.
+function curvatureLevels(levels, iters0, iters, judge) {
+  const meanEdge = L => { let e = 0; for (let v = 0; v < L.V.length / 3; v++) for (let j = L.adj.start[v]; j < L.adj.start[v + 1]; j++) e += Math.sqrt(dist2(L.V, v, L.adj.list[j])); return e / (L.adj.list.length || 1); };
+  const C0 = curvatureBase(levels[0].V, levels[0].N, levels[0].adj);
+  curvSmooth(C0, levels[0].adj, iters0);
+  C0.el = meanEdge(levels[0]);
+  const out = [C0];
+  for (let l = 1; l < levels.length; l++) {
+    const lo = levels[l - 1], Cl = out[l - 1], m = levels[l].V.length / 3, { FU, FW } = curvFrames(levels[l].N);
+    const Z = new Float64Array(m * 2), H = new Float32Array(m), R = new Float32Array(m), cnt = new Float32Array(m), D = curvDirs(Cl), acc = [0, 0];
+    for (let v = 0; v < Cl.H.length; v++) {
+      const p = lo.parent[v]; cnt[p]++; H[p] += Cl.H[v]; R[p] += Cl.R[v];
+      const mm = Math.hypot(Cl.Z[v*2], Cl.Z[v*2+1]);
+      if (mm > 0) { acc[0] = acc[1] = 0; if (lineZ(D, v * 3, FU, FW, p, mm, acc)) { Z[p*2] += acc[0]; Z[p*2+1] += acc[1]; } }
+    }
+    for (let p = 0; p < m; p++) { const c = cnt[p] || 1; Z[p*2] /= c; Z[p*2+1] /= c; H[p] /= c; R[p] /= c; }
+    const C = { FU, FW, Z: Float32Array.from(Z), H, R };
+    curvSmooth(C, levels[l].adj, iters);
+    C.el = meanEdge(levels[l]);
+    out.push(C);
+  }
+  // judged copies: smoothed `judge` more times on each level (radius ~ el * sqrt(judge + iters))
+  const J = out.map((C, l) => { const c = { FU: C.FU, FW: C.FW, Z: C.Z.slice(), H: C.H.slice(), R: C.R.slice(), el: C.el }; curvSmooth(c, levels[l].adj, judge); c.rad = C.el * Math.sqrt(judge + (l ? iters : iters0) + 1); return c; });
+  return { chain: out, judge: J };
 }
 
 // ---------- sharp features of the source (creases between faces > angle, corners where >= 3 meet) ----------
@@ -193,6 +292,7 @@ function order(n, seed) {
 const f32 = a => a instanceof Float32Array ? a : Float32Array.from(a);
 // native field smoothing runs on all cores (graph-coloured Gauss-Seidel); off = the exact JavaScript visiting order
 export const PARALLEL = { on: true };
+
 function smoothOrientations(L, Q, iters, shuffle) {
   const nat = tryAccel('smoothOrient', [f32(L.N), Q, L.adj.start, L.adj.list, L.con.fq, iters, !!shuffle, PARALLEL.on]);
   if (nat) { Q.set(nat); return; }
@@ -356,6 +456,84 @@ function repairSurface(faces, seamV, pure, orient) {
   }
   return faces;
 }
+// Triangles of a quad-dominant mesh are where an edge loop ends (position-field dislocations). A triangle T1, a
+// straight row of k quads (entered and left through opposite edges) and a triangle T2 are a finite extra row: rails
+// u_0..u_k and v_0..v_k joined by rungs (u_i, v_i), closed by the apexes a and b. Collapsing every rung (v_i merges
+// into u_i) removes the row; its neighbours take up the space, so the poles go away for a gentle size change
+// (the trade ZRemesher makes). Done only when it lowers the irregularity (sum of |valence - 4| over the vertices
+// involved, minus triW per triangle removed), rows shortest first, up to maxLen quads. Faces must be consistently
+// wound and manifold; the result is too. P: positions (merged rungs move to their midpoints).
+// fixed(v): vertices that must not merge (seam, creases, corners).
+function collapseRows(faces, P, maxLen, fixed, triW) {
+  const ek = (a, b) => a < b ? a * 1e7 + b : b * 1e7 + a;
+  const rot = (f, v) => { const k = f.indexOf(v); return f.map((_, i) => f[(k + i) % f.length]); };
+  const irr = d => Math.abs(d - 4);
+  for (let pass = 0; pass < 8; pass++) {
+    const ef = new Map(), val = new Map(), vf = new Map();
+    faces.forEach((f, i) => f.forEach((v, k) => {
+      (vf.get(v) || vf.set(v, []).get(v)).push(i);
+      const w = f[(k + 1) % f.length], key = ek(v, w), l = ef.get(key);
+      if (l) l.push(i); else { ef.set(key, [i]); val.set(v, (val.get(v) || 0) + 1); val.set(w, (val.get(w) || 0) + 1); }
+    }));
+    const cands = [];
+    faces.forEach((f, t) => {
+      if (f.length !== 3) return;
+      for (let k = 0; k < 3; k++) {
+        const a = f[(k + 2) % 3]; let x = f[k], y = f[(k + 1) % 3];   // crossing edge x -> y in the current face
+        const U = [x], V = [y], strip = [t]; let end = -1;
+        for (let step = 0; step <= maxLen; step++) {
+          const l = ef.get(ek(x, y)); if (!l || l.length !== 2) break;
+          const g = l[0] === strip[strip.length - 1] ? l[1] : l[0], G = faces[g];
+          if (strip.includes(g)) break;
+          if (G.length === 3) { end = g; break; }
+          if (G.length !== 4) break;
+          const R = rot(G, y); if (R[1] !== x) break;    // inconsistent winding
+          strip.push(g); x = R[2]; y = R[3]; U.push(x); V.push(y);   // R = [v_{i-1}, u_{i-1}, u_i, v_i]
+        }
+        if (end < 0 || end <= t && strip.length === 1) continue;
+        const T2 = rot(faces[end], y); if (T2[1] !== x) continue;
+        cands.push({ all: strip.concat([end]), U, V, a, b: T2[2] });
+      }
+    });
+    cands.sort((p, q) => p.all.length - q.all.length);
+    const dead = new Set(), lock = new Set();
+    for (const { all, U, V, a, b } of cands) {
+      const K = U.length - 1;
+      if (all.some(i => dead.has(i))) continue;
+      const vs = new Set([a, b, ...U, ...V]); if (vs.size !== 2 * K + 4 || [...vs].some(v => lock.has(v))) continue;
+      if (U.some(fixed) || V.some(fixed)) continue;
+      // valence change: the apexes lose an edge, a merged rung vertex gets d(u) + d(v) - 4
+      let gain = -2 * triW;
+      for (const x of [a, b]) gain += irr(val.get(x) - 1) - irr(val.get(x));
+      for (let i = 0; i <= K; i++) gain += irr(val.get(U[i]) + val.get(V[i]) - 4) - irr(val.get(U[i])) - irr(val.get(V[i]));
+      if (gain >= 0) continue;
+      // relabel v_i -> u_i in the faces around the row; reject if a face degenerates, two faces coincide or an
+      // edge would get more than two faces
+      const to = new Map(V.map((v, i) => [v, U[i]])), inRow = new Set(all), around = new Set();
+      for (const v of [...U, ...V]) for (const fi of vf.get(v) || []) if (!inRow.has(fi)) around.add(fi);
+      let ok = true; const nf = [], keys = new Set(), use = new Map(), ring = new Set(U);
+      for (const fi of around) {
+        const g = faces[fi].map(v => to.get(v) ?? v);
+        if (new Set(g).size !== g.length) { ok = false; break; }
+        const key = [...g].sort((x, y) => x - y).join(','); if (keys.has(key)) { ok = false; break; } keys.add(key);
+        nf.push([fi, g]);
+      }
+      if (ok) for (const [, g] of nf) g.forEach((v, k) => {
+        const w = g[(k + 1) % g.length]; if (!ring.has(v) && !ring.has(w)) return;
+        const kk = ek(v, w), c = (use.get(kk) || 0) + 1; use.set(kk, c); if (c > 2) ok = false;
+      });
+      if (!ok) continue;
+      for (const i of all) dead.add(i);
+      for (const [fi, g] of nf) faces[fi] = g;
+      for (let i = 0; i <= K; i++) for (let d = 0; d < 3; d++) P[U[i]*3+d] = (P[U[i]*3+d] + P[V[i]*3+d]) / 2;
+      for (const v of vs) lock.add(v);
+      for (const fi of around) for (const v of faces[fi]) lock.add(v);
+    }
+    if (!dead.size) break;
+    faces = faces.filter((_, i) => !dead.has(i));
+  }
+  return faces;
+}
 // split a polygon into a fan of quads (+ one triangle if odd), from the corner whose diagonals aren't edges yet
 function fanSplit(loop, use) {
   const L = loop.length, ek = (a, b) => a < b ? a * 1e7 + b : b * 1e7 + a, out = [];
@@ -371,10 +549,24 @@ function fanSplit(loop, use) {
 
 /**
  * @param src { pos, idx }
- * @param opt { target: quads, smooth: relax passes, sym: mirror about x = 0, sharpAngle: degrees (0 = off) }
+ * @param opt { target: quads, smooth: relax passes, sym: mirror about x = 0, sharpAngle: degrees (0 = off),
+ *   pureQuad, groups, guides, density,
+ *   curvature: 0..1 (default 0.5) align loops with the principal curvature directions; 0 = off, higher = more
+ *     places count as anisotropic enough,
+ *   collapseRows: boolean (default true) collapse dislocation rows (fewer poles, slightly uneven sizes) }
  * @returns { pos, idx (triangles), polys: { start, idx }, stats }
  */
 export function fieldRetopo(src, opt) {
+  const r = fieldRetopoOnce(src, opt);
+  // pure quads promised: the final weld / fold cleanup can leave a few triangles where curvature-aligned loops
+  // meet sharp edges; redo that mesh without curvature alignment if so
+  if (opt.pureQuad !== false && r.stats.tris > 0 && (opt.curvature ?? 0.5) > 0) {
+    const r2 = fieldRetopoOnce(src, { ...opt, curvature: 0 });
+    if (r2.stats.tris < r.stats.tris) { r2.stats.curvFallback = true; return r2; }
+  }
+  return r;
+}
+function fieldRetopoOnce(src, opt) {
   const sp = src.pos, si = src.idx;
   let area = 0, mn = [Infinity, Infinity, Infinity], mx = [-Infinity, -Infinity, -Infinity];
   // density painting (opt.density: per source vertex, -1..1 = half .. double the edge density): the spacing at a
@@ -492,6 +684,60 @@ export function fieldRetopo(src, opt) {
     }
   }
   const levels = buildHierarchy(V, N, adj, con);
+  // curvature alignment: where the curvature is clearly anisotropic and its directions agree over a radius of
+  // about curvRadius x max(spacing, curvature radius) - cylinders, limbs, folds, saddles - the cross field follows
+  // the principal directions, so loops wrap around limbs. Judged with the curvature radius, the test doesn't
+  // depend on the resolution: a limb is coherent along its length, a sculpted bump is not, at any target.
+  let curvCon = 0;
+  const curvK = Math.max(0, Math.min(1, opt.curvature ?? 0.5));
+  const CL = curvK > 0 ? curvatureLevels(levels, opt.curvSmooth ?? 3, 2, 6).judge : null;
+  if (curvK > 0) {
+    const C0 = CL[0], D0 = curvDirs(C0);
+    // vertices near a sharp crease / corner (graph rings): rounded voxel creases, the crease steers there
+    const nearF = new Uint8Array(n);
+    for (let v = 0; v < n; v++) if (vertexKind[v]) nearF[v] = 1;
+    if (FI) for (let r = 0, rings = Math.ceil(3 * s / C0.el); r < rings; r++) {
+      const grow = [];
+      for (let v = 0; v < n; v++) if (!nearF[v]) for (let j = adj.start[v]; j < adj.start[v + 1]; j++) if (nearF[adj.list[j]]) { grow.push(v); break; }
+      if (!grow.length) break;
+      for (const v of grow) nearF[v] = 1;
+    }
+    // level to judge at: its smoothing radius reaches curvRadius x the spacing (quad-sized noise averages out) and,
+    // while the clusters stay below 0.3 x the curvature radius (finer than the limb, so transporting directions by
+    // projection is still sound), up to curvRadius x the curvature radius (a bump that size is averaged as a whole
+    // and rejected)
+    const aMin = 0.75 - 0.45 * curvK, cMin = 0.9 - 0.2 * curvK, kMin = Math.max(0.5 / ext, 0.01 / s), cr = opt.curvRadius ?? 2.5;
+    const acc = [0, 0];
+    for (let v = 0; v < n; v++) {
+      if (con.fq[v] || vertexKind[v] || nearF[v]) continue;
+      const zv = Math.hypot(C0.Z[v*2], C0.Z[v*2+1]); if (!zv) continue;
+      const rho = 1 / Math.max(Math.abs(C0.H[v]) + zv, 1e-9), sv = s * scAt(v);
+      let l = 0, a = v;
+      while (l < CL.length - 1 && (CL[l].rad < cr * sv || CL[l].rad < cr * rho && CL[l + 1].el < 0.3 * rho)) { a = levels[l].parent[a]; l++; }
+      const C = CL[l], z = Math.hypot(C.Z[a*2], C.Z[a*2+1]), h = C.H[a], dk = 2 * z;
+      if (dk < kMin || dk < aMin * (Math.abs(h + z) + Math.abs(h - z)) || z < cMin * C.R[a]) continue;
+      // the local direction must agree with the coherent one (within ~20 deg)
+      acc[0] = acc[1] = 0;
+      if (l > 0) {
+        const Dl = [Math.cos(Math.atan2(C.Z[a*2+1], C.Z[a*2]) / 2), Math.sin(Math.atan2(C.Z[a*2+1], C.Z[a*2]) / 2)];
+        const d3 = [C.FU[a*3]*Dl[0] + C.FW[a*3]*Dl[1], C.FU[a*3+1]*Dl[0] + C.FW[a*3+1]*Dl[1], C.FU[a*3+2]*Dl[0] + C.FW[a*3+2]*Dl[1]];
+        if (!lineZ(d3, 0, C0.FU, C0.FW, v, 1, acc)) continue;
+        if ((acc[0] * C0.Z[v*2] + acc[1] * C0.Z[v*2+1]) / zv < Math.cos(Math.PI * 40 / 180)) continue;
+      }
+      const q = tangentOf(get(D0, v), get(N, v)), ql = Math.hypot(q[0], q[1], q[2]);
+      if (ql > 0.3) { con.fq[v] = 1; set3(con.q, v, [q[0]/ql, q[1]/ql, q[2]/ql]); curvCon++; }
+    }
+    // pass the new constraints down the hierarchy (as buildHierarchy does: the first constrained child wins)
+    for (let l = 1; l < levels.length; l++) {
+      const lo = levels[l - 1], hi = levels[l];
+      for (let v = 0; v < lo.V.length / 3; v++) {
+        const p = lo.parent[v];
+        if (!lo.con.fq[v] || hi.con.fq[p]) continue;
+        hi.con.fq[p] = 1;
+        set3(hi.con.q, p, norm(tangentOf(get(lo.con.q, v), get(hi.N, p))));
+      }
+    }
+  }
   if (SC) {   // spacing on the coarse levels: mean of the vertices each one stands for
     levels[0].SC = SC;
     for (let l = 1; l < levels.length; l++) {
@@ -592,7 +838,7 @@ export function fieldRetopo(src, opt) {
       .sort((x, y) => x[1] - y[1]).map(x => x[0]);
   });
   const rpos = ring.map(r => new Map(r.map((u, k) => [u, k])));
-  const used = new Set(), polys = [];
+  const used = new Set(); let polys = [];
   for (let u = 0; u < m; u++) for (const v of ring[u]) {
     if (used.has(u * m + v)) continue;
     const face = [u]; let a = u, b = v, closed = false;
@@ -608,14 +854,46 @@ export function fieldRetopo(src, opt) {
     if (sym && face.every(x => onSeam[x])) continue;               // the open boundary along the seam
     polys.push(face);
   }
-  // split n-gons: 5 -> quad + tri, 6 -> two quads (shortest diagonal), larger -> fan around a centre point
+  // a triangle next to a pentagon is one lattice dislocation: their union, a hexagon, becomes two quads below
+  if (opt.mergeOdd !== false) {
+    const ek = (a, b) => a < b ? a * 1e7 + b : b * 1e7 + a, ef = new Map();
+    polys.forEach((f, i) => { if (f.length === 3 || f.length === 5) f.forEach((v, k) => { const key = ek(v, f[(k + 1) % f.length]); (ef.get(key) || ef.set(key, []).get(key)).push(i); }); });
+    const dead = new Set(), add = [];
+    polys.forEach((f, i) => {
+      if (f.length !== 5 || dead.has(i)) return;
+      let best = null, bq = Infinity;
+      for (let k = 0; k < 5; k++) {
+        const a = f[k], b = f[(k + 1) % 5], l = ef.get(ek(a, b));
+        if (!l || l.length !== 2) continue;
+        const j = l[0] === i ? l[1] : l[0], T = polys[j];
+        if (T.length !== 3 || dead.has(j)) continue;
+        const ka = T.indexOf(a); if (T[(ka + 2) % 3] !== b) continue;   // T has b -> a: consistent winding
+        const apex = T[(ka + 1) % 3]; if (f.includes(apex)) continue;
+        const H = [];   // pentagon from b around to a, then the apex
+        for (let t = 0; t < 5; t++) H.push(f[(k + 1 + t) % 5]);
+        H.push(apex);
+        for (let d = 0; d < 3; d++) {
+          const q1 = [H[d], H[d+1], H[d+2], H[d+3]], q2 = [H[d+3], H[(d+4) % 6], H[(d+5) % 6], H[d]];
+          const q = Math.max(quadQuality(P, q1), quadQuality(P, q2));
+          if (q < bq) { bq = q; best = { j, q1, q2 }; }
+        }
+      }
+      if (!best || bq > (opt.oddDev ?? 1.0)) return;
+      dead.add(i); dead.add(best.j); add.push(best.q1, best.q2);
+    });
+    if (add.length) polys = polys.filter((_, i) => !dead.has(i)).concat(add);
+  }
+  // split n-gons: 5 -> quad + tri, 6 -> two quads (best corner angles), larger -> fan around a centre point
   const PP = Array.from(P), out = [];
   for (const f of polys) {
     const L = f.length;
     if (L <= 4) { out.push(f); continue; }
     if ((L === 5 || L === 6) && opt.splitNgons !== false) {
       let bk = 0, bd = Infinity;
-      for (let k = 0; k < L; k++) { const d = dist2(P, f[k], f[(k + 3) % L]); if (d < bd) { bd = d; bk = k; } }
+      for (let k = 0; k < L; k++) {
+        const d = L === 6 ? Math.max(quadQuality(P, [f[k], f[(k+1)%6], f[(k+2)%6], f[(k+3)%6]]), quadQuality(P, [f[(k+3)%6], f[(k+4)%6], f[(k+5)%6], f[k]])) : dist2(P, f[k], f[(k + 3) % L]);
+        if (d < bd) { bd = d; bk = k; }
+      }
       const r = Array.from({ length: L }, (_, i) => f[(bk + i) % L]);
       out.push([r[0], r[1], r[2], r[3]]);
       out.push(L === 5 ? [r[3], r[4], r[0]] : [r[3], r[4], r[5], r[0]]);
@@ -716,6 +994,31 @@ export function fieldRetopo(src, opt) {
     return d;
   };
   faces = repairSurface(faces, v => sym && !!onSeam[v], pure, orientOf);
+  if (opt.collapseRows !== false) faces = collapseRows(faces, Pm, opt.rowLen ?? 8, v => v >= m || kind[v] >= 2 || sym && !!onSeam[v], 1);
+  // pure quads: relax the coarse polygons first (tangential umbrella smoothing, no snapping yet). The fine mesh
+  // is twice as dense, so its own relaxation can only even out sizes locally; collapsed rows and dislocations
+  // need the long-range smoothing done here. Creases, corners and the seam are left for the final pass.
+  if (pure && (opt.coarseSmooth ?? Math.round((opt.smooth ?? 8) * 1.5)) > 0) {
+    const nP = Pm.length / 3, nb = Array.from({ length: nP }, () => new Set());
+    for (const f of faces) for (let k = 0; k < f.length; k++) { const a = f[k], b = f[(k + 1) % f.length]; nb[a].add(b); nb[b].add(a); }
+    const free = new Uint8Array(nP);
+    for (let v = 0; v < nP; v++) free[v] = nb[v].size > 0 && !(v < m && (kind[v] >= 2 || onSeam[v])) ? 1 : 0;
+    for (let it = 0; it < (opt.coarseSmooth ?? Math.round((opt.smooth ?? 8) * 1.5)); it++) {
+      const VN = new Float32Array(nP * 3), np = Pm.slice();
+      for (const f of faces) {
+        let nx = 0, ny = 0, nz = 0;
+        for (let k = 0; k < f.length; k++) { const a = f[k] * 3, b = f[(k + 1) % f.length] * 3; nx += (Pm[a+1] - Pm[b+1]) * (Pm[a+2] + Pm[b+2]); ny += (Pm[a+2] - Pm[b+2]) * (Pm[a] + Pm[b]); nz += (Pm[a] - Pm[b]) * (Pm[a+1] + Pm[b+1]); }
+        for (const v of f) { VN[v*3] += nx; VN[v*3+1] += ny; VN[v*3+2] += nz; }
+      }
+      for (let v = 0; v < nP; v++) {
+        if (!free[v]) continue;
+        let ax = 0, ay = 0, az = 0; for (const u of nb[v]) { ax += Pm[u*3]; ay += Pm[u*3+1]; az += Pm[u*3+2]; }
+        const d = tangentOf([ax / nb[v].size - Pm[v*3], ay / nb[v].size - Pm[v*3+1], az / nb[v].size - Pm[v*3+2]], norm(get(VN, v)));
+        np[v*3] += d[0] * 0.5; np[v*3+1] += d[1] * 0.5; np[v*3+2] += d[2] * 0.5;
+      }
+      Pm.set(np);
+    }
+  }
   // pure quads: every n-gon -> n quads (centre + edge midpoints); shared midpoints keep the mesh closed
   let Pfinal = Pm, kindF = kind, seamF = onSeam;
   if (pure) {
@@ -869,5 +1172,5 @@ export function fieldRetopo(src, opt) {
   const start = new Uint32Array(polysOut.length + 1), pidx = [];
   polysOut.forEach((f, i) => { for (const v of f) pidx.push(v); start[i + 1] = pidx.length; });
   let quads = 0, tris = 0, ngons = 0; for (const f of polysOut) { if (f.length === 4) quads++; else if (f.length === 3) tris++; else ngons++; }
-  return { pos: Xo, idx: tri, polys: { start, idx: Uint32Array.from(pidx) }, stats: { quads, tris, ngons, working: n, symmetric: sym, sharpSegments: F.segs.length / 6 } };
+  return { pos: Xo, idx: tri, polys: { start, idx: Uint32Array.from(pidx) }, stats: { quads, tris, ngons, working: n, symmetric: sym, sharpSegments: F.segs.length / 6, curvAligned: +(curvCon / n).toFixed(3) } };
 }
