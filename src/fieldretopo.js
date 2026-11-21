@@ -141,20 +141,34 @@ function curvatureLevels(levels, iters0, iters, judge) {
 }
 
 // ---------- sharp features of the source (creases between faces > angle, corners where >= 3 meet) ----------
-function sharpFeatures(pos, idx, angleDeg) {
+function sharpFeatures(pos, idx, angleDeg, minLen = 0) {
   const nF = idx.length / 3, nV = pos.length / 3, fn = new Float32Array(nF * 3);
   for (let f = 0; f < nF; f++) {
     const a = idx[f*3]*3, b = idx[f*3+1]*3, c = idx[f*3+2]*3;
     set3(fn, f, norm(cross([pos[b]-pos[a], pos[b+1]-pos[a+1], pos[b+2]-pos[a+2]], [pos[c]-pos[a], pos[c+1]-pos[a+1], pos[c+2]-pos[a+2]])));
   }
-  const cosA = Math.cos(angleDeg * Math.PI / 180), first = new Map(), segs = [], deg = new Map();
+  const cosA = Math.cos(angleDeg * Math.PI / 180), first = new Map(), edges = [], segs = [], deg = new Map();
   for (let f = 0; f < nF; f++) for (let k = 0; k < 3; k++) {
     const a = idx[f*3+k], b = idx[f*3+(k+1)%3], key = a < b ? a * nV + b : b * nV + a, g = first.get(key);
     if (g === undefined) { first.set(key, f); continue; }
-    if (fn[f*3]*fn[g*3] + fn[f*3+1]*fn[g*3+1] + fn[f*3+2]*fn[g*3+2] < cosA) {
-      segs.push(pos[a*3], pos[a*3+1], pos[a*3+2], pos[b*3], pos[b*3+1], pos[b*3+2]);
-      deg.set(a, (deg.get(a) || 0) + 1); deg.set(b, (deg.get(b) || 0) + 1);
-    }
+    if (fn[f*3]*fn[g*3] + fn[f*3+1]*fn[g*3+1] + fn[f*3+2]*fn[g*3+2] < cosA) edges.push(a, b);
+  }
+  // connected crease chains shorter than minLen are dropped: on organic shapes they are the narrow valleys where
+  // limbs join (armpits, crotch), not creases, and loops cannot follow a crease shorter than a couple of quads
+  let keep = null;
+  if (minLen > 0 && edges.length) {
+    const par = new Map(), find = x => { let r = x; while (par.get(r) !== r) r = par.get(r); while (par.get(x) !== r) { const n = par.get(x); par.set(x, r); x = n; } return r; };
+    for (const v of edges) if (!par.has(v)) par.set(v, v);
+    for (let e = 0; e < edges.length; e += 2) { const x = find(edges[e]), y = find(edges[e+1]); if (x !== y) par.set(x, y); }
+    const len = new Map();
+    for (let e = 0; e < edges.length; e += 2) { const a = edges[e], b = edges[e+1], r = find(a); len.set(r, (len.get(r) || 0) + Math.sqrt(dist2(pos, a, b))); }
+    keep = e => len.get(find(edges[e])) >= minLen;
+  }
+  for (let e = 0; e < edges.length; e += 2) {
+    if (keep && !keep(e)) continue;
+    const a = edges[e], b = edges[e+1];
+    segs.push(pos[a*3], pos[a*3+1], pos[a*3+2], pos[b*3], pos[b*3+1], pos[b*3+2]);
+    deg.set(a, (deg.get(a) || 0) + 1); deg.set(b, (deg.get(b) || 0) + 1);
   }
   const corners = [];
   for (const [v, d] of deg) if (d >= 3) corners.push(pos[v*3], pos[v*3+1], pos[v*3+2]);
@@ -560,7 +574,7 @@ export function fieldRetopo(src, opt) {
   const r = fieldRetopoOnce(src, opt);
   // pure quads promised: the final weld / fold cleanup can leave a few triangles where curvature-aligned loops
   // meet sharp edges; redo that mesh without curvature alignment if so
-  if (opt.pureQuad !== false && r.stats.tris > 0 && (opt.curvature ?? 0.5) > 0) {
+  if (opt.pureQuad !== false && r.stats.tris > 0 && (opt.curvature ?? 0.5) > 0 && !opt.noFallback) {
     const r2 = fieldRetopoOnce(src, { ...opt, curvature: 0 });
     if (r2.stats.tris < r.stats.tris) { r2.stats.curvFallback = true; return r2; }
   }
@@ -633,7 +647,7 @@ function fieldRetopoOnce(src, opt) {
   // ---- constraints: symmetry seam, sharp edges and corners
   const con = { fq: new Uint8Array(n), fo: new Uint8Array(n), fx: new Uint8Array(n), q: new Float32Array(n * 3), o: new Float32Array(n * 3) };
   const angle = opt.sharpAngle ?? 40;
-  const F = angle > 0 ? sharpFeatures(sp, si, angle) : { segs: new Float32Array(0), corners: new Float32Array(0) };
+  const F = angle > 0 ? sharpFeatures(sp, si, angle, (opt.sharpMinLen ?? 2) * s) : { segs: new Float32Array(0), corners: new Float32Array(0) };
   // polygroup borders (smoothed) and guide lines steer the direction of the loops; they are not snapped to like
   // sharp edges, because borders are usually soft curves and pinning to them makes the loops jagged.
   // Guides are mirrored in symmetric mode.
